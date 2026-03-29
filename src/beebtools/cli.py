@@ -9,13 +9,14 @@ Implements the 'cat' and 'extract' subcommands and the main() entry point.
 import argparse
 import os
 import sys
+from argparse import Namespace
 
 from .detokenize import detokenize
 from .pretty import prettyPrint
 from .dfs import isBasic, looksLikeText, openDiscImage, sortCatalogueEntries
 
 
-def cmdCat(args):
+def cmdCat(args: Namespace) -> None:
     """Print the disc catalogue to stdout.
 
     Args:
@@ -55,7 +56,7 @@ def cmdCat(args):
         print()
 
 
-def _extractAll(args):
+def _extractAll(args: Namespace) -> None:
     """Extract every file from a disc image into a directory.
 
     BASIC programs are saved as .bas plain text files.
@@ -111,7 +112,7 @@ def _extractAll(args):
                 )
 
 
-def cmdExtract(args):
+def cmdExtract(args: Namespace) -> None:
     """Extract a file (or all files) from the disc image.
 
     Args:
@@ -211,7 +212,7 @@ def cmdExtract(args):
             sys.stdout.buffer.write(data)
 
 
-def main():
+def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
         description="BBC Micro DFS disc image tool",

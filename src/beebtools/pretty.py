@@ -8,9 +8,10 @@ handling copy-protection anti-listing traps.
 """
 
 import re
+from typing import List
 
 
-def prettyPrint(lines):
+def prettyPrint(lines: List[str]) -> List[str]:
     """Apply readable formatting to detokenized BASIC lines.
 
     This is a post-processing pass on plain text.  String literals and
@@ -58,7 +59,7 @@ def prettyPrint(lines):
     return result
 
 
-def _prettyCode(code):
+def _prettyCode(code: str) -> str:
     """Format the code portion of one BASIC line.
 
     Walks character by character so quoted strings and REM/DATA tails are
@@ -189,7 +190,7 @@ def _prettyCode(code):
     return re.sub(r'  +', ' ', ''.join(buf))
 
 
-def _ensureSpace(buf):
+def _ensureSpace(buf: List[str]) -> None:
     """Trim trailing spaces from buf then append exactly one space."""
     while buf and buf[-1] == ' ':
         buf.pop()

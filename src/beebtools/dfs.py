@@ -7,6 +7,8 @@ Supports .ssd (single-sided) and .dsd (double-sided interleaved) formats.
 Provides catalogue parsing and file extraction for Acorn DFS disc images.
 """
 
+from typing import Dict, List, Optional, Tuple, Union
+
 SECTOR_SIZE = 256
 SECTORS_PER_TRACK = 10
 
@@ -14,7 +16,7 @@ SECTORS_PER_TRACK = 10
 class DFSDisc:
     """Represents one side of a DFS disc image (SSD or DSD)."""
 
-    def __init__(self, image_data, side, is_dsd):
+    def __init__(self, image_data: bytes, side: int, is_dsd: bool) -> None:
         """Create a DFS disc-side reader.
 
         Args:
@@ -27,16 +29,16 @@ class DFSDisc:
         self.is_dsd = is_dsd
 
     @staticmethod
-    def _dsdSectorOffset(track, side, sector):
+    def _dsdSectorOffset(track: int, side: int, sector: int) -> int:
         """Byte offset for a sector in a .dsd interleaved image."""
         return (track * 20 + side * 10 + sector) * SECTOR_SIZE
 
     @staticmethod
-    def _ssdSectorOffset(sector):
+    def _ssdSectorOffset(sector: int) -> int:
         """Byte offset for a sector in a .ssd image."""
         return sector * SECTOR_SIZE
 
-    def _readSector(self, sector_num):
+    def _readSector(self, sector_num: int) -> bytes:
         """Read one DFS logical sector from this side.
 
         Args:
@@ -55,7 +57,7 @@ class DFSDisc:
 
         return self.image[off : off + SECTOR_SIZE]
 
-    def readCatalogue(self):
+    def readCatalogue(self) -> Tuple[str, List[Dict[str, Union[str, int, bool]]]]:
         """Parse the DFS catalogue and return all file entries.
 
         Returns a tuple of (title, entries) where entries is a list of dicts,
@@ -116,7 +118,7 @@ class DFSDisc:
 
         return title, entries
 
-    def readFile(self, entry):
+    def readFile(self, entry: Dict[str, Union[str, int, bool]]) -> bytes:
         """Read raw bytes for one catalogued DFS file.
 
         Args:
@@ -136,7 +138,7 @@ class DFSDisc:
         return bytes(data[:length])
 
 
-def openDiscImage(path):
+def openDiscImage(path: str) -> List[DFSDisc]:
     """Open a disc image file and return DFS side readers for it.
 
     The format is inferred from the file extension:
@@ -163,7 +165,7 @@ def openDiscImage(path):
     return sides
 
 
-def isBasic(entry):
+def isBasic(entry: Dict[str, Union[str, int, bool]]) -> bool:
     """Return True if a catalogue entry looks like a BBC BASIC program.
 
     Checks the execution address for the well-known BASIC entry points
@@ -179,7 +181,7 @@ def isBasic(entry):
     return exec_lo in (0x801F, 0x8023, 0x802B)
 
 
-def looksLikeText(data):
+def looksLikeText(data: bytes) -> bool:
     """Return True if the file bytes look like tokenized BASIC.
 
     Every valid tokenized BASIC program begins with 0x0D (the line start
@@ -194,7 +196,7 @@ def looksLikeText(data):
     return len(data) > 0 and data[0] == 0x0D
 
 
-def sortCatalogueEntries(entries, sortMode):
+def sortCatalogueEntries(entries: List[Dict[str, Union[str, int, bool]]], sortMode: str) -> List[Dict[str, Union[str, int, bool]]]:
     """Return catalogue entries in the requested output order.
 
     Args:

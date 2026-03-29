@@ -7,10 +7,12 @@ Converts raw tokenized BASIC program bytes into LIST-style plain text,
 one string per program line.
 """
 
+from typing import List
+
 from .tokens import TOKENS, LINE_LITERAL_TOKENS
 
 
-def decodeLineRef(b0, b1, b2):
+def decodeLineRef(b0: int, b1: int, b2: int) -> int:
     """Decode a BBC BASIC inline line-number reference.
 
     The encoding XORs the top two bits of each byte of the 16-bit line number
@@ -30,7 +32,7 @@ def decodeLineRef(b0, b1, b2):
     return hi * 256 + lo
 
 
-def detokenize(data):
+def detokenize(data: bytes) -> List[str]:
     """Convert a tokenized BBC BASIC program to LIST-style text lines.
 
     Each line in the returned list corresponds to one BASIC program line and
@@ -80,7 +82,7 @@ def detokenize(data):
     return lines
 
 
-def _decodeLineContent(content):
+def _decodeLineContent(content: bytes) -> str:
     """Decode token bytes for one BASIC line into LIST text.
 
     Args:
