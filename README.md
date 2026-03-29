@@ -88,6 +88,8 @@ For development (installs `pytest` and uses an editable install):
 ```bash
 git clone https://github.com/acscpt/beebtools
 cd beebtools
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
 
