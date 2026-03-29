@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Tests](https://github.com/acscpt/beebtools/actions/workflows/tests.yml/badge.svg)](https://github.com/acscpt/beebtools/actions/workflows/tests.yml)
 
-A Python tool for working with BBC Micro DFS disc images. 
+A Python tool for working with BBC Micro DFS disc images.
 
 `beebtools` can read disk catalogues, extract and detokenize BBC BASIC programs to
 a more human-readable (and text editor friendly) format, including a pretty-printer 
@@ -79,22 +79,17 @@ For BASIC files, `beebtools` does three things in sequence:
 
 ## Installation
 
-Clone the repository and install in a virtual environment:
-
 ```bash
-git clone https://github.com/acscpt/beebtools
-cd beebtools
-pip install .
+pip install beebtools
 ```
 
 For development (installs `pytest` and uses an editable install):
 
 ```bash
+git clone https://github.com/acscpt/beebtools
+cd beebtools
 pip install -e ".[dev]"
 ```
-
-A PyPI release (`pip install beebtools`) is planned once the package reaches
-a stable version.
 
 ## Quick start
 
