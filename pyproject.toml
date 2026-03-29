@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "beebtools"
+version = "0.1.0"
+description = "BBC Micro DFS disc image tool - detokenizer and pretty-printer for BBC BASIC"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+    {name = "beebtools contributors"}
+]
+keywords = ["bbc", "micro", "acorn", "dfs", "disc", "basic", "detokenize", "retro", "8bit"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Utilities",
+    "Topic :: System :: Archiving",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+beebtools = "beebtools:main"
+
+[project.urls]
+Repository = "https://github.com/acscpt/beebtools"
+Issues = "https://github.com/acscpt/beebtools/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Match camelCase test functions (testFoo) as well as the classic test_foo style.
+python_functions = "test*"

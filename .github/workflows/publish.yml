@@ -1,0 +1,59 @@
+name: Publish to PyPI
+
+# Trigger on pushed version tags (e.g. v0.1.0, v1.2.3)
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  # Run the full test suite before attempting a release build
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package and test dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  # Build the sdist and wheel, then publish to PyPI
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+
+    # The "pypi" environment must be created in the repo settings and
+    # configured as a trusted publisher on pypi.org (see below).
+    environment: pypi
+
+    # Required for PyPI trusted publisher (OIDC) - no API token needed
+    permissions:
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tool
+        run: pip install build
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
