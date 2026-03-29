@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "beebtools"
-version = "0.1.0"
+version = "0.1.1"
 description = "BBC Micro DFS disc image tool - detokenizer and pretty-printer for BBC BASIC"
 readme = "README.md"
 license = {text = "MIT"}
