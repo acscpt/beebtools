@@ -15,7 +15,7 @@ import pytest
 
 from argparse import Namespace
 
-from beebtools.cli import _resolveOutputPath, _extractAll
+from beebtools.cli import _resolveOutputPath, _extractAll, _sanitizeDfsName
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +125,53 @@ def _makeDsdImage(
 
 
 # ---------------------------------------------------------------------------
+# _sanitizeDfsName unit tests
+# ---------------------------------------------------------------------------
+
+class TestSanitizeDfsName:
+
+    def testNormalNameDoesNotChange(self):
+        assert _sanitizeDfsName("T", "MYPROG") == "T_MYPROG"
+
+    def testDollarDirectoryPreserved(self):
+        assert _sanitizeDfsName("$", "BOOT") == "$_BOOT"
+
+    def testExclamationDirectoryPreserved(self):
+        assert _sanitizeDfsName("!", "BOOT") == "!_BOOT"
+
+    def testForwardSlashEncoded(self):
+        assert _sanitizeDfsName("T", "A/B") == "T_A_x2F_B"
+
+    def testBackslashEncoded(self):
+        assert _sanitizeDfsName("T", "A\\B") == "T_A_x5C_B"
+
+    def testSlashAndBackslashDistinct(self):
+        # Two different illegal chars must produce different output.
+        slash = _sanitizeDfsName("T", "A/B")
+        backslash = _sanitizeDfsName("T", "A\\B")
+        assert slash != backslash
+
+    def testColonEncoded(self):
+        assert _sanitizeDfsName("T", "A:B") == "T_A_x3A_B"
+
+    def testControlCharDropped(self):
+        assert _sanitizeDfsName("T", "A\x01B") == "T_AB"
+
+    def testAllWindowsIllegalCharsEncoded(self):
+        # None of the Windows-illegal chars should appear unencoded in output.
+        illegal = '\\/:*?"<>|'
+        for ch in illegal:
+            result = _sanitizeDfsName("T", f"A{ch}B")
+            assert ch not in result, f"Illegal char {repr(ch)} appeared unencoded in {repr(result)}"
+
+    def testWindowsIllegalCharsAllDistinct(self):
+        # Each illegal char must produce a unique encoding.
+        illegal = '\\/:*?"<>|'
+        results = [_sanitizeDfsName("T", f"_{ch}_") for ch in illegal]
+        assert len(results) == len(set(results)), "Two illegal chars produced the same output"
+
+
+# ---------------------------------------------------------------------------
 # _resolveOutputPath unit tests
 # ---------------------------------------------------------------------------
 
@@ -186,7 +233,7 @@ class TestExtractAllSingleSide:
         _extractAll(args)
 
         # File should be directly in out_dir, no side subdirectory.
-        assert os.path.isfile(os.path.join(out_dir, "$.MYFILE.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "$_MYFILE.bin"))
         assert not os.path.isdir(os.path.join(out_dir, "side0"))
 
 
@@ -209,8 +256,8 @@ class TestExtractAllDoubleSideSubdir:
         )
         _extractAll(args)
 
-        assert os.path.isfile(os.path.join(out_dir, "side0", "$.PROG0.bin"))
-        assert os.path.isfile(os.path.join(out_dir, "side1", "$.PROG1.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "side0", "$_PROG0.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "side1", "$_PROG1.bin"))
 
     def testExplicitSubdirLayout(self, tmp_path):
         img_path = str(tmp_path / "test.dsd")
@@ -228,8 +275,8 @@ class TestExtractAllDoubleSideSubdir:
         )
         _extractAll(args)
 
-        assert os.path.isfile(os.path.join(out_dir, "side0", "$.PROG0.bin"))
-        assert os.path.isfile(os.path.join(out_dir, "side1", "$.PROG1.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "side0", "$_PROG0.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "side1", "$_PROG1.bin"))
 
 
 class TestExtractAllDoubleSidePrefix:
@@ -251,8 +298,8 @@ class TestExtractAllDoubleSidePrefix:
         _extractAll(args)
 
         # Files must be in the flat out_dir, not in subdirectories.
-        assert os.path.isfile(os.path.join(out_dir, "side0_$.PROG0.bin"))
-        assert os.path.isfile(os.path.join(out_dir, "side1_$.PROG1.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "side0_$_PROG0.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "side1_$_PROG1.bin"))
         assert not os.path.isdir(os.path.join(out_dir, "side0"))
         assert not os.path.isdir(os.path.join(out_dir, "side1"))
 
@@ -273,8 +320,8 @@ class TestExtractAllDoubleSidePrefix:
         )
         _extractAll(args)
 
-        side0_path = os.path.join(out_dir, "side0_$.SHARED.bin")
-        side1_path = os.path.join(out_dir, "side1_$.SHARED.bin")
+        side0_path = os.path.join(out_dir, "side0_$_SHARED.bin")
+        side1_path = os.path.join(out_dir, "side1_$_SHARED.bin")
         assert os.path.isfile(side0_path)
         assert os.path.isfile(side1_path)
 

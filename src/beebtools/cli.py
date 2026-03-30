@@ -57,6 +57,44 @@ def cmdCat(args: Namespace) -> None:
         print()
 
 
+# Characters that are illegal in Windows filenames.
+_WINDOWS_ILLEGAL = set('\\/:*?"<>|')
+
+
+def _sanitizeDfsName(dfs_dir: str, dfs_name: str) -> str:
+    """Build a safe output filename stem from a DFS directory and name.
+
+    The DFS separator '.' is replaced with '_'. Any character that is
+    illegal in a Windows filename is replaced with _xNN_ (its ASCII hex
+    value) to guarantee uniqueness - two distinct illegal source characters
+    will never produce the same output. Control characters are dropped.
+
+    Examples:
+        '$', 'BOOT'   -> '$_BOOT'
+        'T', 'MYPROG' -> 'T_MYPROG'
+        'T', 'A/B'    -> 'T_A_x2F_B'  (slash encoded)
+        'T', 'A\\B'   -> 'T_A_x5C_B'  (backslash encoded, distinct)
+
+    Args:
+        dfs_dir:  Single-character DFS directory prefix (e.g. 'T', '$').
+        dfs_name: DFS filename, up to 7 characters (e.g. 'MYPROG').
+
+    Returns:
+        Safe filename stem with no extension (e.g. 'T_MYPROG').
+    """
+    parts = []
+    for ch in f"{dfs_dir}_{dfs_name}":
+        if ord(ch) < 0x20:
+            # Drop control characters.
+            continue
+        if ch in _WINDOWS_ILLEGAL:
+            # Encode as _xNN_ so each illegal char maps to a unique string.
+            parts.append(f"_x{ord(ch):02X}_")
+        else:
+            parts.append(ch)
+    return "".join(parts)
+
+
 def _resolveOutputPath(
     out_dir: str,
     disc_side: int,
@@ -76,7 +114,7 @@ def _resolveOutputPath(
     Args:
         out_dir:    Root output directory.
         disc_side:  Side number (0 or 1) for this file.
-        base:       Bare filename including DFS directory prefix (e.g. T.MYPROG).
+        base:       Sanitized filename stem (e.g. T_MYPROG).
         multi_side: True when the image has more than one side.
         sides_mode: 'subdir', 'prefix', or None.
 
@@ -126,7 +164,7 @@ def _extractAll(args: Namespace) -> None:
         _title, entries = disc.readCatalogue()
 
         for entry in entries:
-            base = f"{entry['dir']}.{entry['name']}"
+            base = _sanitizeDfsName(entry['dir'], entry['name'])
             stem = _resolveOutputPath(out_dir, disc.side, base, multi_side, sides_mode)
             data = disc.readFile(entry)
 
