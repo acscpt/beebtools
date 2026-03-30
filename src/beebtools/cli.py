@@ -17,12 +17,34 @@ from .pretty import prettyPrint
 from .dfs import isBasic, looksLikeText, looksLikePlainText, openDiscImage, sortCatalogueEntries
 
 
+# ---------------------------------------------------------------------------
+# ANSI colour helpers
+# ---------------------------------------------------------------------------
+
+_BOLD    = "\x1b[1m"
+_CYAN    = "\x1b[36m"
+_YELLOW  = "\x1b[33m"
+_RED     = "\x1b[31m"
+_GREY    = "\x1b[90m"
+_RESET   = "\x1b[0m"
+
+
+def _colour(text: str, code: str, enabled: bool) -> str:
+    """Wrap text in an ANSI escape sequence when colour is enabled."""
+    if not enabled:
+        return text
+    return f"{code}{text}{_RESET}"
+
+
 def cmdCat(args: Namespace) -> None:
     """Print the disc catalogue to stdout.
 
     Args:
         args: Parsed argparse namespace for the 'cat' subcommand.
     """
+    # Enable colour only when writing to a real terminal.
+    use_colour = sys.stdout.isatty()
+
     sides = openDiscImage(args.image)
 
     for disc in sides:
@@ -34,7 +56,7 @@ def cmdCat(args: Namespace) -> None:
             header += f": {title}"
 
         header += f" ({len(entries)} files) ---"
-        print(header)
+        print(_colour(header, _BOLD, use_colour))
         print()
 
         if not entries:
@@ -45,18 +67,22 @@ def cmdCat(args: Namespace) -> None:
 
             for e in orderedEntries:
                 if isBasic(e):
-                    ftype = "BASIC"
+                    ftype = _colour("BASIC", _CYAN, use_colour)
                 elif args.inspect and looksLikePlainText(disc.readFile(e)):
-                    ftype = "TEXT"
+                    ftype = _colour("TEXT", _YELLOW, use_colour)
                 else:
                     ftype = ""
-                lock = "L" if e["locked"] else " "
+                lock_char = "L" if e["locked"] else " "
+                lock = _colour(lock_char, _RED, use_colour and e["locked"])
                 full_name = f"{e['dir']}.{e['name']}"
+                load   = _colour(f"{e['load']:08X}",   _GREY, use_colour)
+                exec_  = _colour(f"{e['exec']:08X}",   _GREY, use_colour)
+                length = _colour(f"{e['length']:08X}", _GREY, use_colour)
                 print(
                     f"  {lock}{full_name:<11s} "
-                    f"{e['load']:08X} "
-                    f"{e['exec']:08X} "
-                    f"{e['length']:08X}  "
+                    f"{load} "
+                    f"{exec_} "
+                    f"{length}  "
                     f"{ftype}"
                 )
         print()

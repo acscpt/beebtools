@@ -20,6 +20,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   detect and label plain ASCII text files as `TEXT` in the type column.
   Without this flag, type detection uses only catalogue metadata (faster).
 
+- `beebtools cat` output is colourised when writing to a terminal: disc header
+  in bold, `BASIC` in cyan, `TEXT` in yellow, locked flag `L` in red, and
+  load/exec/length addresses in dark grey. Colour is suppressed automatically
+  when stdout is piped or redirected.
+
 ### Changed
 
 - Bulk extraction from double-sided disc images now separates files by side
