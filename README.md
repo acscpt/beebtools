@@ -239,19 +239,43 @@ When `-o` is omitted, raw bytes go directly to stdout for piping.
 Extract all files from a disc image by specifying the option `-a`.
 
 ```bash
-beebtools extract <image> -a [-d DIR] [--pretty]
+beebtools extract <image> -a [-d DIR] [--pretty] [-s subdir|prefix]
 ```
 
 Extracts every file from the disc.
 
 - BASIC programs are saved as `.bas` text files
 
-- binaries are saved as `.bin` raw files.
+- binaries are saved as `.bin` raw files
 
 The output directory defaults to the disc image filename stem (`bbc_d1/` for `bbc_d1.dsd`).
 
-On a double-sided `.dsd` image, files from each side are prefixed with
-`side0_` or `side1_` to prevent collisions between identically-named files.
+On a double-sided `.dsd` image, files from each side are always kept separate.
+The `-s`/`--sides` flag controls the layout:
+
+- `subdir` (default) - files are written into `side0/` and `side1/` subdirectories
+  under the output directory:
+
+  ```
+  bbc_d1/
+    side0/
+      $.BOOT.bin
+      T.PROG.bas
+    side1/
+      $.BOOT.bin
+      T.GAME.bas
+  ```
+
+- `prefix` - all files are written into the flat output directory, prefixed with
+  `side0_` or `side1_`:
+
+  ```
+  bbc_d1/
+    side0_$.BOOT.bin
+    side0_T.PROG.bas
+    side1_$.BOOT.bin
+    side1_T.GAME.bas
+  ```
 
 ##### Filename matching
 

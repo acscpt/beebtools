@@ -7,6 +7,17 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `--sides` flag (`-s`) for `beebtools extract -a` on double-sided `.dsd` images.
+  `subdir` mode (default) writes files into `side0/` and `side1/` subdirectories;
+  `prefix` mode prepends `side0_` or `side1_` for a flat output layout.
+
+### Changed
+
+- Bulk extraction from double-sided disc images now separates files by side
+  automatically (subdir layout) rather than requiring an explicit flag.
+
 ## [0.1.1] - 2026-03-30
 
 ### Changed

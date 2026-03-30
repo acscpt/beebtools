@@ -10,6 +10,7 @@ import argparse
 import os
 import sys
 from argparse import Namespace
+from typing import Optional
 
 from .detokenize import detokenize
 from .pretty import prettyPrint
@@ -56,11 +57,54 @@ def cmdCat(args: Namespace) -> None:
         print()
 
 
+def _resolveOutputPath(
+    out_dir: str,
+    disc_side: int,
+    base: str,
+    multi_side: bool,
+    sides_mode: Optional[str],
+) -> str:
+    """Resolve the output path for one file during bulk extraction.
+
+    When the disc has only one side, sides_mode is ignored and the file is
+    written directly into out_dir.
+
+    When the disc has two sides:
+    - sides_mode 'subdir' or None (default): write into out_dir/side0/ or out_dir/side1/
+    - sides_mode 'prefix'                  : write into out_dir with side0_ or side1_ prefix
+
+    Args:
+        out_dir:    Root output directory.
+        disc_side:  Side number (0 or 1) for this file.
+        base:       Bare filename including DFS directory prefix (e.g. T.MYPROG).
+        multi_side: True when the image has more than one side.
+        sides_mode: 'subdir', 'prefix', or None.
+
+    Returns:
+        Path string to write the file to (extension not included).
+    """
+    if not multi_side:
+        return os.path.join(out_dir, base)
+
+    if sides_mode == "prefix":
+        return os.path.join(out_dir, f"side{disc_side}_{base}")
+
+    # Default for double-sided: subdir mode.
+    side_dir = os.path.join(out_dir, f"side{disc_side}")
+    os.makedirs(side_dir, exist_ok=True)
+    return os.path.join(side_dir, base)
+
+
 def _extractAll(args: Namespace) -> None:
     """Extract every file from a disc image into a directory.
 
     BASIC programs are saved as .bas plain text files.
     Binary files are saved as .bin raw bytes.
+
+    On double-sided images, files are always separated by side. The --sides
+    flag controls the layout:
+    - subdir (default): files go into side0/ and side1/ subdirectories
+    - prefix          : files are prefixed with side0_ or side1_ in a flat layout
 
     Args:
         args: Parsed argparse namespace for the 'extract' subcommand.
@@ -75,23 +119,20 @@ def _extractAll(args: Namespace) -> None:
 
     os.makedirs(out_dir, exist_ok=True)
 
-    # Prefix filenames with the side number when the image has two sides,
-    # to avoid collisions between identically-named files on each side.
     multi_side = len(sides) > 1
+    sides_mode = getattr(args, "sides", None)
 
     for disc in sides:
         _title, entries = disc.readCatalogue()
 
         for entry in entries:
             base = f"{entry['dir']}.{entry['name']}"
-            if multi_side:
-                base = f"side{disc.side}_{base}"
-
+            stem = _resolveOutputPath(out_dir, disc.side, base, multi_side, sides_mode)
             data = disc.readFile(entry)
 
             if isBasic(entry) and looksLikeText(data):
                 # Detokenize BASIC and write as plain text.
-                out_path = os.path.join(out_dir, base + ".bas")
+                out_path = stem + ".bas"
                 text_lines = detokenize(data)
                 if args.pretty:
                     text_lines = prettyPrint(text_lines)
@@ -101,7 +142,7 @@ def _extractAll(args: Namespace) -> None:
 
             else:
                 # Write binary file and report addressing metadata.
-                out_path = os.path.join(out_dir, base + ".bin")
+                out_path = stem + ".bin"
                 with open(out_path, "wb") as f:
                     f.write(data)
                 print(
@@ -240,6 +281,18 @@ def main() -> None:
                            help="Output directory for -a/--all (default: image name)")
     p_extract.add_argument("--pretty", action="store_true",
                            help="Add operator spacing to BASIC output")
+    p_extract.add_argument(
+        "-s", "--sides",
+        choices=["subdir", "prefix"],
+        default=None,
+        help=(
+            "How to separate files from each side of a double-sided disc "
+            "when using -a/--all. "
+            "'subdir' (default for double-sided discs) writes into side0/ and side1/ "
+            "subdirectories; "
+            "'prefix' prepends side0_ or side1_ to each filename in a flat layout."
+        ),
+    )
 
     args = parser.parse_args()
 
