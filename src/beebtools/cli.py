@@ -261,6 +261,7 @@ def main() -> None:
             "Read catalogues, extract files, and detokenize BBC BASIC programs "
             "from .ssd and .dsd disc images."
         ),
+        epilog="Use 'beebtools <command> -h' for detailed help on each command.",
     )
     sub = parser.add_subparsers(dest="command")
 
