@@ -246,7 +246,9 @@ Extracts every file from the disc.
 
 - BASIC programs are saved as `.bas` text files
 
-- binaries are saved as `.bin` raw files
+- plain ASCII text files are saved as `.txt` (BBC CR line endings are normalised to LF)
+
+- everything else is saved as `.bin` raw files
 
 The output directory defaults to the disc image filename stem (`bbc_d1/` for `bbc_d1.dsd`).
 
@@ -259,11 +261,11 @@ The `-s`/`--sides` flag controls the layout:
   ```
   bbc_d1/
     side0/
-      $.BOOT.bin
-      T.PROG.bas
+      $_BOOT.bin
+      T_PROG.bas
     side1/
-      $.BOOT.bin
-      T.GAME.bas
+      $_BOOT.bin
+      T_GAME.bas
   ```
 
 - `prefix` - all files are written into the flat output directory, prefixed with
@@ -271,10 +273,10 @@ The `-s`/`--sides` flag controls the layout:
 
   ```
   bbc_d1/
-    side0_$.BOOT.bin
-    side0_T.PROG.bas
-    side1_$.BOOT.bin
-    side1_T.GAME.bas
+    side0_$_BOOT.bin
+    side0_T_PROG.bas
+    side1_$_BOOT.bin
+    side1_T_GAME.bas
   ```
 
 ##### Filename matching

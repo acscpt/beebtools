@@ -13,10 +13,21 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `subdir` mode (default) writes files into `side0/` and `side1/` subdirectories;
   `prefix` mode prepends `side0_` or `side1_` for a flat output layout.
 
+- `looksLikePlainText()` library function: returns True when all bytes in a file
+  are printable ASCII or common whitespace (tab, CR, LF).
+
 ### Changed
 
 - Bulk extraction from double-sided disc images now separates files by side
   automatically (subdir layout) rather than requiring an explicit flag.
+
+- Bulk extraction now produces three file types: BASIC programs as `.bas`,
+  plain ASCII text files as `.txt`, and everything else as `.bin`.
+  BBC CR-only line endings in `.txt` files are normalised to LF on output.
+
+- DFS filenames are sanitized in bulk extraction output: the `.` directory
+  separator is replaced with `_` (e.g. `T.MYPROG` becomes `T_MYPROG`), and
+  Windows-illegal characters are encoded as `_xNN_` to guarantee uniqueness.
 
 ## [0.1.1] - 2026-03-30
 

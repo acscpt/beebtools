@@ -14,7 +14,7 @@ from typing import Optional
 
 from .detokenize import detokenize
 from .pretty import prettyPrint
-from .dfs import isBasic, looksLikeText, openDiscImage, sortCatalogueEntries
+from .dfs import isBasic, looksLikeText, looksLikePlainText, openDiscImage, sortCatalogueEntries
 
 
 def cmdCat(args: Namespace) -> None:
@@ -177,6 +177,17 @@ def _extractAll(args: Namespace) -> None:
                 with open(out_path, "w", encoding="ascii", errors="replace") as f:
                     f.write("\n".join(text_lines) + "\n")
                 print(f"  BASIC   {out_path}")
+
+            elif looksLikePlainText(data):
+                # Plain ASCII text file - save as .txt.
+                # BBC text editors use CR (0x0D) only as a line terminator.
+                # Normalise to Unix LF so the output file is portable.
+                out_path = stem + ".txt"
+                text = data.decode("ascii", errors="replace")
+                text = text.replace("\r\n", "\n").replace("\r", "\n")
+                with open(out_path, "w", encoding="ascii", errors="replace") as f:
+                    f.write(text)
+                print(f"  text    {out_path}")
 
             else:
                 # Write binary file and report addressing metadata.

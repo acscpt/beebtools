@@ -236,6 +236,51 @@ class TestExtractAllSingleSide:
         assert os.path.isfile(os.path.join(out_dir, "$_MYFILE.bin"))
         assert not os.path.isdir(os.path.join(out_dir, "side0"))
 
+    def testPlainTextFileSavedAsTxt(self, tmp_path):
+        # A file whose bytes are all printable ASCII + CR should get a .txt extension.
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(_makeSsdImage("README", b"Hello BBC\rworld\r"))
+
+        out_dir = str(tmp_path / "out")
+        args = Namespace(
+            image=img_path,
+            dir=out_dir,
+            pretty=False,
+            all=True,
+            output=None,
+            sides=None,
+        )
+        _extractAll(args)
+
+        assert os.path.isfile(os.path.join(out_dir, "$_README.txt"))
+        assert not os.path.isfile(os.path.join(out_dir, "$_README.bin"))
+
+    def testPlainTextCrNormalisedToLf(self, tmp_path):
+        # BBC text files use CR (0x0D) as line terminator.
+        # Extracted .txt files must have LF-only line endings.
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(_makeSsdImage("NOTES", b"line one\rline two\r"))
+
+        out_dir = str(tmp_path / "out")
+        args = Namespace(
+            image=img_path,
+            dir=out_dir,
+            pretty=False,
+            all=True,
+            output=None,
+            sides=None,
+        )
+        _extractAll(args)
+
+        txt_path = os.path.join(out_dir, "$_NOTES.txt")
+        with open(txt_path, "rb") as f:
+            raw = f.read()
+
+        assert b"\r" not in raw, "CR bytes must have been normalised to LF"
+        assert raw == b"line one\nline two\n"
+
 
 class TestExtractAllDoubleSideSubdir:
 

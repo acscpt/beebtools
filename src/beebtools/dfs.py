@@ -196,6 +196,34 @@ def looksLikeText(data: bytes) -> bool:
     return len(data) > 0 and data[0] == 0x0D
 
 
+# Bytes that are acceptable in a plain-text file: printable ASCII plus
+# common whitespace (tab, carriage return, line feed).
+_PLAIN_TEXT_BYTES = frozenset(range(0x20, 0x7F)) | {0x09, 0x0A, 0x0D}
+
+
+def looksLikePlainText(data: bytes) -> bool:
+    """Return True if the file bytes look like plain ASCII text.
+
+    All bytes must be printable ASCII (0x20-0x7E) or common whitespace
+    (tab 0x09, line feed 0x0A, carriage return 0x0D). An empty file is
+    not considered plain text.
+
+    Note: BBC Micro character set quirks (0x60 = pound sign, 0x7C = broken
+    bar) are not translated - the raw bytes are accepted as-is and will
+    appear as their standard ASCII equivalents (backtick, pipe) in the
+    extracted .txt file.
+
+    Args:
+        data: Raw file bytes.
+
+    Returns:
+        True when every byte is a printable ASCII or whitespace character.
+    """
+    if not data:
+        return False
+    return all(b in _PLAIN_TEXT_BYTES for b in data)
+
+
 def sortCatalogueEntries(entries: List[Dict[str, Union[str, int, bool]]], sortMode: str) -> List[Dict[str, Union[str, int, bool]]]:
     """Return catalogue entries in the requested output order.
 

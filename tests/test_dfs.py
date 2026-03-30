@@ -16,7 +16,7 @@ import os
 import glob
 import pytest
 
-from beebtools import openDiscImage, isBasic, looksLikeText, detokenize
+from beebtools import openDiscImage, isBasic, looksLikeText, looksLikePlainText, detokenize
 
 # Discover all disc images in the resources directory.
 DISCS_DIR = os.path.join(os.path.dirname(__file__), "resources", "discs")
@@ -134,3 +134,33 @@ class TestFileExtraction:
                         )
 
 
+# ---------------------------------------------------------------------------
+# looksLikePlainText unit tests (no disc images needed)
+# ---------------------------------------------------------------------------
+
+class TestLooksLikePlainText:
+
+    def testPrintableAsciiIsText(self):
+        assert looksLikePlainText(b"Hello, world!")
+
+    def testTabCrLfAccepted(self):
+        assert looksLikePlainText(b"line1\r\nline2\ttabbed")
+
+    def testEmptyIsNotText(self):
+        assert not looksLikePlainText(b"")
+
+    def testHighByteIsNotText(self):
+        assert not looksLikePlainText(b"Hello\x80world")
+
+    def testNulByteIsNotText(self):
+        assert not looksLikePlainText(b"Hello\x00world")
+
+    def testControlCharIsNotText(self):
+        # 0x01 is a control char that should not be accepted.
+        assert not looksLikePlainText(b"\x01")
+
+    def testBasicMarkerIsNotText(self):
+        # 0x0D at the start is the BASIC line marker - but a lone 0x0D is
+        # carriage return, which IS accepted as whitespace.
+        # A tokenized BASIC file will have non-text bytes after the 0x0D.
+        assert not looksLikePlainText(b"\x0D\x00\x0A\x05\xf1")
