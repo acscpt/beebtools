@@ -9,6 +9,15 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `search` subcommand: search all BASIC files on a disc for lines containing a
+  text pattern. Prints matching lines with filename and BBC BASIC line number.
+  Flags: `-i`/`--ignore-case` for case-insensitive matching, `--pretty` to apply
+  the pretty-printer before searching.
+
+- `searchDisc(image_path, pattern, filename, ignore_case, pretty)` library
+  function: returns a list of match dicts with keys `side`, `filename`,
+  `line_number`, and `line`.
+
 - `--sides` flag (`-s`) for `beebtools extract -a` on double-sided `.dsd` images.
   `subdir` mode (default) writes files into `side0/` and `side1/` subdirectories;
   `prefix` mode prepends `side0_` or `side1_` for a flat output layout.
