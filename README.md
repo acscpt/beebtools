@@ -206,6 +206,31 @@ Sort options:
 
 - `size` - ascending by file length
 
+#### `search`
+
+Search all BASIC files on a disc for lines containing a text pattern.
+
+```bash
+beebtools search <image> <pattern> [filename] [-i] [--pretty]
+```
+
+Detokenizes every BASIC file on the disc and scans each line for the pattern.
+Matching lines are printed as:
+
+```
+--- Side 0: T.MYPROG ---
+   10 GOTO 100
+  230 IF SCORE > 100 THEN GOTO 230
+```
+
+Options:
+
+- `filename` - limit the search to one file (e.g. `T.MYPROG` or bare `MYPROG`)
+
+- `-i` / `--ignore-case` - case-insensitive match
+
+- `--pretty` - apply operator spacing before matching
+
 #### `extract`
 
 Extract a file from a disc image.

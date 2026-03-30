@@ -1,0 +1,233 @@
+# SPDX-FileCopyrightText: 2026 beebtools contributors
+# SPDX-License-Identifier: MIT
+
+"""Tests for searchDisc() and the cmdSearch CLI wrapper."""
+
+import sys
+import io
+import contextlib
+from argparse import Namespace
+
+import pytest
+
+from beebtools import searchDisc
+from beebtools.cli import cmdSearch
+
+
+# ---------------------------------------------------------------------------
+# Helpers: build tokenized BASIC programs and in-memory disc images
+# ---------------------------------------------------------------------------
+
+SECTOR_SIZE = 256
+
+# Common tokens
+TOK_PRINT  = 0xF1   # PRINT
+TOK_GOTO   = 0xE5   # GOTO
+TOK_REM    = 0xF4   # REM
+
+
+def _makeLine(linenum: int, content: bytes) -> bytes:
+    """Build one tokenized BASIC line record."""
+    hi = (linenum >> 8) & 0xFF
+    lo = linenum & 0xFF
+    linelen = 3 + 1 + len(content)
+    return bytes([0x0D, hi, lo, linelen]) + content
+
+
+def _makeProgram(*lines) -> bytes:
+    """Build a tokenized BASIC program from (linenum, bytes) pairs."""
+    data = bytearray()
+    for linenum, content in lines:
+        data += _makeLine(linenum, bytes(content))
+    data += b"\x0D\xFF"
+    return bytes(data)
+
+
+def _makeSector0(filename: str, directory: str = "$") -> bytes:
+    buf = bytearray(SECTOR_SIZE)
+    buf[0:8] = b"TESTDISC"
+    buf[8:15] = filename.encode("ascii").ljust(7)[:7]
+    buf[15] = ord(directory) & 0x7F
+    return bytes(buf)
+
+
+def _makeSector1(file_data_len: int, exec_addr: int = 0x00008023, start_sector: int = 2) -> bytes:
+    buf = bytearray(SECTOR_SIZE)
+    buf[5] = 1 * 8  # one file
+    length_lo = file_data_len & 0xFFFF
+    buf[8]  = 0x00          # load lo
+    buf[9]  = 0x0E          # load hi (0x0E00 - typical BASIC load)
+    buf[10] = exec_addr & 0xFF
+    buf[11] = (exec_addr >> 8) & 0xFF
+    buf[12] = length_lo & 0xFF
+    buf[13] = (length_lo >> 8) & 0xFF
+    buf[14] = 0x00
+    buf[15] = start_sector & 0xFF
+    return bytes(buf)
+
+
+def _makeSsdImage(filename: str, file_data: bytes, directory: str = "$",
+                  exec_addr: int = 0x00008023) -> bytes:
+    """Build a minimal .ssd image with one BASIC file."""
+    image = bytearray(80 * 10 * SECTOR_SIZE)
+    image[0:SECTOR_SIZE]           = _makeSector0(filename, directory)
+    image[SECTOR_SIZE:2*SECTOR_SIZE] = _makeSector1(len(file_data), exec_addr)
+    start = 2 * SECTOR_SIZE
+    image[start:start + len(file_data)] = file_data
+    return bytes(image)
+
+
+# ---------------------------------------------------------------------------
+# searchDisc unit tests
+# ---------------------------------------------------------------------------
+
+class TestSearchDisc:
+
+    def testFindsMatchInBasicFile(self, tmp_path):
+        # Program has one PRINT line containing "HELLO".
+        prog = _makeProgram(
+            (10, bytes([TOK_PRINT]) + b'"HELLO"'),
+            (20, bytes([TOK_GOTO]) + b"10"),
+        )
+        img = str(tmp_path / "test.ssd")
+        with open(img, "wb") as f:
+            f.write(_makeSsdImage("PROG", prog))
+
+        results = searchDisc(img, "HELLO")
+        assert len(results) == 1
+        assert results[0]["filename"] == "$.PROG"
+        assert results[0]["line_number"] == 10
+        assert "HELLO" in results[0]["line"]
+
+    def testNoMatchReturnsEmpty(self, tmp_path):
+        prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"HELLO"'))
+        img = str(tmp_path / "test.ssd")
+        with open(img, "wb") as f:
+            f.write(_makeSsdImage("PROG", prog))
+
+        results = searchDisc(img, "GOODBYE")
+        assert results == []
+
+    def testIgnoreCaseFlagOff(self, tmp_path):
+        # Without ignore_case, "hello" should not match "HELLO".
+        prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"HELLO"'))
+        img = str(tmp_path / "test.ssd")
+        with open(img, "wb") as f:
+            f.write(_makeSsdImage("PROG", prog))
+
+        results = searchDisc(img, "hello", ignore_case=False)
+        assert results == []
+
+    def testIgnoreCaseFlagOn(self, tmp_path):
+        # With ignore_case, "hello" should match "HELLO".
+        prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"HELLO"'))
+        img = str(tmp_path / "test.ssd")
+        with open(img, "wb") as f:
+            f.write(_makeSsdImage("PROG", prog))
+
+        results = searchDisc(img, "hello", ignore_case=True)
+        assert len(results) == 1
+
+    def testMultipleLinesMatched(self, tmp_path):
+        # Two lines both contain the search term.
+        prog = _makeProgram(
+            (10, bytes([TOK_PRINT]) + b'"SCORE"'),
+            (20, bytes([TOK_PRINT]) + b'"SCORE=0"'),
+            (30, bytes([TOK_GOTO]) + b"10"),
+        )
+        img = str(tmp_path / "test.ssd")
+        with open(img, "wb") as f:
+            f.write(_makeSsdImage("PROG", prog))
+
+        results = searchDisc(img, "SCORE")
+        assert len(results) == 2
+        assert results[0]["line_number"] == 10
+        assert results[1]["line_number"] == 20
+
+    def testFilenameFilterFullName(self, tmp_path):
+        # When filename given as full DFS name, only that file is searched.
+        prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"HIT"'))
+        img = str(tmp_path / "test.ssd")
+        with open(img, "wb") as f:
+            f.write(_makeSsdImage("PROG", prog))
+
+        # Correct full name -> match found.
+        assert len(searchDisc(img, "HIT", filename="$.PROG")) == 1
+        # Wrong name -> no results.
+        assert searchDisc(img, "HIT", filename="$.OTHER") == []
+
+    def testFilenameFilterBareName(self, tmp_path):
+        # Bare name without directory prefix also scopes the search.
+        prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"HIT"'))
+        img = str(tmp_path / "test.ssd")
+        with open(img, "wb") as f:
+            f.write(_makeSsdImage("PROG", prog))
+
+        assert len(searchDisc(img, "HIT", filename="PROG")) == 1
+
+    def testNonBasicFileSkipped(self, tmp_path):
+        # A file with binary data (non-BASIC exec address) is not searched.
+        binary_data = b"\xDE\xAD\xBE\xEF" * 16
+        img = str(tmp_path / "test.ssd")
+        with open(img, "wb") as f:
+            # exec_addr 0x0000 -> not a BASIC file
+            f.write(_makeSsdImage("BIN", binary_data, exec_addr=0x0000))
+
+        results = searchDisc(img, "\xDE")
+        assert results == []
+
+    def testResultKeysPresent(self, tmp_path):
+        # Each result dict must contain all required keys.
+        prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"KEY"'))
+        img = str(tmp_path / "test.ssd")
+        with open(img, "wb") as f:
+            f.write(_makeSsdImage("PROG", prog))
+
+        results = searchDisc(img, "KEY")
+        assert len(results) == 1
+        r = results[0]
+        assert "side"        in r
+        assert "filename"    in r
+        assert "line_number" in r
+        assert "line"        in r
+        assert r["side"] == 0
+
+
+# ---------------------------------------------------------------------------
+# cmdSearch CLI wrapper tests
+# ---------------------------------------------------------------------------
+
+class TestCmdSearch:
+
+    def _run(self, tmp_path, prog: bytes, pattern: str, **kwargs) -> str:
+        """Write an image, run cmdSearch, return captured stdout."""
+        img = str(tmp_path / "test.ssd")
+        with open(img, "wb") as f:
+            f.write(_makeSsdImage("PROG", prog))
+        args = Namespace(
+            image=img,
+            pattern=pattern,
+            filename=kwargs.get("filename", None),
+            ignore_case=kwargs.get("ignore_case", False),
+            pretty=kwargs.get("pretty", False),
+        )
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdSearch(args)
+        return buf.getvalue()
+
+    def testMatchPrinted(self, tmp_path):
+        prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"WORLD"'))
+        output = self._run(tmp_path, prog, "WORLD")
+        assert "WORLD" in output
+        assert "$.PROG" in output
+
+    def testNoMatchPrintsNothing(self, tmp_path):
+        prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"WORLD"'))
+        output = self._run(tmp_path, prog, "MISSING")
+        assert output == ""
+
+    def testLineNumberInOutput(self, tmp_path):
+        prog = _makeProgram((42, bytes([TOK_PRINT]) + b'"X"'))
+        output = self._run(tmp_path, prog, '"X"')
+        assert "42" in output

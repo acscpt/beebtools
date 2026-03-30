@@ -88,6 +88,41 @@ def cmdCat(args: Namespace) -> None:
         print()
 
 
+def cmdSearch(args: Namespace) -> None:
+    """Search BASIC files on a disc for lines matching a text pattern.
+
+    Args:
+        args: Parsed argparse namespace for the 'search' subcommand.
+    """
+    from .dfs import searchDisc
+
+    # Enable colour only when writing to a real terminal.
+    use_colour = sys.stdout.isatty()
+
+    matches = searchDisc(
+        args.image,
+        args.pattern,
+        filename=args.filename,
+        ignore_case=args.ignore_case,
+        pretty=args.pretty,
+    )
+
+    if not matches:
+        return
+
+    # Group results by (side, filename) so the file header only prints once.
+    current_file = None
+    for m in matches:
+        file_key = (m["side"], m["filename"])
+        if file_key != current_file:
+            current_file = file_key
+            header = f"--- Side {m['side']}: {m['filename']} ---"
+            print(_colour(header, _BOLD, use_colour))
+        linenum = _colour(f"{m['line_number']:>5d}", _GREY, use_colour)
+        content = m["line"][5:]
+        print(f"  {linenum}{content}")
+
+
 # Characters that are illegal in Windows filenames.
 _WINDOWS_ILLEGAL = set('\\/:*?"<>|')
 
@@ -384,11 +419,23 @@ def main() -> None:
         ),
     )
 
+    p_search = sub.add_parser("search", help="Search BASIC source for a text pattern")
+    p_search.add_argument("image", help="Path to .ssd or .dsd disc image")
+    p_search.add_argument("pattern", help="Text to search for")
+    p_search.add_argument("filename", nargs="?",
+                          help="Limit search to this file (e.g. T.MYPROG or MYPROG)")
+    p_search.add_argument("-i", "--ignore-case", action="store_true",
+                          help="Case-insensitive search")
+    p_search.add_argument("--pretty", action="store_true",
+                          help="Match after applying pretty-printer spacing")
+
     args = parser.parse_args()
 
     if args.command == "cat":
         cmdCat(args)
     elif args.command == "extract":
         cmdExtract(args)
+    elif args.command == "search":
+        cmdSearch(args)
     else:
         parser.print_help()
