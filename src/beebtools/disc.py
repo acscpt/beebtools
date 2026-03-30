@@ -4,16 +4,14 @@
 """High-level disc operations.
 
 Orchestration layer that composes the lower-level modules - dfs (disc I/O),
-detokenize, and pretty - into coherent disc-wide operations. This is the
-main facade for library consumers and the natural target for future operations
-such as creating disc images and injecting files.
+detokenize, and pretty - into coherent disc-wide operations.
 
 Layer responsibilities:
-    dfs        -- disc format parsing and sector-level I/O only
-    detokenize -- tokenized binary to plain-text transform only
-    pretty     -- text post-processing only
+    dfs        -- disc format parsing and sector-level I/O
+    detokenize -- tokenized binary to plain-text transform
+    pretty     -- text post-processing
     disc       -- cross-layer orchestration (this module)
-    cli        -- argument parsing, output formatting, and user interaction only
+    cli        -- argument parsing, output formatting, and user interaction
 
 All operations that span more than one lower layer belong here.
 """
