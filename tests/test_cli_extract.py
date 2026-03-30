@@ -15,7 +15,7 @@ import pytest
 
 from argparse import Namespace
 
-from beebtools.cli import _resolveOutputPath, _extractAll, _sanitizeDfsName
+from beebtools.cli import _resolveOutputPath, _extractAll, _sanitizeDfsName, cmdCat
 
 
 # ---------------------------------------------------------------------------
@@ -375,3 +375,44 @@ class TestExtractAllDoubleSidePrefix:
             assert f.read() == b"\xAA" * 16
         with open(side1_path, "rb") as f:
             assert f.read() == b"\xBB" * 16
+
+
+# ---------------------------------------------------------------------------
+# cmdCat --inspect tests
+# ---------------------------------------------------------------------------
+
+class TestCmdCatInspect:
+
+    def _runCat(self, tmp_path, file_data: bytes, inspect: bool) -> str:
+        """Build a single-sided image, run cmdCat, and return captured stdout."""
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(_makeSsdImage("README", file_data))
+        args = Namespace(image=img_path, sort="name", inspect=inspect)
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCat(args)
+        return buf.getvalue()
+
+    def testBinaryFileNoType(self, tmp_path):
+        # Binary data: no type label in default or inspect mode.
+        output = self._runCat(tmp_path, b"\xDE\xAD\xBE\xEF" * 4, inspect=False)
+        assert "BASIC" not in output
+        assert "TEXT" not in output
+
+    def testTextFileNoLabelWithoutInspect(self, tmp_path):
+        # Plain text data without --inspect: type column stays blank.
+        output = self._runCat(tmp_path, b"Hello BBC\rworld\r", inspect=False)
+        assert "TEXT" not in output
+
+    def testTextFileLabelledWithInspect(self, tmp_path):
+        # Plain text data with --inspect: should show TEXT.
+        output = self._runCat(tmp_path, b"Hello BBC\rworld\r", inspect=True)
+        assert "TEXT" in output
+
+    def testBinaryFileStillNoTypeWithInspect(self, tmp_path):
+        # Binary data with --inspect: still blank (not TEXT).
+        output = self._runCat(tmp_path, b"\xDE\xAD\xBE\xEF" * 4, inspect=True)
+        assert "BASIC" not in output
+        assert "TEXT" not in output

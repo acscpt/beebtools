@@ -44,7 +44,12 @@ def cmdCat(args: Namespace) -> None:
             print(f"  {'Name':<12s} {'Load':>8s} {'Exec':>8s} {'Length':>8s}  {'Type'}")
 
             for e in orderedEntries:
-                ftype = "BASIC" if isBasic(e) else ""
+                if isBasic(e):
+                    ftype = "BASIC"
+                elif args.inspect and looksLikePlainText(disc.readFile(e)):
+                    ftype = "TEXT"
+                else:
+                    ftype = ""
                 lock = "L" if e["locked"] else " "
                 full_name = f"{e['dir']}.{e['name']}"
                 print(
@@ -321,6 +326,11 @@ def main() -> None:
         choices=["name", "catalog", "size"],
         default="name",
         help="Sort order: name (default), catalog, or size",
+    )
+    p_cat.add_argument(
+        "-i", "--inspect",
+        action="store_true",
+        help="Read file contents to detect TEXT files (slower; default is metadata-only)",
     )
 
     p_extract = sub.add_parser("extract", help="Extract a file, or all files with -a")

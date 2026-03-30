@@ -16,6 +16,10 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `looksLikePlainText()` library function: returns True when all bytes in a file
   are printable ASCII or common whitespace (tab, CR, LF).
 
+- `--inspect` (`-i`) flag for `beebtools cat`: reads each file's bytes to
+  detect and label plain ASCII text files as `TEXT` in the type column.
+  Without this flag, type detection uses only catalogue metadata (faster).
+
 ### Changed
 
 - Bulk extraction from double-sided disc images now separates files by side
