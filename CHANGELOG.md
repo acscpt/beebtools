@@ -7,6 +7,10 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.2.0] - 2026-03-30
+
 ### Added
 
 - `search` subcommand: search all BASIC files on a disc for lines containing a
