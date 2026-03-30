@@ -43,7 +43,8 @@ Modules:
 
 from .detokenize import detokenize, decodeLineRef
 from .pretty import prettyPrint
-from .dfs import isBasic, looksLikeText, looksLikePlainText, openDiscImage, DFSDisc, sortCatalogueEntries, searchDisc
+from .dfs import isBasic, looksLikeText, looksLikePlainText, openDiscImage, DFSDisc, sortCatalogueEntries
+from .disc import search, extractAll
 from .cli import main
 
 __all__ = [
@@ -56,7 +57,8 @@ __all__ = [
     "openDiscImage",
     "DFSDisc",
     "sortCatalogueEntries",
-    "searchDisc",
+    "search",
+    "extractAll",
     "main",
 ]
 

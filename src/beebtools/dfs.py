@@ -7,8 +7,7 @@ Supports .ssd (single-sided) and .dsd (double-sided interleaved) formats.
 Provides catalogue parsing and file extraction for Acorn DFS disc images.
 """
 
-from typing import Dict, List, Optional, Tuple, Union
-import re
+from typing import Dict, List, Tuple, Union
 
 SECTOR_SIZE = 256
 SECTORS_PER_TRACK = 10
@@ -251,73 +250,4 @@ def sortCatalogueEntries(entries: List[Dict[str, Union[str, int, bool]]], sortMo
     return sorted(entries, key=lambda e: (e["name"].upper(), e["dir"].upper()))
 
 
-def searchDisc(
-    image_path: str,
-    pattern: str,
-    filename: Optional[str] = None,
-    ignore_case: bool = False,
-    pretty: bool = False,
-) -> List[Dict[str, Union[str, int]]]:
-    """Search all BASIC files on a disc for lines matching a text pattern.
 
-    Each BASIC file is detokenized and each line is scanned for the pattern.
-    Non-BASIC files are skipped. Results preserve disc order.
-
-    Args:
-        image_path: Path to a .ssd or .dsd disc image.
-        pattern:    Literal text to search for (not a regex).
-        filename:   If given, only search this file (e.g. 'T.MYPROG' or bare 'MYPROG').
-        ignore_case: Case-insensitive match when True.
-        pretty:     Apply pretty-printer spacing before matching.
-
-    Returns:
-        List of match dicts, each with keys:
-            'side'        -- int: disc side number
-            'filename'    -- str: DFS filename, e.g. 'T.MYPROG'
-            'line_number' -- int: BBC BASIC line number
-            'line'        -- str: full detokenized line text
-    """
-    # Import here to avoid making dfs.py depend on detokenize/pretty at load time.
-    from .detokenize import detokenize
-    from .pretty import prettyPrint
-
-    flags = re.IGNORECASE if ignore_case else 0
-    compiled = re.compile(re.escape(pattern), flags)
-
-    results = []
-
-    for disc in openDiscImage(image_path):
-        _title, entries = disc.readCatalogue()
-
-        for entry in entries:
-            full_name = f"{entry['dir']}.{entry['name']}"
-
-            # Scope to a specific file when requested.
-            if filename is not None:
-                if full_name != filename and entry["name"] != filename:
-                    continue
-
-            if not isBasic(entry):
-                continue
-
-            data = disc.readFile(entry)
-            if not looksLikeText(data):
-                continue
-
-            lines = detokenize(data)
-            if pretty:
-                lines = prettyPrint(lines)
-
-            for line in lines:
-                # Lines are formatted as a 5-char right-justified number + content.
-                # Search the content part only, not the leading line number.
-                content = line[5:]
-                if compiled.search(content):
-                    results.append({
-                        "side": disc.side,
-                        "filename": full_name,
-                        "line_number": int(line[:5]),
-                        "line": line,
-                    })
-
-    return results

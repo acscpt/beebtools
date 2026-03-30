@@ -8,6 +8,7 @@ Implements the 'cat' and 'extract' subcommands and the main() entry point.
 
 import argparse
 import os
+import re
 import sys
 from argparse import Namespace
 from typing import Optional
@@ -15,6 +16,7 @@ from typing import Optional
 from .detokenize import detokenize
 from .pretty import prettyPrint
 from .dfs import isBasic, looksLikeText, looksLikePlainText, openDiscImage, sortCatalogueEntries
+from .disc import search, extractAll
 
 
 # ---------------------------------------------------------------------------
@@ -94,18 +96,21 @@ def cmdSearch(args: Namespace) -> None:
     Args:
         args: Parsed argparse namespace for the 'search' subcommand.
     """
-    from .dfs import searchDisc
-
     # Enable colour only when writing to a real terminal.
     use_colour = sys.stdout.isatty()
 
-    matches = searchDisc(
-        args.image,
-        args.pattern,
-        filename=args.filename,
-        ignore_case=args.ignore_case,
-        pretty=args.pretty,
-    )
+    try:
+        matches = search(
+            args.image,
+            args.pattern,
+            filename=args.filename,
+            ignore_case=args.ignore_case,
+            pretty=args.pretty,
+            use_regex=args.regex,
+        )
+    except re.error as e:
+        print(f"Invalid regex pattern: {e}", file=sys.stderr)
+        sys.exit(1)
 
     if not matches:
         return
@@ -123,149 +128,6 @@ def cmdSearch(args: Namespace) -> None:
         print(f"  {linenum}{content}")
 
 
-# Characters that are illegal in Windows filenames.
-_WINDOWS_ILLEGAL = set('\\/:*?"<>|')
-
-
-def _sanitizeDfsName(dfs_dir: str, dfs_name: str) -> str:
-    """Build a safe output filename stem from a DFS directory and name.
-
-    The DFS separator '.' is replaced with '_'. Any character that is
-    illegal in a Windows filename is replaced with _xNN_ (its ASCII hex
-    value) to guarantee uniqueness - two distinct illegal source characters
-    will never produce the same output. Control characters are dropped.
-
-    Examples:
-        '$', 'BOOT'   -> '$_BOOT'
-        'T', 'MYPROG' -> 'T_MYPROG'
-        'T', 'A/B'    -> 'T_A_x2F_B'  (slash encoded)
-        'T', 'A\\B'   -> 'T_A_x5C_B'  (backslash encoded, distinct)
-
-    Args:
-        dfs_dir:  Single-character DFS directory prefix (e.g. 'T', '$').
-        dfs_name: DFS filename, up to 7 characters (e.g. 'MYPROG').
-
-    Returns:
-        Safe filename stem with no extension (e.g. 'T_MYPROG').
-    """
-    parts = []
-    for ch in f"{dfs_dir}_{dfs_name}":
-        if ord(ch) < 0x20:
-            # Drop control characters.
-            continue
-        if ch in _WINDOWS_ILLEGAL:
-            # Encode as _xNN_ so each illegal char maps to a unique string.
-            parts.append(f"_x{ord(ch):02X}_")
-        else:
-            parts.append(ch)
-    return "".join(parts)
-
-
-def _resolveOutputPath(
-    out_dir: str,
-    disc_side: int,
-    base: str,
-    multi_side: bool,
-    sides_mode: Optional[str],
-) -> str:
-    """Resolve the output path for one file during bulk extraction.
-
-    When the disc has only one side, sides_mode is ignored and the file is
-    written directly into out_dir.
-
-    When the disc has two sides:
-    - sides_mode 'subdir' or None (default): write into out_dir/side0/ or out_dir/side1/
-    - sides_mode 'prefix'                  : write into out_dir with side0_ or side1_ prefix
-
-    Args:
-        out_dir:    Root output directory.
-        disc_side:  Side number (0 or 1) for this file.
-        base:       Sanitized filename stem (e.g. T_MYPROG).
-        multi_side: True when the image has more than one side.
-        sides_mode: 'subdir', 'prefix', or None.
-
-    Returns:
-        Path string to write the file to (extension not included).
-    """
-    if not multi_side:
-        return os.path.join(out_dir, base)
-
-    if sides_mode == "prefix":
-        return os.path.join(out_dir, f"side{disc_side}_{base}")
-
-    # Default for double-sided: subdir mode.
-    side_dir = os.path.join(out_dir, f"side{disc_side}")
-    os.makedirs(side_dir, exist_ok=True)
-    return os.path.join(side_dir, base)
-
-
-def _extractAll(args: Namespace) -> None:
-    """Extract every file from a disc image into a directory.
-
-    BASIC programs are saved as .bas plain text files.
-    Binary files are saved as .bin raw bytes.
-
-    On double-sided images, files are always separated by side. The --sides
-    flag controls the layout:
-    - subdir (default): files go into side0/ and side1/ subdirectories
-    - prefix          : files are prefixed with side0_ or side1_ in a flat layout
-
-    Args:
-        args: Parsed argparse namespace for the 'extract' subcommand.
-    """
-    sides = openDiscImage(args.image)
-
-    # Default output directory is the image filename stem (disc39 for disc39.dsd).
-    if args.dir:
-        out_dir = args.dir
-    else:
-        out_dir = os.path.splitext(os.path.basename(args.image))[0]
-
-    os.makedirs(out_dir, exist_ok=True)
-
-    multi_side = len(sides) > 1
-    sides_mode = getattr(args, "sides", None)
-
-    for disc in sides:
-        _title, entries = disc.readCatalogue()
-
-        for entry in entries:
-            base = _sanitizeDfsName(entry['dir'], entry['name'])
-            stem = _resolveOutputPath(out_dir, disc.side, base, multi_side, sides_mode)
-            data = disc.readFile(entry)
-
-            if isBasic(entry) and looksLikeText(data):
-                # Detokenize BASIC and write as plain text.
-                out_path = stem + ".bas"
-                text_lines = detokenize(data)
-                if args.pretty:
-                    text_lines = prettyPrint(text_lines)
-                with open(out_path, "w", encoding="ascii", errors="replace") as f:
-                    f.write("\n".join(text_lines) + "\n")
-                print(f"  BASIC   {out_path}")
-
-            elif looksLikePlainText(data):
-                # Plain ASCII text file - save as .txt.
-                # BBC text editors use CR (0x0D) only as a line terminator.
-                # Normalise to Unix LF so the output file is portable.
-                out_path = stem + ".txt"
-                text = data.decode("ascii", errors="replace")
-                text = text.replace("\r\n", "\n").replace("\r", "\n")
-                with open(out_path, "w", encoding="ascii", errors="replace") as f:
-                    f.write(text)
-                print(f"  text    {out_path}")
-
-            else:
-                # Write binary file and report addressing metadata.
-                out_path = stem + ".bin"
-                with open(out_path, "wb") as f:
-                    f.write(data)
-                print(
-                    f"  binary  {out_path}  "
-                    f"load=0x{entry['load']:06X}  "
-                    f"exec=0x{entry['exec']:06X}  "
-                    f"length={entry['length']} bytes"
-                )
 
 
 def cmdExtract(args: Namespace) -> None:
@@ -280,7 +142,24 @@ def cmdExtract(args: Namespace) -> None:
             print("Error: -o/--output cannot be used with -a/--all. Use -d/--dir instead.",
                   file=sys.stderr)
             sys.exit(1)
-        _extractAll(args)
+
+        # Resolve output directory - default to the image filename stem.
+        out_dir = args.dir or os.path.splitext(os.path.basename(args.image))[0]
+        sides_mode = getattr(args, "sides", None)
+
+        results = extractAll(args.image, out_dir, sides_mode=sides_mode, pretty=args.pretty)
+        for result in results:
+            if result["type"] == "BASIC":
+                print(f"  BASIC   {result['path']}")
+            elif result["type"] == "text":
+                print(f"  text    {result['path']}")
+            else:
+                print(
+                    f"  binary  {result['path']}  "
+                    f"load=0x{result['load']:06X}  "
+                    f"exec=0x{result['exec']:06X}  "
+                    f"length={result['length']} bytes"
+                )
         return
 
     if not args.filename:
@@ -426,6 +305,8 @@ def main() -> None:
                           help="Limit search to this file (e.g. T.MYPROG or MYPROG)")
     p_search.add_argument("-i", "--ignore-case", action="store_true",
                           help="Case-insensitive search")
+    p_search.add_argument("-r", "--regex", action="store_true",
+                          help="Treat pattern as a Python regular expression")
     p_search.add_argument("--pretty", action="store_true",
                           help="Match after applying pretty-printer spacing")
 

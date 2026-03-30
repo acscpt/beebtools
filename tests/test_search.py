@@ -10,7 +10,7 @@ from argparse import Namespace
 
 import pytest
 
-from beebtools import searchDisc
+from beebtools import search
 from beebtools.cli import cmdSearch
 
 
@@ -78,10 +78,10 @@ def _makeSsdImage(filename: str, file_data: bytes, directory: str = "$",
 
 
 # ---------------------------------------------------------------------------
-# searchDisc unit tests
+# search() unit tests
 # ---------------------------------------------------------------------------
 
-class TestSearchDisc:
+class TestSearch:
 
     def testFindsMatchInBasicFile(self, tmp_path):
         # Program has one PRINT line containing "HELLO".
@@ -93,7 +93,7 @@ class TestSearchDisc:
         with open(img, "wb") as f:
             f.write(_makeSsdImage("PROG", prog))
 
-        results = searchDisc(img, "HELLO")
+        results = search(img, "HELLO")
         assert len(results) == 1
         assert results[0]["filename"] == "$.PROG"
         assert results[0]["line_number"] == 10
@@ -105,7 +105,7 @@ class TestSearchDisc:
         with open(img, "wb") as f:
             f.write(_makeSsdImage("PROG", prog))
 
-        results = searchDisc(img, "GOODBYE")
+        results = search(img, "GOODBYE")
         assert results == []
 
     def testIgnoreCaseFlagOff(self, tmp_path):
@@ -115,7 +115,7 @@ class TestSearchDisc:
         with open(img, "wb") as f:
             f.write(_makeSsdImage("PROG", prog))
 
-        results = searchDisc(img, "hello", ignore_case=False)
+        results = search(img, "hello", ignore_case=False)
         assert results == []
 
     def testIgnoreCaseFlagOn(self, tmp_path):
@@ -125,7 +125,7 @@ class TestSearchDisc:
         with open(img, "wb") as f:
             f.write(_makeSsdImage("PROG", prog))
 
-        results = searchDisc(img, "hello", ignore_case=True)
+        results = search(img, "hello", ignore_case=True)
         assert len(results) == 1
 
     def testMultipleLinesMatched(self, tmp_path):
@@ -139,7 +139,7 @@ class TestSearchDisc:
         with open(img, "wb") as f:
             f.write(_makeSsdImage("PROG", prog))
 
-        results = searchDisc(img, "SCORE")
+        results = search(img, "SCORE")
         assert len(results) == 2
         assert results[0]["line_number"] == 10
         assert results[1]["line_number"] == 20
@@ -152,9 +152,9 @@ class TestSearchDisc:
             f.write(_makeSsdImage("PROG", prog))
 
         # Correct full name -> match found.
-        assert len(searchDisc(img, "HIT", filename="$.PROG")) == 1
+        assert len(search(img, "HIT", filename="$.PROG")) == 1
         # Wrong name -> no results.
-        assert searchDisc(img, "HIT", filename="$.OTHER") == []
+        assert search(img, "HIT", filename="$.OTHER") == []
 
     def testFilenameFilterBareName(self, tmp_path):
         # Bare name without directory prefix also scopes the search.
@@ -163,7 +163,7 @@ class TestSearchDisc:
         with open(img, "wb") as f:
             f.write(_makeSsdImage("PROG", prog))
 
-        assert len(searchDisc(img, "HIT", filename="PROG")) == 1
+        assert len(search(img, "HIT", filename="PROG")) == 1
 
     def testNonBasicFileSkipped(self, tmp_path):
         # A file with binary data (non-BASIC exec address) is not searched.
@@ -173,7 +173,7 @@ class TestSearchDisc:
             # exec_addr 0x0000 -> not a BASIC file
             f.write(_makeSsdImage("BIN", binary_data, exec_addr=0x0000))
 
-        results = searchDisc(img, "\xDE")
+        results = search(img, "\xDE")
         assert results == []
 
     def testResultKeysPresent(self, tmp_path):
@@ -183,7 +183,7 @@ class TestSearchDisc:
         with open(img, "wb") as f:
             f.write(_makeSsdImage("PROG", prog))
 
-        results = searchDisc(img, "KEY")
+        results = search(img, "KEY")
         assert len(results) == 1
         r = results[0]
         assert "side"        in r
@@ -210,6 +210,7 @@ class TestCmdSearch:
             filename=kwargs.get("filename", None),
             ignore_case=kwargs.get("ignore_case", False),
             pretty=kwargs.get("pretty", False),
+            regex=kwargs.get("regex", False),
         )
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -231,3 +232,47 @@ class TestCmdSearch:
         prog = _makeProgram((42, bytes([TOK_PRINT]) + b'"X"'))
         output = self._run(tmp_path, prog, '"X"')
         assert "42" in output
+
+
+# ---------------------------------------------------------------------------
+# search() regex tests
+# ---------------------------------------------------------------------------
+
+class TestSearchRegex:
+
+    def _img(self, tmp_path, prog: bytes) -> str:
+        img = str(tmp_path / "test.ssd")
+        with open(img, "wb") as f:
+            f.write(_makeSsdImage("PROG", prog))
+        return img
+
+    def testRegexMatchesPattern(self, tmp_path):
+        # GOTO followed by digits - regex only.
+        prog = _makeProgram(
+            (10, bytes([TOK_GOTO]) + b"100"),
+            (20, bytes([TOK_PRINT]) + b'"HELLO"'),
+        )
+        img = self._img(tmp_path, prog)
+        results = search(img, r"GOTO\s*\d+", use_regex=True)
+        assert len(results) == 1
+        assert results[0]["line_number"] == 10
+
+    def testLiteralDoesNotInterpretRegexChars(self, tmp_path):
+        # Without use_regex, "GOTO\d+" is a literal string, not a pattern.
+        prog = _makeProgram((10, bytes([TOK_GOTO]) + b"100"))
+        img = self._img(tmp_path, prog)
+        results = search(img, r"GOTO\d+", use_regex=False)
+        assert results == []
+
+    def testInvalidRegexRaisesReError(self, tmp_path):
+        prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"X"'))
+        img = self._img(tmp_path, prog)
+        import re
+        with pytest.raises(re.error):
+            search(img, "[unclosed", use_regex=True)
+
+    def testRegexWithIgnoreCase(self, tmp_path):
+        prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"SCORE"'))
+        img = self._img(tmp_path, prog)
+        results = search(img, "score", use_regex=True, ignore_case=True)
+        assert len(results) == 1
