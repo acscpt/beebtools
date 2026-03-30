@@ -1,14 +1,15 @@
 # beebtools
 
+[![PyPI](https://img.shields.io/pypi/v/beebtools.svg)](https://pypi.org/project/beebtools/)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Tests](https://github.com/acscpt/beebtools/actions/workflows/tests.yml/badge.svg)](https://github.com/acscpt/beebtools/actions/workflows/tests.yml)
 
 A Python tool for working with BBC Micro DFS disc images.
 
-`beebtools` can read disk catalogues, extract and detokenize BBC BASIC programs to
+`beebtools` can read disc catalogues, extract and detokenize BBC BASIC programs to
 a more human-readable (and text editor friendly) format, including a pretty-printer 
-that makes dense BBC Basic code more legible.
+that makes dense BBC BASIC code more legible.
 
 ## Disc images and the DFS catalogue
 
@@ -33,7 +34,7 @@ specific. Bulk extraction (`-a`) pulls every file off the disc at once.
 Most files you will want to look at on a BBC Micro disc are BBC BASIC programs.
 They are not stored as text. The BBC Micro's BASIC ROM tokenizes programs before
 saving them: keywords like `PRINT`, `GOTO`, and `FOR` are replaced with single
-bytes in the range 0x80-0xFF, GOTO and GOSUB targets are encoded as compact
+bytes in the range 0x80-0xFF, `GOTO` and `GOSUB` targets are encoded as compact
 3-byte line-number references, and the whole thing is written as a sequence of
 binary line records with no human-readable structure.
 
@@ -42,19 +43,19 @@ extracted as-is.
 
 For BASIC files, `beebtools` does three things in sequence:
 
-1. **Detokenize** - decode the binary line records back to LIST-style text,
+1. **Detokenize** - decode the binary line records back to `LIST`-style text,
    expanding keyword tokens, decoding line-number references, and handling
-   REM and DATA tails correctly (they are literal ASCII and must not be
+   `REM` and `DATA` tails correctly (they are literal ASCII and must not be
    expanded).
 
 2. **Pretty-print** (optional, `--pretty`) - add operator spacing to the
    raw detokenized text. BBC BASIC stores only the spaces the programmer
    explicitly typed, so code like `IFx>100THENx=0:y=0` is normal. The
    pretty-printer adds spaces around operators and punctuation while leaving
-   string literals, REM tails, and DATA tails completely untouched.
+   string literals, `REM` tails, and `DATA` tails completely untouched.
 
 3. **Anti-listing trap detection** - some 1980s software used `*|` followed
-   by VDU 21 (disable output) bytes as a copy-protection trick. Typing `LIST`
+   by `VDU 21` (disable output) bytes as a copy-protection trick. Typing `LIST`
    on the real machine would blank the screen after that line. `beebtools`
    converts `*|` statements to `REM *|` and strips the control characters,
    so the program is readable.
@@ -67,7 +68,7 @@ For BASIC files, `beebtools` does three things in sequence:
 
 - Bulk-extract everything from a disc image at once
 
-- Detokenize BBC BASIC II programs to LIST-style plain text
+- Detokenize BBC BASIC II programs to `LIST`-style plain text
 
 - Pretty-printer: add operator spacing to make terse BASIC readable
 
@@ -141,7 +142,7 @@ Specifically, the pretty-printer adds:
 
 - correct unary minus context: `(-x)` and `SOUND 1,-15,s,5` stay unary
 
-- string literals, REM tails, and DATA tails are never touched
+- string literals, `REM` tails, and `DATA` tails are never touched
 
 - star commands (`*COMMAND`) are passed through verbatim
 
@@ -151,8 +152,8 @@ operators and punctuation, which is where the density tends to be worst.
 
 ### Anti-listing traps
 
-A common anti snoop-protection trick was to follow a `*|` MOS comment with
-`CHR$(21)` (VDU 21, disable output) bytes. When you typed `LIST`, the screen
+A common copy-protection trick was to follow a `*|` MOS comment with
+`CHR$(21)` (`VDU 21`, disable output) bytes. When you typed `LIST`, the screen
 would go blank after that line. The program was still there - you just couldn't
 see it.
 
@@ -169,7 +170,7 @@ preserved.
 
 ### Command Line
 
-`beebtools`, once installed in a pyhon enabled environment, can be used from the
+`beebtools`, once installed in a Python enabled environment, can be used from the
 command line.
 
 #### `cat`
@@ -245,7 +246,7 @@ Extracts every file from the disc.
 
 - BASIC programs are saved as `.bas` text files
 
-- binaries are saves as `.bin` raw files.
+- binaries are saved as `.bin` raw files.
 
 The output directory defaults to the disc image filename stem (`bbc_d1/` for `bbc_d1.dsd`).
 
