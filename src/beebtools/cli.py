@@ -256,7 +256,11 @@ def cmdExtract(args: Namespace) -> None:
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="BBC Micro DFS disc image tool",
+        description=(
+            "BBC Micro DFS disc image tool. "
+            "Read catalogues, extract files, and detokenize BBC BASIC programs "
+            "from .ssd and .dsd disc images."
+        ),
     )
     sub = parser.add_subparsers(dest="command")
 
