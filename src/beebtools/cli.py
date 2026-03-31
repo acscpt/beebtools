@@ -3,7 +3,8 @@
 
 """CLI commands for beebtools.
 
-Implements the 'cat' and 'extract' subcommands and the main() entry point.
+Implements the 'cat', 'extract', 'search', 'create', 'add', 'delete',
+and 'build' subcommands and the main() entry point.
 """
 
 import argparse
@@ -15,8 +16,17 @@ from typing import Optional
 
 from .detokenize import detokenize
 from .pretty import prettyPrint
-from .dfs import isBasic, looksLikeText, looksLikePlainText, openDiscImage, sortCatalogueEntries
-from .disc import search, extractAll
+from .dfs import (
+    DFSError,
+    BootOption,
+    createDiscImage,
+    looksLikeTokenizedBasic,
+    looksLikePlainText,
+    openDiscImage,
+    sortCatalogueEntries,
+)
+from .inf import parseInf
+from .disc import search, extractAll, buildImage
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +39,14 @@ _YELLOW  = "\x1b[33m"
 _RED     = "\x1b[31m"
 _GREY    = "\x1b[90m"
 _RESET   = "\x1b[0m"
+
+
+def _parseBootOption(value: str) -> BootOption:
+    """Argparse type wrapper around BootOption.parse()."""
+    try:
+        return BootOption.parse(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
 
 
 def _colour(text: str, code: str, enabled: bool) -> str:
@@ -49,39 +67,39 @@ def cmdCat(args: Namespace) -> None:
 
     sides = openDiscImage(args.image)
 
-    for disc in sides:
-        title, entries = disc.readCatalogue()
+    for disc in sides.sides:
+        catalogue = disc.readCatalogue()
         side_label = f"Side {disc.side}"
         header = f"--- {side_label}"
 
-        if title:
-            header += f": {title}"
+        if catalogue.title:
+            header += f": {catalogue.title}"
 
-        header += f" ({len(entries)} files) ---"
+        boot_desc = catalogue.boot_option.name
+        header += f" ({len(catalogue.entries)} files, boot={boot_desc}) ---"
         print(_colour(header, _BOLD, use_colour))
         print()
 
-        if not entries:
+        if not catalogue.entries:
             print("  (empty)")
         else:
-            orderedEntries = sortCatalogueEntries(entries, args.sort)
+            orderedEntries = sortCatalogueEntries(catalogue.entries, args.sort)
             print(f"  {'Name':<12s} {'Load':>8s} {'Exec':>8s} {'Length':>8s}  {'Type'}")
 
             for e in orderedEntries:
-                if isBasic(e):
+                if e.isBasic:
                     ftype = _colour("BASIC", _CYAN, use_colour)
                 elif args.inspect and looksLikePlainText(disc.readFile(e)):
                     ftype = _colour("TEXT", _YELLOW, use_colour)
                 else:
                     ftype = ""
-                lock_char = "L" if e["locked"] else " "
-                lock = _colour(lock_char, _RED, use_colour and e["locked"])
-                full_name = f"{e['dir']}.{e['name']}"
-                load   = _colour(f"{e['load']:08X}",   _GREY, use_colour)
-                exec_  = _colour(f"{e['exec']:08X}",   _GREY, use_colour)
-                length = _colour(f"{e['length']:08X}", _GREY, use_colour)
+                lock_char = "L" if e.locked else " "
+                lock = _colour(lock_char, _RED, use_colour and e.locked)
+                load   = _colour(f"{e.load_addr:08X}",   _GREY, use_colour)
+                exec_  = _colour(f"{e.exec_addr:08X}",   _GREY, use_colour)
+                length = _colour(f"{e.length:08X}", _GREY, use_colour)
                 print(
-                    f"  {lock}{full_name:<11s} "
+                    f"  {lock}{e.fullName:<11s} "
                     f"{load} "
                     f"{exec_} "
                     f"{length}  "
@@ -145,9 +163,8 @@ def cmdExtract(args: Namespace) -> None:
 
         # Resolve output directory - default to the image filename stem.
         out_dir = args.dir or os.path.splitext(os.path.basename(args.image))[0]
-        sides_mode = getattr(args, "sides", None)
 
-        results = extractAll(args.image, out_dir, sides_mode=sides_mode, pretty=args.pretty)
+        results = extractAll(args.image, out_dir, pretty=args.pretty, write_inf=args.inf)
         for result in results:
             if result["type"] == "BASIC":
                 print(f"  BASIC   {result['path']}")
@@ -175,11 +192,11 @@ def cmdExtract(args: Namespace) -> None:
         target_dir = target[0].upper()
         target_name = target[2:]
 
-        for disc in sides:
-            _title, entries = disc.readCatalogue()
-            for e in entries:
-                if (e["dir"].upper() == target_dir
-                        and e["name"].upper() == target_name.upper()):
+        for disc in sides.sides:
+            catalogue = disc.readCatalogue()
+            for e in catalogue.entries:
+                if (e.directory.upper() == target_dir
+                        and e.name.upper() == target_name.upper()):
                     found = (disc, e)
                     break
             if found:
@@ -190,10 +207,10 @@ def cmdExtract(args: Namespace) -> None:
         target_name = target
         matches = []
 
-        for disc in sides:
-            _title, entries = disc.readCatalogue()
-            for e in entries:
-                if e["name"].upper() == target_name.upper():
+        for disc in sides.sides:
+            catalogue = disc.readCatalogue()
+            for e in catalogue.entries:
+                if e.name.upper() == target_name.upper():
                     matches.append((disc, e))
 
         if len(matches) == 1:
@@ -204,7 +221,7 @@ def cmdExtract(args: Namespace) -> None:
                 file=sys.stderr,
             )
             for disc, entry in matches:
-                print(f"  Side {disc.side}: {entry['dir']}.{entry['name']}",
+                print(f"  Side {disc.side}: {entry.fullName}",
                       file=sys.stderr)
             sys.exit(1)
 
@@ -214,9 +231,8 @@ def cmdExtract(args: Namespace) -> None:
 
     disc, entry = found
     data = disc.readFile(entry)
-    full_name = f"{entry['dir']}.{entry['name']}"
 
-    if isBasic(entry) and looksLikeText(data):
+    if entry.isBasic and looksLikeTokenizedBasic(data):
         # Detokenize and emit as LIST-style text.
         text_lines = detokenize(data)
         if args.pretty:
@@ -237,14 +253,162 @@ def cmdExtract(args: Namespace) -> None:
                 f.write(data)
             print(f"Extracted to {args.output}")
             print(
-                f"{full_name}  "
-                f"load=0x{entry['load']:06X}  "
-                f"exec=0x{entry['exec']:06X}  "
-                f"length={entry['length']} bytes"
+                f"{entry.fullName}  "
+                f"load=0x{entry.load_addr:06X}  "
+                f"exec=0x{entry.exec_addr:06X}  "
+                f"length={entry.length} bytes"
             )
         else:
             # Raw bytes to stdout for piping to a disassembler.
             sys.stdout.buffer.write(data)
+
+
+def cmdCreate(args: Namespace) -> None:
+    """Create a blank formatted DFS disc image.
+
+    Args:
+        args: Parsed argparse namespace for the 'create' subcommand.
+    """
+    is_dsd = args.output.lower().endswith(".dsd")
+
+    image = createDiscImage(
+        tracks=args.tracks,
+        is_dsd=is_dsd,
+        title=args.title or "",
+        boot_option=args.boot,
+    )
+
+    with open(args.output, "wb") as f:
+        f.write(image.serialize())
+
+    fmt = "DSD" if is_dsd else "SSD"
+    print(f"Created {args.tracks}-track {fmt}: {args.output}")
+
+
+def cmdAdd(args: Namespace) -> None:
+    """Add a file to an existing disc image.
+
+    Args:
+        args: Parsed argparse namespace for the 'add' subcommand.
+    """
+    image = openDiscImage(args.image)
+    side = image.sides[args.side]
+
+    if args.inf:
+        # Read metadata from a .inf sidecar file.
+        inf_path = args.file + ".inf"
+
+        if not os.path.isfile(inf_path):
+            print(f"Error: .inf sidecar not found: {inf_path}", file=sys.stderr)
+            sys.exit(1)
+
+        with open(inf_path, "r", encoding="ascii") as f:
+            inf_line = f.readline().strip()
+
+        inf = parseInf(inf_line)
+        directory = inf.directory
+        name = inf.name
+        load_addr = inf.load_addr
+        exec_addr = inf.exec_addr
+        locked = inf.locked
+    else:
+        # Metadata from command-line arguments.
+        dfs_name = args.name
+
+        if not dfs_name:
+            print("Error: --name is required (or use --inf).", file=sys.stderr)
+            sys.exit(1)
+
+        if len(dfs_name) >= 3 and dfs_name[1] == ".":
+            directory = dfs_name[0]
+            name = dfs_name[2:]
+        else:
+            directory = "$"
+            name = dfs_name
+
+        load_addr = int(args.load, 16) if args.load else 0
+        exec_addr = int(args.exec_addr, 16) if args.exec_addr else 0
+        locked = args.locked
+
+    with open(args.file, "rb") as f:
+        data = f.read()
+
+    try:
+        entry = side.addFile(
+            name=name,
+            directory=directory,
+            data=data,
+            load_addr=load_addr,
+            exec_addr=exec_addr,
+            locked=locked,
+        )
+    except DFSError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Write the modified image back to the file.
+    with open(args.image, "wb") as f:
+        f.write(image.serialize())
+
+    print(f"Added {entry.fullName} ({len(data)} bytes) to {args.image}")
+
+
+def cmdDelete(args: Namespace) -> None:
+    """Delete a file from a disc image.
+
+    Args:
+        args: Parsed argparse namespace for the 'delete' subcommand.
+    """
+    image = openDiscImage(args.image)
+    side = image.sides[args.side]
+
+    dfs_name = args.filename
+
+    if len(dfs_name) >= 3 and dfs_name[1] == ".":
+        directory = dfs_name[0]
+        name = dfs_name[2:]
+    else:
+        directory = "$"
+        name = dfs_name
+
+    try:
+        entry = side.deleteFile(name, directory)
+    except DFSError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Write the modified image back to the file.
+    with open(args.image, "wb") as f:
+        f.write(image.serialize())
+
+    print(f"Deleted {entry.fullName} from {args.image}")
+
+
+def cmdBuild(args: Namespace) -> None:
+    """Build a disc image from a directory of files with .inf sidecars.
+
+    Args:
+        args: Parsed argparse namespace for the 'build' subcommand.
+    """
+    is_dsd = args.output.lower().endswith(".dsd")
+
+    try:
+        image_bytes = buildImage(
+            source_dir=args.dir,
+            tracks=args.tracks,
+            is_dsd=is_dsd,
+            title=args.title or "",
+            boot_option=args.boot,
+        )
+    except DFSError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(args.output, "wb") as f:
+        f.write(image_bytes)
+
+    fmt = "DSD" if is_dsd else "SSD"
+    print(f"Built {args.tracks}-track {fmt}: {args.output}")
 
 
 def main() -> None:
@@ -252,7 +416,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "BBC Micro DFS disc image tool. "
-            "Read catalogues, extract files, and detokenize BBC BASIC programs "
+            "Read catalogues, extract files, detokenize BBC BASIC programs, "
+            "and create, modify, and build disc images "
             "from .ssd and .dsd disc images."
         ),
         epilog="Use 'beebtools <command> -h' for detailed help on each command.",
@@ -285,18 +450,8 @@ def main() -> None:
                            help="Output directory for -a/--all (default: image name)")
     p_extract.add_argument("--pretty", action="store_true",
                            help="Add operator spacing to BASIC output")
-    p_extract.add_argument(
-        "-s", "--sides",
-        choices=["subdir", "prefix"],
-        default=None,
-        help=(
-            "How to separate files from each side of a double-sided disc "
-            "when using -a/--all. "
-            "'subdir' (default for double-sided discs) writes into side0/ and side1/ "
-            "subdirectories; "
-            "'prefix' prepends side0_ or side1_ to each filename in a flat layout."
-        ),
-    )
+    p_extract.add_argument("--inf", action="store_true",
+                           help="Write .inf sidecar files with -a/--all")
 
     p_search = sub.add_parser("search", help="Search BASIC source for a text pattern")
     p_search.add_argument("image", help="Path to .ssd or .dsd disc image")
@@ -310,6 +465,52 @@ def main() -> None:
     p_search.add_argument("--pretty", action="store_true",
                           help="Match after applying pretty-printer spacing")
 
+    # -- create subcommand --
+    p_create = sub.add_parser("create", help="Create a blank disc image")
+    p_create.add_argument("output", help="Output path (.ssd or .dsd)")
+    p_create.add_argument("-t", "--tracks", type=int, default=80,
+                          choices=[40, 80], help="Track count (default: 80)")
+    p_create.add_argument("--title", help="Disc title (up to 12 characters)")
+    p_create.add_argument("--boot", type=_parseBootOption,
+                          default=BootOption.OFF,
+                          help="Boot option: OFF, LOAD, RUN, EXEC (or 0-3)")
+
+    # -- add subcommand --
+    p_add = sub.add_parser("add", help="Add a file to a disc image")
+    p_add.add_argument("image", help="Path to .ssd or .dsd disc image")
+    p_add.add_argument("file", help="Path to data file to add")
+    p_add.add_argument("-n", "--name",
+                       help="DFS name (e.g. T.MYPROG or MYPROG for $)")
+    p_add.add_argument("--load", help="Load address in hex (default: 0)")
+    p_add.add_argument("--exec", dest="exec_addr",
+                       help="Exec address in hex (default: 0)")
+    p_add.add_argument("--locked", action="store_true",
+                       help="Lock the file against deletion")
+    p_add.add_argument("--inf", action="store_true",
+                       help="Read metadata from a .inf sidecar file")
+    p_add.add_argument("--side", type=int, default=0,
+                       choices=[0, 1], help="Disc side (default: 0)")
+
+    # -- delete subcommand --
+    p_delete = sub.add_parser("delete", help="Delete a file from a disc image")
+    p_delete.add_argument("image", help="Path to .ssd or .dsd disc image")
+    p_delete.add_argument("filename",
+                          help="DFS filename to delete (e.g. T.MYPROG)")
+    p_delete.add_argument("--side", type=int, default=0,
+                          choices=[0, 1], help="Disc side (default: 0)")
+
+    # -- build subcommand --
+    p_build = sub.add_parser(
+        "build", help="Build a disc image from files with .inf sidecars")
+    p_build.add_argument("dir", help="Source directory with DFS dir subdirectories")
+    p_build.add_argument("output", help="Output path (.ssd or .dsd)")
+    p_build.add_argument("-t", "--tracks", type=int, default=80,
+                         choices=[40, 80], help="Track count (default: 80)")
+    p_build.add_argument("--title", help="Disc title (up to 12 characters)")
+    p_build.add_argument("--boot", type=_parseBootOption,
+                         default=BootOption.OFF,
+                         help="Boot option: OFF, LOAD, RUN, EXEC (or 0-3)")
+
     args = parser.parse_args()
 
     if args.command == "cat":
@@ -318,5 +519,13 @@ def main() -> None:
         cmdExtract(args)
     elif args.command == "search":
         cmdSearch(args)
+    elif args.command == "create":
+        cmdCreate(args)
+    elif args.command == "add":
+        cmdAdd(args)
+    elif args.command == "delete":
+        cmdDelete(args)
+    elif args.command == "build":
+        cmdBuild(args)
     else:
         parser.print_help()

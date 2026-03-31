@@ -5,7 +5,61 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-03-31
+
+### Added
+
+- `beebtools create` command: create blank SSD/DSD disc images with configurable
+  track count (40/80), disc title, and boot option.
+
+- `BootOption` enum (`OFF`, `LOAD`, `RUN`, `EXEC`) replaces the plain
+  `BOOT_OPTIONS` dict. `BootOption.parse()` accepts names (case-insensitive)
+  or numbers 0-3. The `--boot` CLI flag now accepts names like `--boot RUN`.
+
+- `beebtools add` command: add files to existing disc images with metadata from
+  command-line flags (`--name`, `--load`, `--exec`, `--locked`) or from a `.inf`
+  sidecar file (`--inf`).
+
+- `beebtools delete` command: remove files from disc images by DFS name.
+
+- `beebtools build` command: assemble a disc image from a directory tree of files
+  with `.inf` sidecars, enabling a full extract-edit-rebuild workflow.
+
+- `--inf` flag for `beebtools extract -a`: writes `.inf` sidecar files alongside
+  extracted data files, preserving DFS load/exec addresses, length, and lock flag.
+
+- `buildImage()` library function for programmatic disc image assembly.
+
+- `.inf` sidecar format module (`inf.py`) with `parseInf()` and `formatInf()`
+  for the standard BBC Micro community interchange format. Parses
+  `DIR.NAME LLLLLL EEEEEE SSSSSS [L] [CRC=XXXX]` lines, handles 6-digit and
+  8-digit hex, bare filenames (default to `$`), optional lock flag and CRC.
+
+- DFS name validation function `validateDfsName()` - checks directory character
+  and filename against DFS naming rules before writing to disc.
+
+- File operations on disc images: `addFile()`, `deleteFile()`, `compact()`,
+  and `freeSpace()` on `DFSSide` for programmatic disc image manipulation.
+
+### Changed
+
+- Extracted files now use a hierarchical directory layout with the DFS directory
+  character as a real subdirectory. Single-sided: `out/$/BOOT.bas`,
+  `out/T/MYPROG.bas`. Double-sided: `out/side0/$/BOOT.bas`,
+  `out/side1/T/GAME.bas`.
+
+### Changed
+
+- Documentation restructured: README trimmed to a lean overview with detailed
+  per-command reference pages, library guide, and pretty-printer docs under
+  `docs/`.
+
+### Removed
+
+- `--sides` (`-s`) flag for `beebtools extract -a`. The flat prefix layout has
+  been removed in favour of the hierarchical directory layout.
+
+- `BOOT_OPTIONS` dict removed. Use `BootOption` enum instead.
 
 ---
 
@@ -21,10 +75,6 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `searchDisc(image_path, pattern, filename, ignore_case, pretty)` library
   function: returns a list of match dicts with keys `side`, `filename`,
   `line_number`, and `line`.
-
-- `--sides` flag (`-s`) for `beebtools extract -a` on double-sided `.dsd` images.
-  `subdir` mode (default) writes files into `side0/` and `side1/` subdirectories;
-  `prefix` mode prepends `side0_` or `side1_` for a flat output layout.
 
 - `looksLikePlainText()` library function: returns True when all bytes in a file
   are printable ASCII or common whitespace (tab, CR, LF).
@@ -50,6 +100,8 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - DFS filenames are sanitized in bulk extraction output: the `.` directory
   separator is replaced with `_` (e.g. `T.MYPROG` becomes `T_MYPROG`), and
   Windows-illegal characters are encoded as `_xNN_` to guarantee uniqueness.
+  (Note: this flat layout was later replaced by hierarchical directories in
+  a subsequent release.)
 
 ## [0.1.1] - 2026-03-30
 

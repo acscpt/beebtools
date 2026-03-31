@@ -20,45 +20,89 @@ copy-protection anti-listing traps.
 Usage as a library:
     from beebtools import openDiscImage, detokenize, prettyPrint
 
-    sides = openDiscImage("mydisc.dsd")
-    for disc in sides:
-        title, entries = disc.readCatalogue()
-        for entry in entries:
-            data = disc.readFile(entry)
+    image = openDiscImage("mydisc.dsd")
+    for side in image.sides:
+        catalogue = side.readCatalogue()
+        for entry in catalogue.entries:
+            data = side.readFile(entry)
             lines = detokenize(data)
             print("\\n".join(prettyPrint(lines)))
 
 Usage as a CLI tool:
-    beebtools cat  <image>
-    beebtools extract <image> <filename> [-o FILE]
-    beebtools extract <image> -a [-d DIR] [--pretty]
+    beebtools cat     <image>
+    beebtools search  <image> <pattern> [-i] [--pretty]
+    beebtools extract <image> <filename> [-o FILE] [--pretty]
+    beebtools extract <image> -a [-d DIR] [--pretty] [--inf]
+    beebtools create  <image> [--title TITLE] [--boot OPTION]
+    beebtools add     <image> <file> [--name N] [--load L] [--exec E]
+    beebtools delete  <image> <filename>
+    beebtools build   <dir> <image> [--title TITLE] [--boot OPTION]
 
 Modules:
     tokens        -- BBC BASIC II token table and constants
     detokenize    -- tokenized binary to LIST-style text
     pretty        -- operator spacing and anti-listing trap handling
-    dfs           -- DFS disc image reader (.ssd and .dsd)
+    dfs           -- DFS disc image reader and writer (.ssd and .dsd)
+    inf           -- .inf sidecar file parser and formatter
+    disc          -- high-level disc operations (extract, search, build)
     cli           -- command-line interface
 """
 
 from .detokenize import detokenize, decodeLineRef
 from .pretty import prettyPrint
-from .dfs import isBasic, looksLikeText, looksLikePlainText, openDiscImage, DFSDisc, sortCatalogueEntries
-from .disc import search, extractAll
+from .dfs import (
+    DFSEntry,
+    DFSCatalogue,
+    DFSImage,
+    DFSSide,
+    DFSError,
+    DFSFormatError,
+    BootOption,
+    openDiscImage,
+    createDiscImage,
+    looksLikeTokenizedBasic,
+    looksLikePlainText,
+    sortCatalogueEntries,
+    validateDfsName,
+    # Backward-compatibility aliases
+    isBasic,
+    looksLikeText,
+    DFSDisc,
+)
+from .inf import InfData, parseInf, formatInf
+from .disc import search, extractAll, buildImage
 from .cli import main
 
 __all__ = [
     "detokenize",
     "decodeLineRef",
     "prettyPrint",
+    # New DFS types
+    "DFSEntry",
+    "DFSCatalogue",
+    "DFSImage",
+    "DFSSide",
+    "DFSError",
+    "DFSFormatError",
+    "BootOption",
+    "openDiscImage",
+    "createDiscImage",
+    "looksLikeTokenizedBasic",
+    "looksLikePlainText",
+    "sortCatalogueEntries",
+    "validateDfsName",
+    # Backward-compatibility aliases
     "isBasic",
     "looksLikeText",
-    "looksLikePlainText",
-    "openDiscImage",
     "DFSDisc",
-    "sortCatalogueEntries",
+    # .inf sidecar format
+    "InfData",
+    "parseInf",
+    "formatInf",
+    # Orchestration
     "search",
     "extractAll",
+    "buildImage",
     "main",
 ]
 

@@ -20,8 +20,16 @@ import os
 import re
 from typing import Dict, List, Optional, Union
 
-from .dfs import isBasic, looksLikeText, looksLikePlainText, openDiscImage
+from .dfs import (
+    BootOption,
+    DFSError,
+    createDiscImage,
+    looksLikeTokenizedBasic,
+    looksLikePlainText,
+    openDiscImage,
+)
 from .detokenize import detokenize
+from .inf import formatInf, parseInf
 from .pretty import prettyPrint
 
 
@@ -30,29 +38,15 @@ from .pretty import prettyPrint
 _WINDOWS_ILLEGAL = set('\\/:*?"<>|')
 
 
-def sanitizeDfsName(dfs_dir: str, dfs_name: str) -> str:
-    """Build a safe output filename stem from a DFS directory and name.
+def _sanitizeForFilesystem(raw: str) -> str:
+    """Sanitize a raw string for use as a filesystem path component.
 
-    The DFS separator '.' is replaced with '_'. Any character that is
-    illegal in a Windows filename is replaced with _xNN_ (its ASCII hex
-    value) to guarantee uniqueness - two distinct illegal source characters
-    will never produce the same output. Control characters are dropped.
-
-    Examples:
-        '$', 'BOOT'   -> '$_BOOT'
-        'T', 'MYPROG' -> 'T_MYPROG'
-        'T', 'A/B'    -> 'T_A_x2F_B'  (slash encoded)
-        'T', 'A\\B'   -> 'T_A_x5C_B'  (backslash encoded, distinct)
-
-    Args:
-        dfs_dir:  Single-character DFS directory prefix (e.g. 'T', '$').
-        dfs_name: DFS filename, up to 7 characters (e.g. 'MYPROG').
-
-    Returns:
-        Safe filename stem with no extension (e.g. 'T_MYPROG').
+    Characters illegal on Windows are replaced with _xNN_ hex encoding
+    to guarantee uniqueness - two distinct illegal source characters will
+    never produce the same output. Control characters are dropped.
     """
     parts = []
-    for ch in f"{dfs_dir}_{dfs_name}":
+    for ch in raw:
         if ord(ch) < 0x20:
             # Drop control characters.
             continue
@@ -64,42 +58,80 @@ def sanitizeDfsName(dfs_dir: str, dfs_name: str) -> str:
     return "".join(parts)
 
 
+def sanitizeDfsDir(dfs_dir: str) -> str:
+    """Sanitize a DFS directory character for use as a filesystem directory.
+
+    Most DFS directory characters ('$', 'T', etc.) are safe on all
+    platforms and pass through unchanged. Characters illegal on Windows
+    are replaced with _xNN_ hex encoding.
+
+    Examples:
+        '$'  -> '$'
+        'T'  -> 'T'
+        '/'  -> '_x2F_'
+
+    Args:
+        dfs_dir: Single-character DFS directory prefix (e.g. 'T', '$').
+
+    Returns:
+        Safe directory name.
+    """
+    return _sanitizeForFilesystem(dfs_dir)
+
+
+def sanitizeDfsFilename(dfs_name: str) -> str:
+    """Sanitize a DFS filename for use as a filesystem filename.
+
+    Characters illegal on Windows are replaced with _xNN_ hex encoding.
+    Control characters are dropped.
+
+    Examples:
+        'MYPROG' -> 'MYPROG'
+        'A/B'    -> 'A_x2F_B'  (slash encoded)
+        'A\\B'   -> 'A_x5C_B'  (backslash encoded, distinct)
+
+    Args:
+        dfs_name: DFS filename, up to 7 characters (e.g. 'MYPROG').
+
+    Returns:
+        Safe filename with no extension.
+    """
+    return _sanitizeForFilesystem(dfs_name)
+
+
 def resolveOutputPath(
     out_dir: str,
     disc_side: int,
-    base: str,
+    safe_dir: str,
+    safe_name: str,
     multi_side: bool,
-    sides_mode: Optional[str],
 ) -> str:
     """Resolve the output path for one file during bulk extraction.
 
-    When the disc has only one side, sides_mode is ignored and the file is
-    written directly into out_dir.
+    Builds a hierarchical path using the DFS directory character as a
+    real filesystem subdirectory:
+        - Single-sided: out_dir/dir/filename
+        - Double-sided: out_dir/sideN/dir/filename
 
-    When the disc has two sides:
-    - sides_mode 'subdir' or None (default): write into out_dir/side0/ or out_dir/side1/
-    - sides_mode 'prefix'                  : write into out_dir with side0_ or side1_ prefix
+    All intermediate directories are created automatically.
 
     Args:
         out_dir:    Root output directory.
         disc_side:  Side number (0 or 1) for this file.
-        base:       Sanitized filename stem (e.g. T_MYPROG).
+        safe_dir:   Sanitized DFS directory (e.g. '$', 'T').
+        safe_name:  Sanitized DFS filename (e.g. 'MYPROG').
         multi_side: True when the image has more than one side.
-        sides_mode: 'subdir', 'prefix', or None.
 
     Returns:
         Path string to write the file to (extension not included).
     """
-    if not multi_side:
-        return os.path.join(out_dir, base)
+    if multi_side:
+        dir_path = os.path.join(out_dir, f"side{disc_side}", safe_dir)
+    else:
+        dir_path = os.path.join(out_dir, safe_dir)
 
-    if sides_mode == "prefix":
-        return os.path.join(out_dir, f"side{disc_side}_{base}")
-
-    # Default for double-sided: subdir mode.
-    side_dir = os.path.join(out_dir, f"side{disc_side}")
-    os.makedirs(side_dir, exist_ok=True)
-    return os.path.join(side_dir, base)
+    os.makedirs(dir_path, exist_ok=True)
+    return os.path.join(dir_path, safe_name)
 
 
 def search(
@@ -141,22 +173,22 @@ def search(
 
     results = []
 
-    for disc in openDiscImage(image_path):
-        _title, entries = disc.readCatalogue()
+    image = openDiscImage(image_path)
 
-        for entry in entries:
-            full_name = f"{entry['dir']}.{entry['name']}"
+    for disc in image.sides:
+        catalogue = disc.readCatalogue()
 
+        for entry in catalogue.entries:
             # Scope to a specific file when requested.
             if filename is not None:
-                if full_name != filename and entry["name"] != filename:
+                if entry.fullName != filename and entry.name != filename:
                     continue
 
-            if not isBasic(entry):
+            if not entry.isBasic:
                 continue
 
             data = disc.readFile(entry)
-            if not looksLikeText(data):
+            if not looksLikeTokenizedBasic(data):
                 continue
 
             lines = detokenize(data)
@@ -170,7 +202,7 @@ def search(
                 if compiled.search(content):
                     results.append({
                         "side": disc.side,
-                        "filename": full_name,
+                        "filename": entry.fullName,
                         "line_number": int(line[:5]),
                         "line": line,
                     })
@@ -181,8 +213,8 @@ def search(
 def extractAll(
     image_path: str,
     out_dir: str,
-    sides_mode: Optional[str] = None,
     pretty: bool = False,
+    write_inf: bool = False,
 ) -> List[Dict[str, Union[str, int]]]:
     """Extract every file from a disc image into a directory.
 
@@ -190,16 +222,21 @@ def extractAll(
     Plain text files are saved as .txt with CR normalised to LF.
     Binary files are saved as .bin raw bytes.
 
-    On double-sided images, files are separated by side. The sides_mode
-    parameter controls the layout:
-    - None or 'subdir' (default): files go into side0/ and side1/ subdirectories
-    - 'prefix'                  : files are prefixed with side0_ or side1_ in a flat layout
+    Files are laid out hierarchically with the DFS directory character
+    as a real subdirectory. On double-sided images, an additional
+    side0/ or side1/ level is added:
+        - SSD: out_dir/$/BOOT.bas
+        - DSD: out_dir/side0/$/BOOT.bas
+
+    When write_inf is True, a .inf sidecar file is written alongside
+    every extracted file, preserving the DFS load address, exec address,
+    length, and lock flag in the standard community interchange format.
 
     Args:
         image_path: Path to a .ssd or .dsd disc image.
         out_dir:    Directory to write extracted files into. Created if absent.
-        sides_mode: Layout for double-sided discs: 'subdir', 'prefix', or None.
         pretty:     Apply pretty-printer spacing to BASIC output when True.
+        write_inf:  Write .inf sidecar files alongside extracted files.
 
     Returns:
         List of result dicts, one per extracted file. Each dict has:
@@ -212,20 +249,21 @@ def extractAll(
     """
     os.makedirs(out_dir, exist_ok=True)
 
-    sides = openDiscImage(image_path)
-    multi_side = len(sides) > 1
+    image = openDiscImage(image_path)
+    multi_side = len(image.sides) > 1
 
     results = []
 
-    for disc in sides:
-        _title, entries = disc.readCatalogue()
+    for disc in image.sides:
+        catalogue = disc.readCatalogue()
 
-        for entry in entries:
-            base = sanitizeDfsName(entry['dir'], entry['name'])
-            stem = resolveOutputPath(out_dir, disc.side, base, multi_side, sides_mode)
+        for entry in catalogue.entries:
+            safe_dir = sanitizeDfsDir(entry.directory)
+            safe_name = sanitizeDfsFilename(entry.name)
+            stem = resolveOutputPath(out_dir, disc.side, safe_dir, safe_name, multi_side)
             data = disc.readFile(entry)
 
-            if isBasic(entry) and looksLikeText(data):
+            if entry.isBasic and looksLikeTokenizedBasic(data):
                 # Detokenize BASIC and write as plain text.
                 out_path = stem + ".bas"
                 text_lines = detokenize(data)
@@ -254,9 +292,141 @@ def extractAll(
                 results.append({
                     "type": "binary",
                     "path": out_path,
-                    "load": entry["load"],
-                    "exec": entry["exec"],
-                    "length": entry["length"],
+                    "load": entry.load_addr,
+                    "exec": entry.exec_addr,
+                    "length": entry.length,
                 })
 
+            # Write .inf sidecar alongside the data file if requested.
+            if write_inf:
+                inf_line = formatInf(
+                    entry.directory, entry.name,
+                    entry.load_addr, entry.exec_addr,
+                    entry.length, entry.locked,
+                )
+                with open(out_path + ".inf", "w", encoding="ascii") as f:
+                    f.write(inf_line + "\n")
+
     return results
+
+
+def buildImage(
+    source_dir: str,
+    tracks: int = 80,
+    is_dsd: bool = False,
+    title: str = "",
+    boot_option: BootOption = BootOption.OFF,
+) -> bytes:
+    """Build a disc image from a directory of files with .inf sidecars.
+
+    The source directory is expected to be in the hierarchical layout
+    produced by extractAll: one subdirectory per DFS directory character
+    (e.g. '$/', 'T/'), with each data file accompanied by a .inf sidecar.
+
+    For double-sided images (is_dsd=True), the source directory should
+    contain side0/ and side1/ subdirectories.
+
+    Files without a .inf sidecar are skipped with a warning printed to
+    stderr. The .inf file provides the DFS directory, load address, exec
+    address, and lock flag needed to add the file to the catalogue.
+
+    Args:
+        source_dir:  Path to the root directory of extracted files.
+        tracks:      Number of tracks (40 or 80).
+        is_dsd:      True for double-sided interleaved format.
+        title:       Disc title (up to 12 characters).
+        boot_option: Boot option (0-3).
+
+    Returns:
+        The assembled disc image as bytes, ready to write to a file.
+
+    Raises:
+        DFSError: If a file cannot be added (name conflict, disc full, etc.).
+    """
+    import sys
+
+    image = createDiscImage(
+        tracks=tracks,
+        is_dsd=is_dsd,
+        title=title,
+        boot_option=boot_option,
+    )
+
+    if is_dsd:
+        # Expect side0/ and side1/ subdirectories.
+        side_dirs = []
+        for side_index in range(2):
+            side_path = os.path.join(source_dir, f"side{side_index}")
+            if os.path.isdir(side_path):
+                side_dirs.append((side_index, side_path))
+    else:
+        # Single-sided: the source_dir itself holds the DFS directories.
+        side_dirs = [(0, source_dir)]
+
+    for side_index, side_path in side_dirs:
+        side = image.sides[side_index]
+        _addFilesFromDir(side, side_path)
+
+    return image.serialize()
+
+
+def _addFilesFromDir(side: "DFSSide", side_path: str) -> None:
+    """Add all files with .inf sidecars from a directory tree to a disc side.
+
+    Walks the DFS directory subdirectories (e.g. '$/', 'T/') under
+    side_path, reads each .inf sidecar to get DFS metadata, then adds
+    the corresponding data file to the disc side.
+
+    Args:
+        side:      DFSSide to add files to.
+        side_path: Path to the directory containing DFS dir subdirectories.
+    """
+    import sys
+
+    # Walk each DFS directory subdirectory.
+    if not os.path.isdir(side_path):
+        return
+
+    for dir_entry in sorted(os.listdir(side_path)):
+        dir_path = os.path.join(side_path, dir_entry)
+
+        if not os.path.isdir(dir_path):
+            continue
+
+        for file_entry in sorted(os.listdir(dir_path)):
+            # Skip .inf files themselves.
+            if file_entry.endswith(".inf"):
+                continue
+
+            data_path = os.path.join(dir_path, file_entry)
+
+            if not os.path.isfile(data_path):
+                continue
+
+            inf_path = data_path + ".inf"
+
+            if not os.path.isfile(inf_path):
+                print(
+                    f"Warning: no .inf sidecar for {data_path}, skipping",
+                    file=sys.stderr,
+                )
+                continue
+
+            # Read the .inf sidecar.
+            with open(inf_path, "r", encoding="ascii") as f:
+                inf_line = f.readline().strip()
+
+            inf = parseInf(inf_line)
+
+            # Read the data file.
+            with open(data_path, "rb") as f:
+                data = f.read()
+
+            side.addFile(
+                name=inf.name,
+                directory=inf.directory,
+                data=data,
+                load_addr=inf.load_addr,
+                exec_addr=inf.exec_addr,
+                locked=inf.locked,
+            )

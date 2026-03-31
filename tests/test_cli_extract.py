@@ -15,7 +15,7 @@ import pytest
 
 from argparse import Namespace
 
-from beebtools.disc import sanitizeDfsName, resolveOutputPath, extractAll
+from beebtools.disc import sanitizeDfsDir, sanitizeDfsFilename, resolveOutputPath, extractAll
 from beebtools.cli import cmdCat
 
 
@@ -129,46 +129,52 @@ def _makeDsdImage(
 # sanitizeDfsName unit tests
 # ---------------------------------------------------------------------------
 
-class TestSanitizeDfsName:
+class TestSanitizeDfsDir:
 
-    def testNormalNameDoesNotChange(self):
-        assert sanitizeDfsName("T", "MYPROG") == "T_MYPROG"
+    def testNormalDirUnchanged(self):
+        assert sanitizeDfsDir("T") == "T"
 
-    def testDollarDirectoryPreserved(self):
-        assert sanitizeDfsName("$", "BOOT") == "$_BOOT"
+    def testDollarDirUnchanged(self):
+        assert sanitizeDfsDir("$") == "$"
 
-    def testExclamationDirectoryPreserved(self):
-        assert sanitizeDfsName("!", "BOOT") == "!_BOOT"
+    def testExclamationDirUnchanged(self):
+        assert sanitizeDfsDir("!") == "!"
+
+    def testIllegalCharEncoded(self):
+        assert sanitizeDfsDir("/") == "_x2F_"
+
+
+class TestSanitizeDfsFilename:
+
+    def testNormalNameUnchanged(self):
+        assert sanitizeDfsFilename("MYPROG") == "MYPROG"
 
     def testForwardSlashEncoded(self):
-        assert sanitizeDfsName("T", "A/B") == "T_A_x2F_B"
+        assert sanitizeDfsFilename("A/B") == "A_x2F_B"
 
     def testBackslashEncoded(self):
-        assert sanitizeDfsName("T", "A\\B") == "T_A_x5C_B"
+        assert sanitizeDfsFilename("A\\B") == "A_x5C_B"
 
     def testSlashAndBackslashDistinct(self):
-        # Two different illegal chars must produce different output.
-        slash = sanitizeDfsName("T", "A/B")
-        backslash = sanitizeDfsName("T", "A\\B")
+        slash = sanitizeDfsFilename("A/B")
+        backslash = sanitizeDfsFilename("A\\B")
         assert slash != backslash
 
     def testColonEncoded(self):
-        assert sanitizeDfsName("T", "A:B") == "T_A_x3A_B"
+        assert sanitizeDfsFilename("A:B") == "A_x3A_B"
 
     def testControlCharDropped(self):
-        assert sanitizeDfsName("T", "A\x01B") == "T_AB"
+        assert sanitizeDfsFilename("A\x01B") == "AB"
 
     def testAllWindowsIllegalCharsEncoded(self):
-        # None of the Windows-illegal chars should appear unencoded in output.
         illegal = '\\/:*?"<>|'
         for ch in illegal:
-            result = sanitizeDfsName("T", f"A{ch}B")
+            result = sanitizeDfsFilename(f"A{ch}B")
             assert ch not in result, f"Illegal char {repr(ch)} appeared unencoded in {repr(result)}"
 
     def testWindowsIllegalCharsAllDistinct(self):
-        # Each illegal char must produce a unique encoding.
         illegal = '\\/:*?"<>|'
-        results = [sanitizeDfsName("T", f"_{ch}_") for ch in illegal]
+        results = [sanitizeDfsFilename(f"_{ch}_") for ch in illegal]
         assert len(results) == len(set(results)), "Two illegal chars produced the same output"
 
 
@@ -178,36 +184,31 @@ class TestSanitizeDfsName:
 
 class TestResolveOutputPath:
 
-    def testSingleSideNoSeparation(self):
-        # Single-sided: sides_mode is irrelevant, file goes directly in out_dir.
-        result = resolveOutputPath("/out", 0, "$.FILE", multi_side=False, sides_mode=None)
-        assert result == os.path.join("/out", "$.FILE")
+    def testSingleSideHierarchical(self, tmp_path):
+        # Single-sided: out_dir/dir/filename.
+        result = resolveOutputPath(str(tmp_path), 0, "$", "FILE", multi_side=False)
+        assert result == os.path.join(str(tmp_path), "$", "FILE")
 
-    def testSingleSideIgnoresSidesMode(self):
-        result = resolveOutputPath("/out", 0, "$.FILE", multi_side=False, sides_mode="prefix")
-        assert result == os.path.join("/out", "$.FILE")
+    def testSingleSideNonDefaultDir(self, tmp_path):
+        result = resolveOutputPath(str(tmp_path), 0, "T", "PROG", multi_side=False)
+        assert result == os.path.join(str(tmp_path), "T", "PROG")
 
-    def testDoubleSideDefaultIsSubdir(self, tmp_path):
-        # None sides_mode on a double-sided disc: subdir layout.
-        result = resolveOutputPath(str(tmp_path), 0, "$.FILE", multi_side=True, sides_mode=None)
-        assert result == os.path.join(str(tmp_path), "side0", "$.FILE")
+    def testDoubleSideSide0(self, tmp_path):
+        result = resolveOutputPath(str(tmp_path), 0, "$", "FILE", multi_side=True)
+        assert result == os.path.join(str(tmp_path), "side0", "$", "FILE")
 
-    def testDoubleSideSubdirMode(self, tmp_path):
-        result = resolveOutputPath(str(tmp_path), 1, "T.PROG", multi_side=True, sides_mode="subdir")
-        assert result == os.path.join(str(tmp_path), "side1", "T.PROG")
+    def testDoubleSideSide1(self, tmp_path):
+        result = resolveOutputPath(str(tmp_path), 1, "T", "PROG", multi_side=True)
+        assert result == os.path.join(str(tmp_path), "side1", "T", "PROG")
 
-    def testDoubleSidePrefixMode(self):
-        result = resolveOutputPath("/out", 0, "$.FILE", multi_side=True, sides_mode="prefix")
-        assert result == os.path.join("/out", "side0_$.FILE")
+    def testDirectoriesCreated(self, tmp_path):
+        # resolveOutputPath must create all intermediate directories.
+        resolveOutputPath(str(tmp_path), 0, "$", "FILE", multi_side=True)
+        assert os.path.isdir(os.path.join(str(tmp_path), "side0", "$"))
 
-    def testDoubleSidePrefixModeSide1(self):
-        result = resolveOutputPath("/out", 1, "T.PROG", multi_side=True, sides_mode="prefix")
-        assert result == os.path.join("/out", "side1_T.PROG")
-
-    def testSubdirIsCreated(self, tmp_path):
-        # resolveOutputPath must create the side subdirectory.
-        resolveOutputPath(str(tmp_path), 0, "$.FILE", multi_side=True, sides_mode=None)
-        assert os.path.isdir(os.path.join(str(tmp_path), "side0"))
+    def testSingleSideDirectoryCreated(self, tmp_path):
+        resolveOutputPath(str(tmp_path), 0, "T", "PROG", multi_side=False)
+        assert os.path.isdir(os.path.join(str(tmp_path), "T"))
 
 
 # ---------------------------------------------------------------------------
@@ -216,42 +217,39 @@ class TestResolveOutputPath:
 
 class TestExtractAllSingleSide:
 
-    def testSingleSideExtractsToFlatDir(self, tmp_path):
+    def testSingleSideExtractsHierarchically(self, tmp_path):
         # Build a single-sided image with one binary file.
         img_path = str(tmp_path / "test.ssd")
         with open(img_path, "wb") as f:
             f.write(_makeSsdImage("MYFILE", b"\xDE\xAD\xBE\xEF" * 4))
 
         out_dir = str(tmp_path / "out")
-        extractAll(img_path, out_dir, sides_mode=None, pretty=False)
+        extractAll(img_path, out_dir, pretty=False)
 
-        # File should be directly in out_dir, no side subdirectory.
-        assert os.path.isfile(os.path.join(out_dir, "$_MYFILE.bin"))
+        # File should be in out_dir/$/MYFILE.bin (hierarchical layout).
+        assert os.path.isfile(os.path.join(out_dir, "$", "MYFILE.bin"))
         assert not os.path.isdir(os.path.join(out_dir, "side0"))
 
     def testPlainTextFileSavedAsTxt(self, tmp_path):
-        # A file whose bytes are all printable ASCII + CR should get a .txt extension.
         img_path = str(tmp_path / "test.ssd")
         with open(img_path, "wb") as f:
             f.write(_makeSsdImage("README", b"Hello BBC\rworld\r"))
 
         out_dir = str(tmp_path / "out")
-        extractAll(img_path, out_dir, sides_mode=None, pretty=False)
+        extractAll(img_path, out_dir, pretty=False)
 
-        assert os.path.isfile(os.path.join(out_dir, "$_README.txt"))
-        assert not os.path.isfile(os.path.join(out_dir, "$_README.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "$", "README.txt"))
+        assert not os.path.isfile(os.path.join(out_dir, "$", "README.bin"))
 
     def testPlainTextCrNormalisedToLf(self, tmp_path):
-        # BBC text files use CR (0x0D) as line terminator.
-        # Extracted .txt files must have LF-only line endings.
         img_path = str(tmp_path / "test.ssd")
         with open(img_path, "wb") as f:
             f.write(_makeSsdImage("NOTES", b"line one\rline two\r"))
 
         out_dir = str(tmp_path / "out")
-        extractAll(img_path, out_dir, sides_mode=None, pretty=False)
+        extractAll(img_path, out_dir, pretty=False)
 
-        txt_path = os.path.join(out_dir, "$_NOTES.txt")
+        txt_path = os.path.join(out_dir, "$", "NOTES.txt")
         with open(txt_path, "rb") as f:
             raw = f.read()
 
@@ -262,64 +260,15 @@ class TestExtractAllSingleSide:
 class TestExtractAllDoubleSideSubdir:
 
     def testDefaultSubdirLayout(self, tmp_path):
-        # No --sides flag on a double-sided disc: should use subdir automatically.
         img_path = str(tmp_path / "test.dsd")
         with open(img_path, "wb") as f:
             f.write(_makeDsdImage("PROG0", b"\x01" * 16, "PROG1", b"\x02" * 16))
 
         out_dir = str(tmp_path / "out")
-        extractAll(img_path, out_dir, sides_mode=None, pretty=False)
+        extractAll(img_path, out_dir, pretty=False)
 
-        assert os.path.isfile(os.path.join(out_dir, "side0", "$_PROG0.bin"))
-        assert os.path.isfile(os.path.join(out_dir, "side1", "$_PROG1.bin"))
-
-    def testExplicitSubdirLayout(self, tmp_path):
-        img_path = str(tmp_path / "test.dsd")
-        with open(img_path, "wb") as f:
-            f.write(_makeDsdImage("PROG0", b"\x01" * 16, "PROG1", b"\x02" * 16))
-
-        out_dir = str(tmp_path / "out")
-        extractAll(img_path, out_dir, sides_mode="subdir", pretty=False)
-
-        assert os.path.isfile(os.path.join(out_dir, "side0", "$_PROG0.bin"))
-        assert os.path.isfile(os.path.join(out_dir, "side1", "$_PROG1.bin"))
-
-
-class TestExtractAllDoubleSidePrefix:
-
-    def testPrefixLayoutFlatDir(self, tmp_path):
-        img_path = str(tmp_path / "test.dsd")
-        with open(img_path, "wb") as f:
-            f.write(_makeDsdImage("PROG0", b"\x01" * 16, "PROG1", b"\x02" * 16))
-
-        out_dir = str(tmp_path / "out")
-        extractAll(img_path, out_dir, sides_mode="prefix", pretty=False)
-
-        # Files must be in the flat out_dir, not in subdirectories.
-        assert os.path.isfile(os.path.join(out_dir, "side0_$_PROG0.bin"))
-        assert os.path.isfile(os.path.join(out_dir, "side1_$_PROG1.bin"))
-        assert not os.path.isdir(os.path.join(out_dir, "side0"))
-        assert not os.path.isdir(os.path.join(out_dir, "side1"))
-
-    def testPrefixLayoutCollisionBothSides(self, tmp_path):
-        # Same filename on both sides - prefix mode must keep both without collision.
-        img_path = str(tmp_path / "test.dsd")
-        with open(img_path, "wb") as f:
-            f.write(_makeDsdImage("SHARED", b"\xAA" * 16, "SHARED", b"\xBB" * 16))
-
-        out_dir = str(tmp_path / "out")
-        extractAll(img_path, out_dir, sides_mode="prefix", pretty=False)
-
-        side0_path = os.path.join(out_dir, "side0_$_SHARED.bin")
-        side1_path = os.path.join(out_dir, "side1_$_SHARED.bin")
-        assert os.path.isfile(side0_path)
-        assert os.path.isfile(side1_path)
-
-        # Content must differ - they are different files from each side.
-        with open(side0_path, "rb") as f:
-            assert f.read() == b"\xAA" * 16
-        with open(side1_path, "rb") as f:
-            assert f.read() == b"\xBB" * 16
+        assert os.path.isfile(os.path.join(out_dir, "side0", "$", "PROG0.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "side1", "$", "PROG1.bin"))
 
 
 # ---------------------------------------------------------------------------

@@ -76,6 +76,11 @@ For BASIC files, `beebtools` does three things in sequence:
 
 - Star command awareness: `*SCUMPI` is passed through verbatim, no false spacing
 
+- `.inf` sidecar format support: parse and produce the standard community
+  interchange format for preserving DFS file metadata alongside extracted files
+
+- Create, modify, and build disc images from the command line or as a library
+
 - Zero dependencies - pure Python 3.8+, single package
 
 ## Installation
@@ -94,7 +99,22 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
 
-## Quick start
+## Commands
+
+`beebtools` provides commands for inspecting, extracting, and building DFS disc
+images. Each command has its own detailed reference page.
+
+| Command | Description |
+| --- | --- |
+| [`cat`](docs/commands/cat.md) | List disc catalogue with file types and metadata |
+| [`search`](docs/commands/search.md) | Search BASIC source for a text pattern or regex |
+| [`extract`](docs/commands/extract.md) | Extract a single file or bulk-extract all files |
+| [`create`](docs/commands/create.md) | Create a blank formatted disc image |
+| [`add`](docs/commands/add.md) | Add a file to an existing disc image |
+| [`delete`](docs/commands/delete.md) | Delete a file from a disc image |
+| [`build`](docs/commands/build.md) | Build a disc image from files with `.inf` sidecars |
+
+## Usage
 
 ```bash
 # List what is on a disc image
@@ -108,13 +128,32 @@ beebtools extract mydisc.dsd T.MYPROG --pretty
 
 # Extract everything from a double-sided disc
 beebtools extract mydisc.dsd -a --pretty -d output/
+
+# Extract everything with .inf sidecars preserving DFS metadata
+beebtools extract mydisc.dsd -a --inf -d output/
+
+# Create a blank disc image
+beebtools create blank.ssd --title "MY DISC" --boot EXEC
+
+# Add a file to an existing image
+beebtools add mydisc.ssd loader.bin --name $.LOADER --load 1900 --exec 1900
+
+# Add a file using its .inf sidecar for metadata
+beebtools add mydisc.ssd loader.bin --inf
+
+# Delete a file from an image
+beebtools delete mydisc.ssd $.LOADER
+
+# Build a disc image from a directory of files with .inf sidecars
+beebtools build output/ rebuilt.ssd --title "REBUILT"
 ```
 
-## Pretty-printer: what it does
+## Pretty-printer
 
-Raw BBC BASIC from a tokenized file looks like this when detokenized:
+When extracting BASIC files from a disc image, the `--pretty` flag adds
+operator spacing to make the dense tokenized code more readable.
 
-```
+```basic
   100 IFx>100ORy<0THENx=0:y=0
   110 FORi=1TO8:s=s+x*x:NEXTi
   120 SOUND1,-15,s,5:IFs>9999THENs=0
@@ -122,226 +161,32 @@ Raw BBC BASIC from a tokenized file looks like this when detokenized:
 
 With `--pretty`:
 
-```
+```basic
   100 IFx > 100ORy < 0THENx = 0 : y = 0
   110 FORi = 1TO8 : s = s + x * x : NEXTi
   120 SOUND1, -15, s, 5 : IFs > 9999THENs = 0
 ```
 
-Specifically, the pretty-printer adds:
+See [docs/pretty-printer.md](docs/pretty-printer.md) for the full list of
+spacing rules and anti-listing trap handling.
 
-- a space between the line number and the first token
-
-- spaces around comparison operators: `=` `<` `>` `<>` `<=` `>=`
-
-- spaces around arithmetic operators: `+` `-` `*` `/`
-
-- padding around colon statement separators: `a:b` becomes `a : b`
-
-- a trailing space after each comma
-
-- correct unary minus context: `(-x)` and `SOUND 1,-15,s,5` stay unary
-
-- string literals, `REM` tails, and `DATA` tails are never touched
-
-- star commands (`*COMMAND`) are passed through verbatim
-
-Note that spaces between keywords and identifiers are not added - BBC BASIC
-stores only the spaces that were explicitly typed. The pretty-printer works on
-operators and punctuation, which is where the density tends to be worst.
-
-### Anti-listing traps
-
-A common copy-protection trick was to follow a `*|` MOS comment with
-`CHR$(21)` (`VDU 21`, disable output) bytes. When you typed `LIST`, the screen
-would go blank after that line. The program was still there - you just couldn't
-see it.
-
-`beebtools` detects `*|` at the start of a statement and converts it to `REM *|`,
-stripping any control characters from the tail. The comment text (if any) is
-preserved.
-
-```
-  590 *|                       <- in the tokenized file
-  590 REM *|                   <- what beebtools shows you
-```
-
-## Usage
-
-### Command Line
-
-`beebtools`, once installed in a Python enabled environment, can be used from the
-command line.
-
-#### `cat`
-
-List a disc catalogue.
-
-```bash
-beebtools cat <image> [--sort name|catalog|size] [--inspect]
-```
-
-Lists all files on all sides of the disc with load address, exec address,
-length, and file type. BASIC is identified from the exec address without
-reading file data.
-
-Add `--inspect` (`-i`) to also read each file's bytes and label plain ASCII
-text files as `TEXT` in the type column:
-
-```text
---- Side 0: BBC_MUSIC_2 (28 files) ---
-
-  Name          Load     Exec   Length  Type
-   $.!BOOT  00000000 00000000 00000018  TEXT
-   T.BACHPR 00000E00 00008023 000011A4  BASIC
-   T.BEETHO 00000E00 00008023 00000F6C  BASIC
-   ...
-```
-
-Sort options:
-
-- `name` (default) - alphabetical by filename
-
-- `catalog` - original on-disc DFS order
-
-- `size` - ascending by file length
-
-#### `search`
-
-Search all BASIC files on a disc for lines containing a text pattern.
-
-```bash
-beebtools search <image> <pattern> [filename] [-i] [--pretty]
-```
-
-Detokenizes every BASIC file on the disc and scans each line for the pattern.
-Matching lines are printed as:
-
-```
---- Side 0: T.MYPROG ---
-   10 GOTO 100
-  230 IF SCORE > 100 THEN GOTO 230
-```
-
-Options:
-
-- `filename` - limit the search to one file (e.g. `T.MYPROG` or bare `MYPROG`)
-
-- `-i` / `--ignore-case` - case-insensitive match
-
-- `--pretty` - apply operator spacing before matching
-
-#### `extract`
-
-Extract a file from a disc image.
-
-```bash
-beebtools extract <image> <filename> [-o FILE] [--pretty]
-```
-
-BASIC programs are automatically detected and detokenized to plain text.
-All other files are extracted as raw bytes.
-
-```bash
-# Print to stdout
-beebtools extract mydisc.dsd T.MYPROG --pretty
-
-# Write to a file
-beebtools extract mydisc.dsd T.MYPROG -o myprog.bas --pretty
-
-# Bare filename - works when the name is unique across all sides
-beebtools extract mydisc.dsd MYPROG
-```
-
-For binary files written with `-o`, the load address, exec address, and
-length are printed so you have the information needed for a disassembler:
-
-```text
-Extracted to loader.bin
-$.LOADER  load=0x001900  exec=0x001900  length=512 bytes
-```
-
-When `-o` is omitted, raw bytes go directly to stdout for piping.
-
-##### Bulk extract
-
-Extract all files from a disc image by specifying the option `-a`.
-
-```bash
-beebtools extract <image> -a [-d DIR] [--pretty] [-s subdir|prefix]
-```
-
-Extracts every file from the disc.
-
-- BASIC programs are saved as `.bas` text files
-
-- plain ASCII text files are saved as `.txt` (BBC CR line endings are normalised to LF)
-
-- everything else is saved as `.bin` raw files
-
-The output directory defaults to the disc image filename stem (`bbc_d1/` for `bbc_d1.dsd`).
-
-On a double-sided `.dsd` image, files from each side are always kept separate.
-The `-s`/`--sides` flag controls the layout:
-
-- `subdir` (default) - files are written into `side0/` and `side1/` subdirectories
-  under the output directory:
-
-  ```
-  bbc_d1/
-    side0/
-      $_BOOT.bin
-      T_PROG.bas
-    side1/
-      $_BOOT.bin
-      T_GAME.bas
-  ```
-
-- `prefix` - all files are written into the flat output directory, prefixed with
-  `side0_` or `side1_`:
-
-  ```
-  bbc_d1/
-    side0_$_BOOT.bin
-    side0_T_PROG.bas
-    side1_$_BOOT.bin
-    side1_T_GAME.bas
-  ```
-
-##### Filename matching
-
-`extract` accepts DFS filenames in two forms:
-
-- Explicit: `T.MYPROG`, `$.MENU`, `$.!BOOT`
-- Bare: `MYPROG` - works when the name is unique on the disc
-
-Ambiguous bare names report all matches:
-
-```text
-Ambiguous filename 'LOADER' - specify with directory prefix.
-  Side 0: $.LOADER
-  Side 1: T.LOADER
-```
-
-### Using as a library
-
-`beebtools` can also be used as a Python library. The public API is imported
-directly from the `beebtools` package:
+## Using as a library
 
 ```python
-from beebtools import openDiscImage, detokenize, prettyPrint, isBasic, looksLikeText
+from beebtools import openDiscImage, detokenize, prettyPrint
 
-sides = openDiscImage("mydisc.dsd")
-for disc in sides:
-    title, entries = disc.readCatalogue()
-    print(f"Disc: {title}")
-    for entry in entries:
-        if isBasic(entry):
-            data = disc.readFile(entry)
-            if looksLikeText(data):
-                lines = prettyPrint(detokenize(data))
-                print("\n".join(lines))
+image = openDiscImage("mydisc.dsd")
+for side in image.sides:
+    catalogue = side.readCatalogue()
+    for entry in catalogue.entries:
+        if entry.isBasic:
+            data = side.readFile(entry)
+            lines = prettyPrint(detokenize(data))
+            print("\n".join(lines))
 ```
+
+See [docs/library.md](docs/library.md) for creating disc images, building from
+`.inf` sidecars, and working with the `.inf` format programmatically.
 
 ## Supported formats
 
@@ -352,3 +197,8 @@ for disc in sides:
 
 Both 40-track and 80-track images are supported. The tool does not
 currently support Watford DFS extended catalogues (62-file discs).
+
+## Documentation
+
+See the [docs/](docs/README.md) folder for full command reference, pretty-printer
+details, and library API guide.
