@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 beebtools contributors
+# SPDX-FileCopyrightText: 2026 Heisenberg (acscpt)
 # SPDX-License-Identifier: MIT
 
 """Integration tests for the DFS disc image reader.

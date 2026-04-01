@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 beebtools contributors
+# SPDX-FileCopyrightText: 2026 Heisenberg (acscpt)
 # SPDX-License-Identifier: MIT
 
 """Unit tests for the extractAll bulk-extraction logic.
