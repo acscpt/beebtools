@@ -449,6 +449,8 @@ def main() -> None:
         ),
         epilog="Use 'beebtools <command> -h' for detailed help on each command.",
     )
+    parser.add_argument("--debug", action="store_true",
+                        help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="command")
 
     p_cat = sub.add_parser("cat", help="List disc catalogue")
@@ -542,19 +544,25 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if args.command == "cat":
-        cmdCat(args)
-    elif args.command == "extract":
-        cmdExtract(args)
-    elif args.command == "search":
-        cmdSearch(args)
-    elif args.command == "create":
-        cmdCreate(args)
-    elif args.command == "add":
-        cmdAdd(args)
-    elif args.command == "delete":
-        cmdDelete(args)
-    elif args.command == "build":
-        cmdBuild(args)
-    else:
-        parser.print_help()
+    try:
+        if args.command == "cat":
+            cmdCat(args)
+        elif args.command == "extract":
+            cmdExtract(args)
+        elif args.command == "search":
+            cmdSearch(args)
+        elif args.command == "create":
+            cmdCreate(args)
+        elif args.command == "add":
+            cmdAdd(args)
+        elif args.command == "delete":
+            cmdDelete(args)
+        elif args.command == "build":
+            cmdBuild(args)
+        else:
+            parser.print_help()
+    except Exception as e:
+        if args.debug:
+            raise
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
