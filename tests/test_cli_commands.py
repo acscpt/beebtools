@@ -113,7 +113,7 @@ class TestCmdAdd:
         args = Namespace(
             image=img, file=data_file, name="T.MYPROG",
             load="1900", exec_addr="8023", locked=False,
-            inf=False, side=0,
+            inf=False, side=0, basic=False,
         )
 
         buf = io.StringIO()
@@ -138,7 +138,7 @@ class TestCmdAdd:
         args = Namespace(
             image=img, file=data_file, name="BOOT",
             load=None, exec_addr=None, locked=False,
-            inf=False, side=0,
+            inf=False, side=0, basic=False,
         )
 
         buf = io.StringIO()
@@ -164,7 +164,7 @@ class TestCmdAdd:
         args = Namespace(
             image=img, file=data_file, name=None,
             load=None, exec_addr=None, locked=False,
-            inf=True, side=0,
+            inf=True, side=0, basic=False,
         )
 
         buf = io.StringIO()
@@ -189,7 +189,7 @@ class TestCmdAdd:
         args = Namespace(
             image=img, file=data_file, name="$.SECRET",
             load="0", exec_addr="0", locked=True,
-            inf=False, side=0,
+            inf=False, side=0, basic=False,
         )
 
         buf = io.StringIO()
@@ -212,7 +212,7 @@ class TestCmdAdd:
             args = Namespace(
                 image=img, file=data_file, name=name,
                 load=None, exec_addr=None, locked=False,
-                inf=False, side=0,
+                inf=False, side=0, basic=False,
             )
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
@@ -221,6 +221,131 @@ class TestCmdAdd:
         image = openDiscImage(img)
         cat = image.sides[0].readCatalogue()
         assert len(cat.entries) == 2
+
+    def testAddBasicFlag(self, tmp_path) -> None:
+        """The --basic flag sets load=0x1900 and exec=0x8023."""
+        img = self._createBlankSsd(tmp_path)
+        data_file = str(tmp_path / "prog.bas")
+        with open(data_file, "wb") as f:
+            f.write(b"\x0D\x00\x0A\x05\xF1\x0D\xFF")
+
+        args = Namespace(
+            image=img, file=data_file, name="T.MYPROG",
+            load=None, exec_addr=None, locked=False,
+            inf=False, side=0, basic=True,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        image = openDiscImage(img)
+        entry = image.sides[0].readCatalogue().entries[0]
+        assert entry.load_addr == 0x1900
+        assert entry.exec_addr == 0x8023
+
+    def testAddBasicFlagWithLoadOverride(self, tmp_path) -> None:
+        """Explicit --load overrides the BASIC default."""
+        img = self._createBlankSsd(tmp_path)
+        data_file = str(tmp_path / "prog.bas")
+        with open(data_file, "wb") as f:
+            f.write(b"\x0D\x00\x0A\x05\xF1\x0D\xFF")
+
+        args = Namespace(
+            image=img, file=data_file, name="T.MYPROG",
+            load="E00", exec_addr=None, locked=False,
+            inf=False, side=0, basic=True,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        image = openDiscImage(img)
+        entry = image.sides[0].readCatalogue().entries[0]
+        assert entry.load_addr == 0x0E00
+        assert entry.exec_addr == 0x8023
+
+    def testAddBasicFlagWithExecOverride(self, tmp_path) -> None:
+        """Explicit --exec overrides the BASIC default."""
+        img = self._createBlankSsd(tmp_path)
+        data_file = str(tmp_path / "prog.bas")
+        with open(data_file, "wb") as f:
+            f.write(b"\x0D\x00\x0A\x05\xF1\x0D\xFF")
+
+        args = Namespace(
+            image=img, file=data_file, name="T.MYPROG",
+            load=None, exec_addr="802B", locked=False,
+            inf=False, side=0, basic=True,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        image = openDiscImage(img)
+        entry = image.sides[0].readCatalogue().entries[0]
+        assert entry.load_addr == 0x1900
+        assert entry.exec_addr == 0x802B
+
+    def testAddBasicIgnoredWithInf(self, tmp_path) -> None:
+        """Using --basic with --inf prints a warning and uses .inf metadata."""
+        img = self._createBlankSsd(tmp_path)
+        data_file = str(tmp_path / "loader.bin")
+        inf_file = data_file + ".inf"
+
+        with open(data_file, "wb") as f:
+            f.write(b"\xFF" * 64)
+
+        with open(inf_file, "w") as f:
+            f.write("$.LOADER  003000 004000 000040\n")
+
+        args = Namespace(
+            image=img, file=data_file, name=None,
+            load=None, exec_addr=None, locked=False,
+            inf=True, side=0, basic=True,
+        )
+
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            cmdAdd(args)
+
+        assert "ignored" in err.getvalue().lower()
+
+        # .inf metadata should be used, not BASIC defaults.
+        image = openDiscImage(img)
+        entry = image.sides[0].readCatalogue().entries[0]
+        assert entry.load_addr == 0x3000
+        assert entry.exec_addr == 0x4000
+
+    def testAddBasicNoteWithBothAddresses(self, tmp_path) -> None:
+        """Using --basic with both --load and --exec prints override notes."""
+        img = self._createBlankSsd(tmp_path)
+        data_file = str(tmp_path / "prog.bas")
+        with open(data_file, "wb") as f:
+            f.write(b"\x0D\x00\x0A\x05\xF1\x0D\xFF")
+
+        args = Namespace(
+            image=img, file=data_file, name="T.MYPROG",
+            load="E00", exec_addr="802B", locked=False,
+            inf=False, side=0, basic=True,
+        )
+
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            cmdAdd(args)
+
+        stderr = err.getvalue()
+        assert "--load overrides" in stderr
+        assert "--exec overrides" in stderr
+
+        # Explicit addresses should be used.
+        image = openDiscImage(img)
+        entry = image.sides[0].readCatalogue().entries[0]
+        assert entry.load_addr == 0x0E00
+        assert entry.exec_addr == 0x802B
 
 
 # =======================================================================

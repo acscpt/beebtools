@@ -295,6 +295,11 @@ def cmdAdd(args: Namespace) -> None:
     side = image.sides[args.side]
 
     if args.inf:
+        # Warn if --basic was also specified - .inf overrides everything.
+        if args.basic:
+            print("Warning: --basic ignored when --inf is used",
+                  file=sys.stderr)
+
         # Read metadata from a .inf sidecar file.
         inf_path = args.file + ".inf"
 
@@ -326,8 +331,30 @@ def cmdAdd(args: Namespace) -> None:
             directory = "$"
             name = dfs_name
 
-        load_addr = int(args.load, 16) if args.load else 0
-        exec_addr = int(args.exec_addr, 16) if args.exec_addr else 0
+        # Apply BASIC defaults first, then let explicit flags override.
+        if args.basic:
+            load_addr = 0x1900
+            exec_addr = 0x8023
+        else:
+            load_addr = 0
+            exec_addr = 0
+
+        if args.load:
+            override = int(args.load, 16)
+            if args.basic:
+                print(f"Note: --load overrides BASIC default"
+                      f" (0x{load_addr:04X} -> 0x{override:04X})",
+                      file=sys.stderr)
+            load_addr = override
+
+        if args.exec_addr:
+            override = int(args.exec_addr, 16)
+            if args.basic:
+                print(f"Note: --exec overrides BASIC default"
+                      f" (0x{exec_addr:04X} -> 0x{override:04X})",
+                      file=sys.stderr)
+            exec_addr = override
+
         locked = args.locked
 
     with open(args.file, "rb") as f:
@@ -484,6 +511,8 @@ def main() -> None:
     p_add.add_argument("--load", help="Load address in hex (default: 0)")
     p_add.add_argument("--exec", dest="exec_addr",
                        help="Exec address in hex (default: 0)")
+    p_add.add_argument("--basic", action="store_true",
+                       help="Set BASIC defaults (load=0x1900, exec=0x8023)")
     p_add.add_argument("--locked", action="store_true",
                        help="Lock the file against deletion")
     p_add.add_argument("--inf", action="store_true",
