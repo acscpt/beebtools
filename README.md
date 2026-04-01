@@ -106,13 +106,13 @@ images. Each command has its own detailed reference page.
 
 | Command | Description |
 | --- | --- |
-| [`cat`](docs/commands/cat.md) | List disc catalogue with file types and metadata |
-| [`search`](docs/commands/search.md) | Search BASIC source for a text pattern or regex |
-| [`extract`](docs/commands/extract.md) | Extract a single file or bulk-extract all files |
-| [`create`](docs/commands/create.md) | Create a blank formatted disc image |
-| [`add`](docs/commands/add.md) | Add a file to an existing disc image |
-| [`delete`](docs/commands/delete.md) | Delete a file from a disc image |
-| [`build`](docs/commands/build.md) | Build a disc image from files with `.inf` sidecars |
+| [`cat`](https://github.com/acscpt/beebtools/blob/main/docs/commands/cat.md) | List disc catalogue with file types and metadata |
+| [`search`](https://github.com/acscpt/beebtools/blob/main/docs/commands/search.md) | Search BASIC source for a text pattern or regex |
+| [`extract`](https://github.com/acscpt/beebtools/blob/main/docs/commands/extract.md) | Extract a single file or bulk-extract all files |
+| [`create`](https://github.com/acscpt/beebtools/blob/main/docs/commands/create.md) | Create a blank formatted disc image |
+| [`add`](https://github.com/acscpt/beebtools/blob/main/docs/commands/add.md) | Add a file to an existing disc image |
+| [`delete`](https://github.com/acscpt/beebtools/blob/main/docs/commands/delete.md) | Delete a file from a disc image |
+| [`build`](https://github.com/acscpt/beebtools/blob/main/docs/commands/build.md) | Build a disc image from files with `.inf` sidecars |
 
 ## Usage
 
@@ -167,7 +167,7 @@ With `--pretty`:
   120 SOUND1, -15, s, 5 : IFs > 9999THENs = 0
 ```
 
-See [docs/pretty-printer.md](docs/pretty-printer.md) for the full list of
+See [docs/pretty-printer.md](https://github.com/acscpt/beebtools/blob/main/docs/pretty-printer.md) for the full list of
 spacing rules and anti-listing trap handling.
 
 ## Using as a library
@@ -185,7 +185,7 @@ for side in image.sides:
             print("\n".join(lines))
 ```
 
-See [docs/library.md](docs/library.md) for creating disc images, building from
+See [docs/library.md](https://github.com/acscpt/beebtools/blob/main/docs/library.md) for creating disc images, building from
 `.inf` sidecars, and working with the `.inf` format programmatically.
 
 ## Supported formats
@@ -200,5 +200,5 @@ currently support Watford DFS extended catalogues (62-file discs).
 
 ## Documentation
 
-See the [docs/](docs/README.md) folder for full command reference, pretty-printer
+See the [docs/](https://github.com/acscpt/beebtools/blob/main/docs/README.md) folder for full command reference, pretty-printer
 details, and library API guide.
