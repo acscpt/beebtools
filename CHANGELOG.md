@@ -5,6 +5,23 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `--basic` flag for `beebtools add`: sets BBC BASIC default addresses
+  (load=0x1900, exec=0x8023) without needing to specify them manually.
+  Explicit `--load` or `--exec` flags override the corresponding default
+  with an informational note. Ignored with a warning when `--inf` is used.
+
+### Fixed
+
+- DFS filename validation now rejects the characters `. : " # *` and space,
+  matching the Acorn DFS disc format specification. Previously only the
+  printable ASCII range was checked.
+
+---
+
 ## [0.3.0] - 2026-03-31
 
 ### Added

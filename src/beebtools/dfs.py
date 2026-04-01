@@ -941,8 +941,9 @@ def validateDfsName(directory: str, name: str) -> None:
     """Validate a DFS directory character and filename.
 
     DFS filenames consist of a single-character directory prefix and a
-    name of 1-7 characters. Both must be printable ASCII (0x20-0x7E).
-    The directory character must not be a space.
+    name of 1-7 characters. Both must be printable ASCII (0x21-0x7E)
+    excluding the characters . : " # * and space, per the Acorn DFS
+    disc format specification.
 
     Args:
         directory: Single-character DFS directory (e.g. '$', 'T').
@@ -951,18 +952,26 @@ def validateDfsName(directory: str, name: str) -> None:
     Raises:
         DFSError: If directory or name violates DFS naming rules.
     """
+    # Characters forbidden by the DFS spec.
+    forbidden = set('.:"#* ')
+
     # Directory must be exactly one character.
     if len(directory) != 1:
         raise DFSError(
             f"DFS directory must be a single character, got {len(directory)}"
         )
 
-    # Directory must be printable ASCII but not a space.
+    # Directory must be printable ASCII but not a space or forbidden char.
     d = ord(directory)
     if d < 0x21 or d > 0x7E:
         raise DFSError(
             f"DFS directory must be printable ASCII (0x21-0x7E), "
             f"got 0x{d:02X}"
+        )
+
+    if directory in forbidden:
+        raise DFSError(
+            f"DFS directory character '{directory}' is not allowed"
         )
 
     # Name must be 1-7 characters.
@@ -973,12 +982,17 @@ def validateDfsName(directory: str, name: str) -> None:
             f"DFS filename must be 1-7 characters, got {len(name)}"
         )
 
-    # Every character in the name must be printable ASCII (0x20-0x7E).
+    # Every character must be printable ASCII (0x21-0x7E) and not forbidden.
     for ch in name:
         c = ord(ch)
-        if c < 0x20 or c > 0x7E:
+        if c < 0x21 or c > 0x7E:
             raise DFSError(
                 f"DFS filename contains invalid character 0x{c:02X}"
+            )
+
+        if ch in forbidden:
+            raise DFSError(
+                f"DFS filename contains forbidden character '{ch}'"
             )
 
 

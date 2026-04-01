@@ -729,9 +729,38 @@ class TestValidateDfsName:
         with pytest.raises(DFSError):
             validateDfsName("$", "A\x80B")
 
-    def testNameWithSpaceAccepted(self):
-        # Space (0x20) is technically valid in a DFS filename.
-        validateDfsName("$", "A B")
+    def testNameWithSpaceRejected(self):
+        # Space is forbidden in DFS filenames per the spec.
+        with pytest.raises(DFSError):
+            validateDfsName("$", "A B")
+
+    def testNameWithDotRejected(self):
+        with pytest.raises(DFSError):
+            validateDfsName("$", "A.B")
+
+    def testNameWithColonRejected(self):
+        with pytest.raises(DFSError):
+            validateDfsName("$", "A:B")
+
+    def testNameWithQuoteRejected(self):
+        with pytest.raises(DFSError):
+            validateDfsName("$", 'A"B')
+
+    def testNameWithHashRejected(self):
+        with pytest.raises(DFSError):
+            validateDfsName("$", "A#B")
+
+    def testNameWithStarRejected(self):
+        with pytest.raises(DFSError):
+            validateDfsName("$", "A*B")
+
+    def testForbiddenDirectoryDotRejected(self):
+        with pytest.raises(DFSError):
+            validateDfsName(".", "FILE")
+
+    def testForbiddenDirectoryHashRejected(self):
+        with pytest.raises(DFSError):
+            validateDfsName("#", "FILE")
 
 
 # ---------------------------------------------------------------------------
