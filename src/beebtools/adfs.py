@@ -95,13 +95,18 @@ class ADFSEntry:
         return f"{self.directory}.{self.name}"
 
     @property
+    def isDirectory(self) -> bool:
+        """True if this entry is a directory rather than a file."""
+        return self.is_directory
+
+    @property
     def isBasic(self) -> bool:
         """True if this entry looks like a BBC BASIC program.
 
         Uses the same execution address test as DFS. Directories are
         never treated as BASIC.
         """
-        if self.is_directory:
+        if self.isDirectory:
             return False
         exec_lo = self.exec_addr & 0xFFFF
         return exec_lo in (0x801F, 0x8023, 0x802B)
@@ -504,7 +509,7 @@ class ADFSSide:
             result.append(located)
 
             # Recurse into subdirectories.
-            if entry.is_directory:
+            if entry.isDirectory:
                 child_path = f"{path}.{entry.name}"
                 result.extend(
                     self.walkDirectories(entry.start_sector, child_path)

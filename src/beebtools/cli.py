@@ -86,22 +86,32 @@ def cmdCat(args: Namespace) -> None:
             print("  (empty)")
         else:
             orderedEntries = sortCatalogueEntries(catalogue.entries, args.sort)
-            print(f"  {'Name':<12s} {'Load':>8s} {'Exec':>8s} {'Length':>8s}  {'Type'}")
+
+            # Dynamic column width for ADFS hierarchical names.
+            max_name = max(len(e.fullName) for e in orderedEntries)
+            col_width = max(12, max_name + 2)
+
+            print(f"  {'Name':<{col_width}s} {'Load':>8s} {'Exec':>8s} {'Length':>8s}  {'Type'}")
 
             for e in orderedEntries:
-                if e.isBasic:
+                is_dir = e.isDirectory
+
+                if is_dir:
+                    ftype = _colour("DIR", _CYAN, use_colour)
+                elif e.isBasic:
                     ftype = _colour("BASIC", _CYAN, use_colour)
                 elif args.inspect and looksLikePlainText(disc.readFile(e)):
                     ftype = _colour("TEXT", _YELLOW, use_colour)
                 else:
                     ftype = ""
+
                 lock_char = "L" if e.locked else " "
                 lock = _colour(lock_char, _RED, use_colour and e.locked)
                 load   = _colour(f"{e.load_addr:08X}",   _GREY, use_colour)
                 exec_  = _colour(f"{e.exec_addr:08X}",   _GREY, use_colour)
                 length = _colour(f"{e.length:08X}", _GREY, use_colour)
                 print(
-                    f"  {lock}{e.fullName:<11s} "
+                    f"  {lock}{e.fullName:<{col_width - 1}s} "
                     f"{load} "
                     f"{exec_} "
                     f"{length}  "
@@ -189,37 +199,32 @@ def cmdExtract(args: Namespace) -> None:
     target = args.filename
     found = None
 
-    if len(target) >= 3 and target[1] == ".":
-        # Explicit directory prefix given (e.g. T.MYPROG).
-        target_dir = target[0].upper()
-        target_name = target[2:]
-
+    # Try exact fullName match (handles "T.MYPROG" and "$.GAMES.ELITE").
+    if "." in target:
         for disc in sides.sides:
             catalogue = disc.readCatalogue()
             for e in catalogue.entries:
-                if (e.directory.upper() == target_dir
-                        and e.name.upper() == target_name.upper()):
+                if e.fullName.upper() == target.upper():
                     found = (disc, e)
                     break
             if found:
                 break
 
-    else:
-        # Bare filename - find a unique match across all sides and directories.
-        target_name = target
+    if not found:
+        # Bare name search across all sides and directories.
         matches = []
 
         for disc in sides.sides:
             catalogue = disc.readCatalogue()
             for e in catalogue.entries:
-                if e.name.upper() == target_name.upper():
+                if e.name.upper() == target.upper():
                     matches.append((disc, e))
 
         if len(matches) == 1:
             found = matches[0]
         elif len(matches) > 1:
             print(
-                f"Ambiguous filename '{target_name}' - specify with directory prefix.",
+                f"Ambiguous filename '{target}' - specify with full path.",
                 file=sys.stderr,
             )
             for disc, entry in matches:
@@ -452,10 +457,10 @@ def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
         description=(
-            "BBC Micro DFS disc image tool. "
+            "BBC Micro disc image tool. "
             "Read catalogues, extract files, detokenize BBC BASIC programs, "
-            "and create, modify, and build disc images "
-            "from .ssd and .dsd disc images."
+            "and create, modify, and build disc images. "
+            "Supports DFS (.ssd, .dsd) and ADFS (.adf, .adl) formats."
         ),
         epilog="Use 'beebtools <command> -h' for detailed help on each command.",
     )
@@ -464,7 +469,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command")
 
     p_cat = sub.add_parser("cat", help="List disc catalogue")
-    p_cat.add_argument("image", help="Path to .ssd or .dsd disc image")
+    p_cat.add_argument("image", help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
     p_cat.add_argument(
         "-s", "--sort",
         choices=["name", "catalog", "size"],
@@ -478,9 +483,9 @@ def main() -> None:
     )
 
     p_extract = sub.add_parser("extract", help="Extract a file, or all files with -a")
-    p_extract.add_argument("image", help="Path to .ssd or .dsd disc image")
+    p_extract.add_argument("image", help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
     p_extract.add_argument("filename", nargs="?",
-                           help="DFS filename, e.g. T.MYPROG or MYPROG")
+                           help="Filename, e.g. T.MYPROG or $.GAMES.ELITE")
     p_extract.add_argument("-a", "--all", action="store_true",
                            help="Extract all files from the disc")
     p_extract.add_argument("-o", "--output",
@@ -493,7 +498,7 @@ def main() -> None:
                            help="Write .inf sidecar files with -a/--all")
 
     p_search = sub.add_parser("search", help="Search BASIC source for a text pattern")
-    p_search.add_argument("image", help="Path to .ssd or .dsd disc image")
+    p_search.add_argument("image", help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
     p_search.add_argument("pattern", help="Text to search for")
     p_search.add_argument("filename", nargs="?",
                           help="Limit search to this file (e.g. T.MYPROG or MYPROG)")

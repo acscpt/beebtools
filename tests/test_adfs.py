@@ -9,10 +9,14 @@ over real .adf/.adl files are parametrized and skip when no images are
 present.
 """
 
+import contextlib
+import io
 import os
 import glob
 import struct
 import pytest
+
+from argparse import Namespace
 
 from beebtools import (
     ADFSEntry,
@@ -29,6 +33,8 @@ from beebtools import (
     looksLikeTokenizedBasic,
     detokenize,
 )
+from beebtools.cli import cmdCat, cmdExtract
+from beebtools.disc import extractAll, search, sanitizeEntryPath
 from beebtools.adfs import (
     ADFS_SECTOR_SIZE,
     ADFS_SECTORS_PER_TRACK,
@@ -531,7 +537,7 @@ class TestDirectoryParsing:
         e = root.entries[0]
         assert e.name == "SUBDIR"
         assert e.locked is True
-        assert e.is_directory is True
+        assert e.isDirectory is True
         assert e.access == 0x0F
 
     def testNameAccessBitsStripped(self):
@@ -960,7 +966,7 @@ class TestRealAdfsImages:
         for side in image.sides:
             cat = side.readCatalogue()
             for entry in cat.entries:
-                if not entry.is_directory:
+                if not entry.isDirectory:
                     data = side.readFile(entry)
                     assert len(data) == entry.length
 
@@ -970,7 +976,7 @@ class TestRealAdfsImages:
         for side in image.sides:
             cat = side.readCatalogue()
             for entry in cat.entries:
-                if entry.isBasic and not entry.is_directory:
+                if entry.isBasic and not entry.isDirectory:
                     data = side.readFile(entry)
                     if len(data) > 0:
                         assert data[0] == 0x0D
@@ -981,8 +987,393 @@ class TestRealAdfsImages:
         for side in image.sides:
             cat = side.readCatalogue()
             for entry in cat.entries:
-                if entry.isBasic and not entry.is_directory:
+                if entry.isBasic and not entry.isDirectory:
                     data = side.readFile(entry)
                     if looksLikeTokenizedBasic(data):
                         for line in detokenize(data):
                             assert line[:5].strip().isdigit()
+
+
+# -----------------------------------------------------------------------
+# sanitizeEntryPath for hierarchical ADFS paths
+# -----------------------------------------------------------------------
+
+class TestSanitizeEntryPath:
+
+    def testFlatDfsDir(self):
+        safe_dir, safe_name = sanitizeEntryPath("$", "MYPROG")
+        assert safe_dir == "$"
+        assert safe_name == "MYPROG"
+
+    def testAdfsRootDir(self):
+        safe_dir, safe_name = sanitizeEntryPath("$", "README")
+        assert safe_dir == "$"
+        assert safe_name == "README"
+
+    def testAdfsNestedPath(self):
+        safe_dir, safe_name = sanitizeEntryPath("$.GAMES", "ELITE")
+        expected_dir = os.path.join("$", "GAMES")
+        assert safe_dir == expected_dir
+        assert safe_name == "ELITE"
+
+    def testAdfsDeeplyNestedPath(self):
+        safe_dir, safe_name = sanitizeEntryPath("$.A.B.C", "FILE")
+        expected_dir = os.path.join("$", "A", "B", "C")
+        assert safe_dir == expected_dir
+        assert safe_name == "FILE"
+
+
+# -----------------------------------------------------------------------
+# CLI: cmdCat with ADFS images
+# -----------------------------------------------------------------------
+
+def _writeAdfsImage(tmp_path, image_data: bytearray, ext: str = ".adf") -> str:
+    """Write synthetic ADFS image data to a temp file and return the path."""
+    path = str(tmp_path / f"test{ext}")
+    with open(path, "wb") as f:
+        f.write(bytes(image_data))
+    return path
+
+
+class TestCmdCatAdfs:
+
+    def _runCat(self, tmp_path, image_data: bytearray, inspect: bool = False) -> str:
+        """Write image, run cmdCat, return captured stdout."""
+        img_path = _writeAdfsImage(tmp_path, image_data)
+        args = Namespace(image=img_path, sort="name", inspect=inspect)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCat(args)
+        return buf.getvalue()
+
+    def testShowsFileEntries(self, tmp_path):
+        image_data = _adfsWithFiles([
+            {"name": "README", "data": b"Hello", "load_addr": 0x1000, "exec_addr": 0x1000},
+        ])
+        output = self._runCat(tmp_path, image_data)
+
+        assert "README" in output
+        assert "00001000" in output
+
+    def testShowsDirType(self, tmp_path):
+        # Create a directory entry (access bit 3 = 0x08).
+        subdir_entry = _makeDirectoryEntry(
+            name="GAMES",
+            start_sector=20,
+            access=0x0F,  # R + W + L + D
+        )
+        # Also need a valid directory at sector 20 so readDirectory succeeds
+        # during the walk. Build a minimal image.
+        image_data = _blankAdfs(
+            total_sectors=1280,
+            root_entries=[subdir_entry],
+        )
+        games_dir = _makeDirectory(
+            name="GAMES",
+            title="Games",
+            parent_sector=ADFS_ROOT_SECTOR,
+            entries=[],
+        )
+        games_offset = 20 * ADFS_SECTOR_SIZE
+        image_data[games_offset:games_offset + ADFS_DIR_LENGTH] = games_dir
+
+        output = self._runCat(tmp_path, image_data)
+
+        assert "GAMES" in output
+        assert "DIR" in output
+
+    def testDynamicColumnWidth(self, tmp_path):
+        # A file with a long hierarchical name should widen the column.
+        subdir_entry = _makeDirectoryEntry(
+            name="LONGDIRNAM",
+            start_sector=20,
+            access=0x0B,  # R + W + D (no lock)
+        )
+        image_data = _blankAdfs(
+            total_sectors=1280,
+            root_entries=[subdir_entry],
+        )
+        
+        # Create child directory with a file.
+        child_file = _makeDirectoryEntry(
+            name="MYFILE",
+            start_sector=25,
+            length=100,
+            load_addr=0x1000,
+            exec_addr=0x1000,
+        )
+        child_dir = _makeDirectory(
+            name="LONGDIRNAM",
+            title="Long",
+            parent_sector=ADFS_ROOT_SECTOR,
+            entries=[child_file],
+        )
+        offset = 20 * ADFS_SECTOR_SIZE
+        image_data[offset:offset + ADFS_DIR_LENGTH] = child_dir
+
+        output = self._runCat(tmp_path, image_data)
+
+        # The long name "$.LONGDIRNAM.MYFILE" (19 chars) should appear.
+        assert "$.LONGDIRNAM.MYFILE" in output
+
+    def testBasicFileShowsBasicType(self, tmp_path):
+        # BASIC file exec address triggers "BASIC" label.
+        basic_data = bytes([
+            0x0D, 0x00, 0x0A, 0x07, 0xF1, 0x0D, 0xFF,
+        ])
+        image_data = _adfsWithFiles([{
+            "name": "MYPROG",
+            "data": basic_data,
+            "load_addr": 0x0E00,
+            "exec_addr": 0x802B,
+        }])
+        output = self._runCat(tmp_path, image_data)
+
+        assert "BASIC" in output
+
+    def testEmptyCatalogueShowsEmpty(self, tmp_path):
+        image_data = _blankAdfs()
+        output = self._runCat(tmp_path, image_data)
+        assert "(empty)" in output
+
+
+# -----------------------------------------------------------------------
+# CLI: cmdExtract with ADFS images
+# -----------------------------------------------------------------------
+
+class TestCmdExtractAdfs:
+
+    def testExtractByFullName(self, tmp_path):
+        test_data = b"file content here"
+        image_data = _adfsWithFiles([
+            {"name": "README", "data": test_data, "load_addr": 0x1000, "exec_addr": 0x1000},
+        ])
+        img_path = _writeAdfsImage(tmp_path, image_data)
+        out_file = str(tmp_path / "out.bin")
+
+        args = Namespace(
+            image=img_path,
+            filename="$.README",
+            output=out_file,
+            pretty=False,
+            all=False,
+            dir=None,
+            inf=False,
+        )
+        cmdExtract(args)
+
+        assert os.path.isfile(out_file)
+        with open(out_file, "rb") as f:
+            assert f.read() == test_data
+
+    def testExtractByBareName(self, tmp_path):
+        test_data = b"bare name match"
+        image_data = _adfsWithFiles([
+            {"name": "MYDATA", "data": test_data, "load_addr": 0x1000, "exec_addr": 0x1000},
+        ])
+        img_path = _writeAdfsImage(tmp_path, image_data)
+        out_file = str(tmp_path / "out.bin")
+
+        args = Namespace(
+            image=img_path,
+            filename="MYDATA",
+            output=out_file,
+            pretty=False,
+            all=False,
+            dir=None,
+            inf=False,
+        )
+        cmdExtract(args)
+
+        assert os.path.isfile(out_file)
+        with open(out_file, "rb") as f:
+            assert f.read() == test_data
+
+    def testExtractBasicDetokenizes(self, tmp_path):
+        basic_data = bytes([
+            0x0D, 0x00, 0x0A, 0x07, 0xF1, 0x0D, 0xFF,
+        ])
+        image_data = _adfsWithFiles([{
+            "name": "MYPROG",
+            "data": basic_data,
+            "load_addr": 0x0E00,
+            "exec_addr": 0x802B,
+        }])
+        img_path = _writeAdfsImage(tmp_path, image_data)
+        out_file = str(tmp_path / "out.bas")
+
+        args = Namespace(
+            image=img_path,
+            filename="$.MYPROG",
+            output=out_file,
+            pretty=False,
+            all=False,
+            dir=None,
+            inf=False,
+        )
+        cmdExtract(args)
+
+        with open(out_file, "r") as f:
+            content = f.read()
+        # Should contain the line number 10 and PRINT.
+        assert "10" in content
+        assert "PRINT" in content
+
+    def testExtractFileNotFound(self, tmp_path):
+        image_data = _adfsWithFiles([
+            {"name": "README", "data": b"data", "load_addr": 0, "exec_addr": 0},
+        ])
+        img_path = _writeAdfsImage(tmp_path, image_data)
+
+        args = Namespace(
+            image=img_path,
+            filename="NOSUCHFILE",
+            output=None,
+            pretty=False,
+            all=False,
+            dir=None,
+            inf=False,
+        )
+        with pytest.raises(SystemExit):
+            cmdExtract(args)
+
+
+# -----------------------------------------------------------------------
+# extractAll with ADFS images
+# -----------------------------------------------------------------------
+
+class TestExtractAllAdfs:
+
+    def testExtractSkipsDirectoryEntries(self, tmp_path):
+        # Create an image with a directory entry and a file entry.
+        subdir_entry = _makeDirectoryEntry(
+            name="GAMES",
+            start_sector=20,
+            access=0x0F,
+        )
+        file_entry = _makeDirectoryEntry(
+            name="README",
+            start_sector=7,
+            length=5,
+        )
+        image_data = _blankAdfs(
+            total_sectors=1280,
+            root_entries=[file_entry, subdir_entry],
+        )
+
+        # Write file data at sector 7.
+        offset = 7 * ADFS_SECTOR_SIZE
+        image_data[offset:offset + 5] = b"hello"
+
+        # Add a valid directory at sector 20.
+        games_dir = _makeDirectory(
+            name="GAMES",
+            title="Games",
+            parent_sector=ADFS_ROOT_SECTOR,
+            entries=[],
+        )
+        games_offset = 20 * ADFS_SECTOR_SIZE
+        image_data[games_offset:games_offset + ADFS_DIR_LENGTH] = games_dir
+
+        img_path = _writeAdfsImage(tmp_path, image_data)
+        out_dir = str(tmp_path / "extracted")
+        results = extractAll(img_path, out_dir)
+
+        # Only the file should be extracted, not the directory entry.
+        assert len(results) == 1
+        assert "README" in results[0]["path"]
+
+    def testExtractHierarchicalLayout(self, tmp_path):
+        # Create an image with a subdirectory containing a file.
+        subdir_entry = _makeDirectoryEntry(
+            name="DATA",
+            start_sector=20,
+            access=0x0B,  # R + W + D
+        )
+        image_data = _blankAdfs(
+            total_sectors=1280,
+            root_entries=[subdir_entry],
+        )
+
+        child_file = _makeDirectoryEntry(
+            name="SCORES",
+            start_sector=25,
+            length=3,
+            load_addr=0x2000,
+            exec_addr=0x2000,
+        )
+        data_dir = _makeDirectory(
+            name="DATA",
+            title="Data",
+            parent_sector=ADFS_ROOT_SECTOR,
+            entries=[child_file],
+        )
+        dir_offset = 20 * ADFS_SECTOR_SIZE
+        image_data[dir_offset:dir_offset + ADFS_DIR_LENGTH] = data_dir
+
+        # Write file data at sector 25.
+        file_offset = 25 * ADFS_SECTOR_SIZE
+        image_data[file_offset:file_offset + 3] = b"xyz"
+
+        img_path = _writeAdfsImage(tmp_path, image_data)
+        out_dir = str(tmp_path / "extracted")
+        results = extractAll(img_path, out_dir)
+
+        # Should extract the child file, skipping the directory entry.
+        file_results = [r for r in results if r["type"] != "DIR"]
+        assert len(file_results) == 1
+
+        # The file should be under the hierarchical path.
+        path = file_results[0]["path"]
+        assert "SCORES" in path
+        assert os.path.isfile(path)
+
+
+# -----------------------------------------------------------------------
+# search with ADFS images
+# -----------------------------------------------------------------------
+
+class TestSearchAdfs:
+
+    def testSearchSkipsDirectoryEntries(self, tmp_path):
+        # Create an image with a directory entry and a BASIC file.
+        basic_data = bytes([
+            0x0D, 0x00, 0x0A, 0x0A, 0xF1, 0x22, 0x48, 0x49, 0x22, 0x0D, 0xFF,
+        ])
+        subdir_entry = _makeDirectoryEntry(
+            name="SUBDIR",
+            start_sector=20,
+            access=0x0F,
+        )
+        file_entry = _makeDirectoryEntry(
+            name="HELLO",
+            start_sector=7,
+            length=len(basic_data),
+            load_addr=0x0E00,
+            exec_addr=0x802B,
+        )
+        image_data = _blankAdfs(
+            total_sectors=1280,
+            root_entries=[file_entry, subdir_entry],
+        )
+
+        # Write BASIC data.
+        offset = 7 * ADFS_SECTOR_SIZE
+        image_data[offset:offset + len(basic_data)] = basic_data
+
+        # Add valid directory at sector 20.
+        sub_dir = _makeDirectory(
+            name="SUBDIR",
+            title="Sub",
+            parent_sector=ADFS_ROOT_SECTOR,
+            entries=[],
+        )
+        sub_offset = 20 * ADFS_SECTOR_SIZE
+        image_data[sub_offset:sub_offset + ADFS_DIR_LENGTH] = sub_dir
+
+        img_path = _writeAdfsImage(tmp_path, image_data)
+        results = search(img_path, "HI")
+
+        # Should find the match in the BASIC file, not crash on the directory.
+        assert len(results) >= 1
+        assert results[0]["filename"] == "$.HELLO"

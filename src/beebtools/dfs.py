@@ -116,6 +116,11 @@ class DFSEntry:
         exec_lo = self.exec_addr & 0xFFFF
         return exec_lo in (0x801F, 0x8023, 0x802B)
 
+    @property
+    def isDirectory(self) -> bool:
+        """Always False for DFS entries. DFS has no subdirectories."""
+        return False
+
 
 @dataclass(frozen=True)
 class DFSCatalogue:

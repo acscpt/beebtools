@@ -18,7 +18,7 @@ All operations that span more than one lower layer belong here.
 
 import os
 import re
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from .dfs import (
     BootOption,
@@ -98,6 +98,26 @@ def sanitizeDfsFilename(dfs_name: str) -> str:
         Safe filename with no extension.
     """
     return _sanitizeForFilesystem(dfs_name)
+
+
+def sanitizeEntryPath(directory: str, name: str) -> Tuple[str, str]:
+    """Sanitize a directory path and filename for filesystem output.
+
+    Handles both flat DFS directories (single character like '$') and
+    hierarchical ADFS paths (e.g. '$.GAMES'). Directory components
+    are split on '.' and each is individually sanitized.
+
+    Args:
+        directory: Directory from a catalogue entry.
+        name:      Filename from the entry.
+
+    Returns:
+        Tuple of (safe_directory_path, safe_filename).
+    """
+    dir_parts = directory.split(".")
+    safe_dir = os.path.join(*[_sanitizeForFilesystem(p) for p in dir_parts])
+    safe_name = _sanitizeForFilesystem(name)
+    return safe_dir, safe_name
 
 
 def resolveOutputPath(
@@ -180,6 +200,10 @@ def search(
         catalogue = disc.readCatalogue()
 
         for entry in catalogue.entries:
+            # Skip directory entries (ADFS directories are containers, not files).
+            if entry.isDirectory:
+                continue
+
             # Scope to a specific file when requested.
             if filename is not None:
                 if entry.fullName != filename and entry.name != filename:
@@ -259,8 +283,11 @@ def extractAll(
         catalogue = disc.readCatalogue()
 
         for entry in catalogue.entries:
-            safe_dir = sanitizeDfsDir(entry.directory)
-            safe_name = sanitizeDfsFilename(entry.name)
+            # Skip directory entries (ADFS directories are containers, not files).
+            if entry.isDirectory:
+                continue
+
+            safe_dir, safe_name = sanitizeEntryPath(entry.directory, entry.name)
             stem = resolveOutputPath(out_dir, disc.side, safe_dir, safe_name, multi_side)
             data = disc.readFile(entry)
 
