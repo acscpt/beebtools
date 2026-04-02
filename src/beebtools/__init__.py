@@ -41,6 +41,7 @@ Usage as a CLI tool:
 Modules:
     tokens        -- BBC BASIC II token table and constants
     detokenize    -- tokenized binary to LIST-style text
+    tokenize      -- LIST-style text to tokenized binary
     pretty        -- operator spacing and anti-listing trap handling
     dfs           -- DFS disc image reader and writer (.ssd and .dsd)
     inf           -- .inf sidecar file parser and formatter
@@ -49,6 +50,7 @@ Modules:
 """
 
 from .detokenize import detokenize, decodeLineRef
+from .tokenize import tokenize, encodeLineRef
 from .pretty import prettyPrint
 from .dfs import (
     DFSEntry,
@@ -76,6 +78,8 @@ from .cli import main
 __all__ = [
     "detokenize",
     "decodeLineRef",
+    "tokenize",
+    "encodeLineRef",
     "prettyPrint",
     # New DFS types
     "DFSEntry",

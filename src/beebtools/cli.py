@@ -15,6 +15,7 @@ from argparse import Namespace
 from typing import Optional
 
 from .detokenize import detokenize
+from .tokenize import tokenize
 from .pretty import prettyPrint
 from .dfs import (
     DFSError,
@@ -359,6 +360,14 @@ def cmdAdd(args: Namespace) -> None:
 
     with open(args.file, "rb") as f:
         data = f.read()
+
+    # When --basic is set and the file is plain text (not already
+    # tokenized binary), retokenize it so the BBC Micro can RUN it.
+    if args.basic and not looksLikeTokenizedBasic(data) and looksLikePlainText(data):
+        text = data.decode("ascii", errors="replace")
+        text_lines = text.splitlines()
+        data = tokenize(text_lines)
+        print(f"Tokenized {args.file} ({len(data)} bytes)", file=sys.stderr)
 
     try:
         entry = side.addFile(
