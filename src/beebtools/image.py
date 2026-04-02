@@ -16,6 +16,7 @@ Supported formats:
 
 from typing import Union
 
+from .adfs import ADFSImage, ADFSFormatError, openAdfsImage
 from .dfs import DFSImage, DFSFormatError, openDiscImage
 
 
@@ -24,22 +25,22 @@ _DFS_EXTENSIONS = {".ssd", ".dsd"}
 _ADFS_EXTENSIONS = {".adf", ".adl"}
 
 
-def openImage(path: str) -> Union[DFSImage]:
+def openImage(path: str) -> Union[DFSImage, ADFSImage]:
     """Open a disc image file, detecting the format automatically.
 
     Format is inferred from the file extension:
         .ssd / .dsd  -- Acorn DFS
-        .adf / .adl  -- Acorn ADFS
+        .adf / .adl  -- Acorn ADFS (old map, small directory)
 
     Args:
         path: Path to a disc image file.
 
     Returns:
-        A DFSImage (or ADFSImage once ADFS support is added).
+        A DFSImage or ADFSImage depending on the detected format.
 
     Raises:
-        DFSFormatError: If the image format cannot be determined or the
-            image is structurally invalid.
+        DFSFormatError: If the image format cannot be determined.
+        ADFSFormatError: If an ADFS image is structurally invalid.
         FileNotFoundError: If the path does not exist.
     """
     ext = _extractExtension(path)
@@ -48,9 +49,7 @@ def openImage(path: str) -> Union[DFSImage]:
         return openDiscImage(path)
 
     if ext in _ADFS_EXTENSIONS:
-        raise DFSFormatError(
-            f"ADFS images ({ext}) are not yet supported"
-        )
+        return openAdfsImage(path)
 
     raise DFSFormatError(
         f"Unrecognised disc image extension '{ext}'. "

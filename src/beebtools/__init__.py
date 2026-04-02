@@ -71,6 +71,17 @@ from .dfs import (
     looksLikeText,
     DFSDisc,
 )
+from .adfs import (
+    ADFSEntry,
+    ADFSCatalogue,
+    ADFSDirectory,
+    ADFSFreeSpaceMap,
+    ADFSImage,
+    ADFSSide,
+    ADFSError,
+    ADFSFormatError,
+    openAdfsImage,
+)
 from .image import openImage
 from .inf import InfData, parseInf, formatInf
 from .disc import search, extractAll, buildImage
@@ -104,6 +115,16 @@ __all__ = [
     "InfData",
     "parseInf",
     "formatInf",
+    # ADFS types
+    "ADFSEntry",
+    "ADFSCatalogue",
+    "ADFSDirectory",
+    "ADFSFreeSpaceMap",
+    "ADFSImage",
+    "ADFSSide",
+    "ADFSError",
+    "ADFSFormatError",
+    "openAdfsImage",
     # Image dispatcher
     "openImage",
     # Orchestration
