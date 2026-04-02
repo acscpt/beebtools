@@ -71,6 +71,7 @@ from .dfs import (
     looksLikeText,
     DFSDisc,
 )
+from .image import openImage
 from .inf import InfData, parseInf, formatInf
 from .disc import search, extractAll, buildImage
 from .cli import main
@@ -103,6 +104,8 @@ __all__ = [
     "InfData",
     "parseInf",
     "formatInf",
+    # Image dispatcher
+    "openImage",
     # Orchestration
     "search",
     "extractAll",

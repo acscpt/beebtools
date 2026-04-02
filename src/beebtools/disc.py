@@ -28,6 +28,7 @@ from .dfs import (
     looksLikePlainText,
     openDiscImage,
 )
+from .image import openImage
 from .detokenize import detokenize
 from .inf import formatInf, parseInf
 from .pretty import prettyPrint
@@ -173,7 +174,7 @@ def search(
 
     results = []
 
-    image = openDiscImage(image_path)
+    image = openImage(image_path)
 
     for disc in image.sides:
         catalogue = disc.readCatalogue()
@@ -249,7 +250,7 @@ def extractAll(
     """
     os.makedirs(out_dir, exist_ok=True)
 
-    image = openDiscImage(image_path)
+    image = openImage(image_path)
     multi_side = len(image.sides) > 1
 
     results = []

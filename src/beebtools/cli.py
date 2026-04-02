@@ -26,6 +26,7 @@ from .dfs import (
     openDiscImage,
     sortCatalogueEntries,
 )
+from .image import openImage
 from .inf import parseInf
 from .disc import search, extractAll, buildImage
 
@@ -66,7 +67,7 @@ def cmdCat(args: Namespace) -> None:
     # Enable colour only when writing to a real terminal.
     use_colour = sys.stdout.isatty()
 
-    sides = openDiscImage(args.image)
+    sides = openImage(args.image)
 
     for disc in sides.sides:
         catalogue = disc.readCatalogue()
@@ -184,7 +185,7 @@ def cmdExtract(args: Namespace) -> None:
         print("Error: filename required unless -a/--all is specified.", file=sys.stderr)
         sys.exit(1)
 
-    sides = openDiscImage(args.image)
+    sides = openImage(args.image)
     target = args.filename
     found = None
 
