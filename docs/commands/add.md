@@ -12,9 +12,11 @@ sidecar file (looked up as `<file>.inf`).
 
 - `-n` / `--name` - DFS name (e.g. `T.MYPROG` or bare `MYPROG` for `$`)
 
-- `--basic` - set BBC BASIC defaults (load=0x1900, exec=0x8023). If `--load`
-  or `--exec` is given alongside `--basic`, the explicit flag overrides that
-  address and a note is printed showing the override. The other address keeps
+- `--basic` - set BBC BASIC defaults (load=0x1900, exec=0x8023). If the input
+  file is plain text (e.g. a `.bas` file from `extract`), it is automatically
+  retokenized to BBC BASIC II binary before being added to the disc image. If
+  `--load` or `--exec` is given alongside `--basic`, the explicit flag overrides
+  that address and a note is printed showing the override. The other address keeps
   the BASIC default. Ignored with a warning when `--inf` is used.
 
 - `--load` - load address in hex (default: 0, overrides `--basic`)

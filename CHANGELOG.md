@@ -9,6 +9,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- BBC BASIC II tokenizer (`tokenize.py`): converts LIST-style plain text back
+  to tokenized binary - the inverse of the detokenizer. `tokenize()` and
+  `encodeLineRef()` are exported from the public API.
+
+- `beebtools add --basic` now auto-tokenizes plain-text BASIC files before adding
+  them to a disc image, enabling a full detokenize-edit-retokenize workflow.
+
 - `--basic` flag for `beebtools add`: sets BBC BASIC default addresses
   (load=0x1900, exec=0x8023) without needing to specify them manually.
   Explicit `--load` or `--exec` flags override the corresponding default

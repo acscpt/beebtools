@@ -70,6 +70,9 @@ For BASIC files, `beebtools` does three things in sequence:
 
 - Detokenize BBC BASIC II programs to `LIST`-style plain text
 
+- Retokenize plain-text BASIC back to binary - enabling a full
+  detokenize-edit-retokenize workflow
+
 - Pretty-printer: add operator spacing to make terse BASIC readable
 
 - Anti-listing trap detection: neutralise copy-protection `*|` traps
@@ -173,7 +176,7 @@ spacing rules and anti-listing trap handling.
 ## Using as a library
 
 ```python
-from beebtools import openDiscImage, detokenize, prettyPrint
+from beebtools import openDiscImage, detokenize, tokenize, prettyPrint
 
 image = openDiscImage("mydisc.dsd")
 for side in image.sides:
@@ -183,6 +186,10 @@ for side in image.sides:
             data = side.readFile(entry)
             lines = prettyPrint(detokenize(data))
             print("\n".join(lines))
+
+# Retokenize edited plain text back to binary
+edited_lines = ["   10PRINT\"HELLO\"", "   20END"]
+binary = tokenize(edited_lines)
 ```
 
 See [docs/library.md](https://github.com/acscpt/beebtools/blob/main/docs/library.md) for creating disc images, building from
