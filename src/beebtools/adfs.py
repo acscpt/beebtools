@@ -476,7 +476,10 @@ class ADFSSide:
         sec1[0xFC] = (fsm.disc_id >> 8) & 0xFF
 
         # Boot option (sector 1, offset 0xFD).
-        sec1[0xFD] = fsm.boot_option.value & 0x03
+        boot_val = (fsm.boot_option.value
+                    if isinstance(fsm.boot_option, BootOption)
+                    else int(fsm.boot_option))
+        sec1[0xFD] = boot_val & 0x03
 
         # End-of-list pointer (sector 1, offset 0xFE).
         sec1[0xFE] = len(fsm.blocks) * 3

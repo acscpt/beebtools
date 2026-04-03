@@ -598,3 +598,437 @@ class TestCmdBuild:
         image = openDiscImage(out)
         cat = image.sides[0].readCatalogue()
         assert any(e.fullName == "$.BOOT" for e in cat.entries)
+
+
+# =======================================================================
+# ADFS CLI commands
+# =======================================================================
+
+from beebtools.adfs import (
+    openAdfsImage,
+    createAdfsImage,
+    ADFSError,
+    ADFS_S_SECTORS,
+    ADFS_M_SECTORS,
+    ADFS_L_SECTORS,
+)
+from beebtools.disc import buildAdfsImage
+
+
+class TestCmdCreateAdfs:
+
+    def testCreateAdf80Track(self, tmp_path) -> None:
+        """Create a blank 80-track ADF image (320K)."""
+        out = str(tmp_path / "blank.adf")
+        args = Namespace(output=out, tracks=80, title="TESTADFS", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        assert os.path.isfile(out)
+        assert os.path.getsize(out) == ADFS_M_SECTORS * 256
+        assert "320K ADF" in buf.getvalue()
+
+    def testCreateAdf40Track(self, tmp_path) -> None:
+        """Create a blank 40-track ADF image (160K)."""
+        out = str(tmp_path / "small.adf")
+        args = Namespace(output=out, tracks=40, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        assert os.path.getsize(out) == ADFS_S_SECTORS * 256
+        assert "160K ADF" in buf.getvalue()
+
+    def testCreateAdl(self, tmp_path) -> None:
+        """Create a blank ADL image (640K)."""
+        out = str(tmp_path / "big.adl")
+        args = Namespace(output=out, tracks=80, title="BIGDISC", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        assert os.path.getsize(out) == ADFS_L_SECTORS * 256
+        assert "640K ADL" in buf.getvalue()
+
+    def testCreateAdfWithTitle(self, tmp_path) -> None:
+        """Disc title is written to the root directory."""
+        out = str(tmp_path / "titled.adf")
+        args = Namespace(output=out, tracks=80, title="MYADFS", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        image = openAdfsImage(out)
+        cat = image.sides[0].readCatalogue()
+        assert cat.title == "MYADFS"
+
+    def testCreateAdfWithBootOption(self, tmp_path) -> None:
+        """Boot option is written to the free space map."""
+        out = str(tmp_path / "boot.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=3)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        image = openAdfsImage(out)
+        cat = image.sides[0].readCatalogue()
+        assert cat.boot_option == 3
+
+
+class TestCmdAddAdfs:
+
+    def _createBlankAdf(self, tmp_path) -> str:
+        """Create a blank 80-track ADF and return its path."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        return out
+
+    def testAddFileByName(self, tmp_path) -> None:
+        """Add a file using --name to an ADFS image."""
+        img = self._createBlankAdf(tmp_path)
+
+        # Write a data file to add.
+        data_path = str(tmp_path / "mydata.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\x00" * 100)
+
+        args = Namespace(
+            image=img, file=data_path, name="$.MYFILE",
+            load="1000", exec_addr="2000", basic=False,
+            locked=False, inf=False, side=0,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        assert "Added $.MYFILE" in buf.getvalue()
+
+        # Verify the file appears in the catalogue.
+        image = openAdfsImage(img)
+        cat = image.sides[0].readCatalogue()
+        names = [e.fullName for e in cat.entries]
+        assert "$.MYFILE" in names
+
+    def testAddFileByNameNoDollarPrefix(self, tmp_path) -> None:
+        """A bare name without $. gets the root prefix added."""
+        img = self._createBlankAdf(tmp_path)
+
+        data_path = str(tmp_path / "bare.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\xFF" * 50)
+
+        args = Namespace(
+            image=img, file=data_path, name="BARE",
+            load=None, exec_addr=None, basic=False,
+            locked=False, inf=False, side=0,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        assert "Added $.BARE" in buf.getvalue()
+
+    def testAddFileWithInf(self, tmp_path) -> None:
+        """Add a file using --inf to read metadata from a sidecar."""
+        img = self._createBlankAdf(tmp_path)
+
+        data_path = str(tmp_path / "PROG.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\xAB" * 200)
+
+        # Write the .inf sidecar.
+        inf_path = data_path + ".inf"
+        with open(inf_path, "w") as f:
+            f.write(formatInf("$", "PROG", 0x1900, 0x8023, 200) + "\n")
+
+        args = Namespace(
+            image=img, file=data_path, name=None,
+            load=None, exec_addr=None, basic=False,
+            locked=False, inf=True, side=0,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        assert "Added $.PROG" in buf.getvalue()
+
+        # Verify metadata is correct.
+        image = openAdfsImage(img)
+        cat = image.sides[0].readCatalogue()
+        entry = [e for e in cat.entries if e.name == "PROG"][0]
+        assert entry.load_addr == 0x1900
+        assert entry.exec_addr == 0x8023
+
+    def testAddReadBack(self, tmp_path) -> None:
+        """Data written by add can be read back identically."""
+        img = self._createBlankAdf(tmp_path)
+
+        payload = bytes(range(256)) * 4
+        data_path = str(tmp_path / "data.bin")
+        with open(data_path, "wb") as f:
+            f.write(payload)
+
+        args = Namespace(
+            image=img, file=data_path, name="$.DATA",
+            load="0", exec_addr="0", basic=False,
+            locked=False, inf=False, side=0,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        # Read back the file and verify contents.
+        image = openAdfsImage(img)
+        side = image.sides[0]
+        cat = side.readCatalogue()
+        entry = [e for e in cat.entries if e.name == "DATA"][0]
+        read_back = side.readFile(entry)
+        assert read_back == payload
+
+    def testAddLockedFile(self, tmp_path) -> None:
+        """Adding a file with --locked sets the lock bit."""
+        img = self._createBlankAdf(tmp_path)
+
+        data_path = str(tmp_path / "locked.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\x00" * 10)
+
+        args = Namespace(
+            image=img, file=data_path, name="$.LOCKED",
+            load=None, exec_addr=None, basic=False,
+            locked=True, inf=False, side=0,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        image = openAdfsImage(img)
+        cat = image.sides[0].readCatalogue()
+        entry = [e for e in cat.entries if e.name == "LOCKED"][0]
+        assert entry.locked
+
+
+class TestCmdDeleteAdfs:
+
+    def _createImageWithFile(self, tmp_path) -> str:
+        """Create an ADFS image with one file and return its path."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "victim.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\x00" * 100)
+
+        args = Namespace(
+            image=out, file=data_path, name="$.VICTIM",
+            load="0", exec_addr="0", basic=False,
+            locked=False, inf=False, side=0,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        return out
+
+    def testDeleteFile(self, tmp_path) -> None:
+        """Delete a file from an ADFS image."""
+        img = self._createImageWithFile(tmp_path)
+
+        args = Namespace(image=img, filename="$.VICTIM", side=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdDelete(args)
+
+        assert "Deleted $.VICTIM" in buf.getvalue()
+
+        # Verify the file is gone.
+        image = openAdfsImage(img)
+        cat = image.sides[0].readCatalogue()
+        names = [e.fullName for e in cat.entries]
+        assert "$.VICTIM" not in names
+
+    def testDeleteBareNameGetsDollarPrefix(self, tmp_path) -> None:
+        """A bare name without $. gets the root prefix added."""
+        img = self._createImageWithFile(tmp_path)
+
+        args = Namespace(image=img, filename="VICTIM", side=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdDelete(args)
+
+        assert "Deleted $.VICTIM" in buf.getvalue()
+
+    def testDeleteNonExistentFileExits(self, tmp_path) -> None:
+        """Deleting a non-existent file prints an error and exits."""
+        img = self._createImageWithFile(tmp_path)
+
+        args = Namespace(image=img, filename="$.NOPE", side=0)
+
+        with pytest.raises(SystemExit):
+            cmdDelete(args)
+
+
+class TestBuildAdfsImage:
+
+    def testBuildRoundTrip(self, tmp_path) -> None:
+        """Build an ADFS image from a directory tree and verify the catalogue."""
+        src = str(tmp_path / "src")
+        d = os.path.join(src, "$")
+        os.makedirs(d)
+
+        # Create a file with .inf sidecar.
+        with open(os.path.join(d, "HELLO.txt"), "wb") as f:
+            f.write(b"Hello BBC\r")
+        with open(os.path.join(d, "HELLO.txt.inf"), "w") as f:
+            f.write(formatInf("$", "HELLO", 0, 0, 10) + "\n")
+
+        image_bytes = buildAdfsImage(source_dir=src, title="ROUNDTRIP")
+
+        # Write and read back.
+        out = str(tmp_path / "built.adf")
+        with open(out, "wb") as f:
+            f.write(image_bytes)
+
+        image = openAdfsImage(out)
+        cat = image.sides[0].readCatalogue()
+        names = [e.fullName for e in cat.entries]
+        assert "$.HELLO" in names
+
+    def testBuildWithSubdirectory(self, tmp_path) -> None:
+        """Build an ADFS image with a subdirectory creates the directory."""
+        src = str(tmp_path / "src")
+        subdir = os.path.join(src, "$", "GAMES")
+        os.makedirs(subdir)
+
+        with open(os.path.join(subdir, "ELITE.bin"), "wb") as f:
+            f.write(b"\xFF" * 300)
+        with open(os.path.join(subdir, "ELITE.bin.inf"), "w") as f:
+            f.write(formatInf("$", "GAMES.ELITE", 0x1000, 0x2000, 300) + "\n")
+
+        image_bytes = buildAdfsImage(source_dir=src, title="GAMES")
+
+        out = str(tmp_path / "games.adf")
+        with open(out, "wb") as f:
+            f.write(image_bytes)
+
+        image = openAdfsImage(out)
+        cat = image.sides[0].readCatalogue()
+
+        # The GAMES directory entry should exist.
+        dir_names = [e.name for e in cat.entries if e.isDirectory]
+        assert "GAMES" in dir_names
+
+    def testBuildEmptyDir(self, tmp_path) -> None:
+        """Building from an empty $ directory produces a valid image."""
+        src = str(tmp_path / "src")
+        os.makedirs(os.path.join(src, "$"))
+
+        image_bytes = buildAdfsImage(source_dir=src)
+
+        out = str(tmp_path / "empty.adf")
+        with open(out, "wb") as f:
+            f.write(image_bytes)
+
+        # Should be openable and have an empty catalogue.
+        image = openAdfsImage(out)
+        cat = image.sides[0].readCatalogue()
+        assert len(cat.entries) == 0
+
+    def testBuildSkipsFilesWithoutInf(self, tmp_path) -> None:
+        """Files without .inf sidecars are skipped with a warning."""
+        src = str(tmp_path / "src")
+        d = os.path.join(src, "$")
+        os.makedirs(d)
+
+        # File without .inf sidecar.
+        with open(os.path.join(d, "ORPHAN.bin"), "wb") as f:
+            f.write(b"\x00" * 50)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            image_bytes = buildAdfsImage(source_dir=src)
+
+        assert "Warning" in buf.getvalue()
+        assert "skipping" in buf.getvalue()
+
+        # Image should still be valid with no files.
+        out = str(tmp_path / "skip.adf")
+        with open(out, "wb") as f:
+            f.write(image_bytes)
+
+        image = openAdfsImage(out)
+        cat = image.sides[0].readCatalogue()
+        assert len(cat.entries) == 0
+
+
+class TestCmdBuildAdfs:
+
+    def testBuildCommandCreatesAdf(self, tmp_path) -> None:
+        """The build CLI command produces a valid ADFS image."""
+        src = str(tmp_path / "src")
+        d = os.path.join(src, "$")
+        os.makedirs(d)
+
+        with open(os.path.join(d, "BOOT.txt"), "wb") as f:
+            f.write(b"*RUN GAME\r")
+        with open(os.path.join(d, "BOOT.txt.inf"), "w") as f:
+            f.write(formatInf("$", "BOOT", 0, 0, 10) + "\n")
+
+        out = str(tmp_path / "result.adf")
+        args = Namespace(dir=src, output=out, tracks=80, title="CLI", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdBuild(args)
+
+        assert os.path.isfile(out)
+        assert "320K ADF" in buf.getvalue()
+
+        image = openAdfsImage(out)
+        cat = image.sides[0].readCatalogue()
+        assert any(e.fullName == "$.BOOT" for e in cat.entries)
+
+    def testBuildCommandCreatesAdl(self, tmp_path) -> None:
+        """The build CLI command produces a valid ADL image."""
+        src = str(tmp_path / "src")
+        d = os.path.join(src, "$")
+        os.makedirs(d)
+
+        with open(os.path.join(d, "DATA.bin"), "wb") as f:
+            f.write(b"\xAA" * 50)
+        with open(os.path.join(d, "DATA.bin.inf"), "w") as f:
+            f.write(formatInf("$", "DATA", 0, 0, 50) + "\n")
+
+        out = str(tmp_path / "result.adl")
+        args = Namespace(dir=src, output=out, tracks=80, title="BIG", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdBuild(args)
+
+        assert os.path.isfile(out)
+        assert "640K ADL" in buf.getvalue()
+        assert os.path.getsize(out) == ADFS_L_SECTORS * 256

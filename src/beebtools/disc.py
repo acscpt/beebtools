@@ -28,6 +28,13 @@ from .dfs import (
     looksLikePlainText,
     openDiscImage,
 )
+from .adfs import (
+    ADFSError,
+    createAdfsImage,
+    ADFS_S_SECTORS,
+    ADFS_M_SECTORS,
+    ADFS_L_SECTORS,
+)
 from .image import openImage
 from .detokenize import detokenize
 from .inf import formatInf, parseInf
@@ -458,3 +465,111 @@ def _addFilesFromDir(side: "DFSSide", side_path: str) -> None:
                 exec_addr=inf.exec_addr,
                 locked=inf.locked,
             )
+
+
+# -----------------------------------------------------------------------
+# ADFS image building
+# -----------------------------------------------------------------------
+
+def buildAdfsImage(
+    source_dir: str,
+    total_sectors: int = ADFS_M_SECTORS,
+    title: str = "",
+    boot_option: BootOption = BootOption.OFF,
+) -> bytes:
+    """Build an ADFS disc image from a directory tree with .inf sidecars.
+
+    The source directory is expected to follow the layout produced by
+    extractAll: a '$' subdirectory at the top level containing the ADFS
+    file hierarchy, with each data file accompanied by a .inf sidecar.
+
+    Subdirectories in the file tree are created as ADFS directories on
+    the image. Files without a .inf sidecar are skipped with a warning.
+
+    Args:
+        source_dir:    Path to the root directory of extracted files.
+        total_sectors: Image size in sectors (ADFS_S/M/L_SECTORS).
+        title:         Disc title for the root directory.
+        boot_option:   Boot option (0-3).
+
+    Returns:
+        The assembled disc image as bytes, ready to write to a file.
+
+    Raises:
+        ADFSError: If a file cannot be added (name conflict, disc full, etc.).
+    """
+    image = createAdfsImage(
+        total_sectors=total_sectors,
+        title=title,
+        boot_option=boot_option,
+    )
+
+    side = image.sides[0]
+
+    # The extractAll layout puts everything under a '$' directory.
+    root_path = os.path.join(source_dir, "$")
+    _walkAdfsTree(side, root_path, "$")
+
+    return image.serialize()
+
+
+def _walkAdfsTree(side: "ADFSSide", fs_dir: str, adfs_parent: str) -> None:
+    """Recursively add files and directories from the filesystem to an ADFS image.
+
+    Creates ADFS subdirectories as they are encountered, then adds
+    files using metadata from their .inf sidecars.
+
+    Args:
+        side:        ADFSSide to add files and directories to.
+        fs_dir:      Filesystem directory to walk.
+        adfs_parent: ADFS path of the parent directory (e.g. '$').
+    """
+    import sys
+
+    if not os.path.isdir(fs_dir):
+        return
+
+    for entry in sorted(os.listdir(fs_dir)):
+        # Skip .inf sidecar files - they are read alongside their data file.
+        if entry.endswith(".inf"):
+            continue
+
+        entry_path = os.path.join(fs_dir, entry)
+
+        if os.path.isdir(entry_path):
+            # Create the ADFS subdirectory and recurse into it.
+            adfs_path = f"{adfs_parent}.{entry}"
+            side.mkdir(adfs_path)
+            _walkAdfsTree(side, entry_path, adfs_path)
+            continue
+
+        if not os.path.isfile(entry_path):
+            continue
+
+        inf_path = entry_path + ".inf"
+
+        if not os.path.isfile(inf_path):
+            print(
+                f"Warning: no .inf sidecar for {entry_path}, skipping",
+                file=sys.stderr,
+            )
+            continue
+
+        # Read the .inf sidecar for ADFS metadata.
+        with open(inf_path, "r", encoding="ascii") as f:
+            inf_line = f.readline().strip()
+
+        inf = parseInf(inf_line)
+
+        # Read the data file.
+        with open(entry_path, "rb") as f:
+            data = f.read()
+
+        # Use the full ADFS path from the .inf sidecar.
+        side.addFile(
+            path=inf.fullName,
+            data=data,
+            load_addr=inf.load_addr,
+            exec_addr=inf.exec_addr,
+            locked=inf.locked,
+        )
