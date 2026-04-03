@@ -166,20 +166,17 @@ def _extractCoverage(config: Any) -> Optional[List[Tuple[str, int, int, int]]]:
 
 
 def _statusBadge(outcome: str) -> str:
-    """Return a compact, color-coded badge for markdown/HTML renderers."""
+    """Return a shields.io image badge for the test outcome."""
     labels = {
-        "passed": ("PASS", "#2ea043"),
-        "failed": ("FAIL", "#cf222e"),
-        "skipped": ("SKIP", "#9a6700"),
-        "error": ("ERROR", "#a40e26"),
-        "xfailed": ("XFAIL", "#8250df"),
-        "xpassed": ("XPASS", "#0a7ea4"),
+        "passed": ("PASS", "2ea043"),
+        "failed": ("FAIL", "cf222e"),
+        "skipped": ("SKIP", "9a6700"),
+        "error": ("ERROR", "a40e26"),
+        "xfailed": ("XFAIL", "8250df"),
+        "xpassed": ("XPASS", "0a7ea4"),
     }
-    label, color = labels.get(outcome, (outcome.upper(), "#57606a"))
-    return (
-        f"<span style=\"color:#fff;background:{color};"
-        f"padding:2px 6px;border-radius:4px;font-size:12px;\">{label}</span>"
-    )
+    label, color = labels.get(outcome, (outcome.upper(), "57606a"))
+    return f"![{label}](https://img.shields.io/badge/{label}-{color})"
 
 
 def _coverageBar(pct: int) -> str:
