@@ -194,6 +194,23 @@ def _decodeString(data: bytes) -> str:
     return "".join(chars)
 
 
+def _encodeString(text: str, length: int) -> bytes:
+    """Encode a string into a fixed-length field padded with 0x0D.
+
+    Truncates to length if the text is too long. Used for directory
+    name, title, and footer string fields.
+    """
+    buf = bytearray(length)
+
+    for i in range(length):
+        if i < len(text):
+            buf[i] = ord(text[i]) & 0x7F
+        else:
+            buf[i] = 0x0D
+
+    return bytes(buf)
+
+
 def _read24le(data: bytes, offset: int) -> int:
     """Read a 24-bit little-endian unsigned integer."""
     return data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16)
@@ -207,6 +224,63 @@ def _read32le(data: bytes, offset: int) -> int:
         | (data[offset + 2] << 16)
         | (data[offset + 3] << 24)
     )
+
+
+def _write24le(buf: bytearray, offset: int, value: int) -> None:
+    """Write a 24-bit little-endian unsigned integer into buf."""
+    buf[offset] = value & 0xFF
+    buf[offset + 1] = (value >> 8) & 0xFF
+    buf[offset + 2] = (value >> 16) & 0xFF
+
+
+def _write32le(buf: bytearray, offset: int, value: int) -> None:
+    """Write a 32-bit little-endian unsigned integer into buf."""
+    buf[offset] = value & 0xFF
+    buf[offset + 1] = (value >> 8) & 0xFF
+    buf[offset + 2] = (value >> 16) & 0xFF
+    buf[offset + 3] = (value >> 24) & 0xFF
+
+
+def _encodeEntryName(name: str, access: int) -> bytes:
+    """Encode a 10-byte ADFS entry name field with access bits in bit 7.
+
+    The name is padded with 0x0D terminators if shorter than 10 chars.
+    Access bits are ORed into bit 7 of each byte position: bit 0 = R,
+    bit 1 = W, bit 2 = L, bit 3 = D, etc.
+    """
+    buf = bytearray(10)
+
+    for i in range(10):
+        if i < len(name):
+            buf[i] = ord(name[i]) & 0x7F
+        else:
+            buf[i] = 0x0D
+
+        # OR in the access bit for this byte position.
+        if access & (1 << i):
+            buf[i] |= 0x80
+
+    return bytes(buf)
+
+
+def _encodeEntry(entry: ADFSEntry) -> bytes:
+    """Encode one ADFSEntry into its 26-byte on-disc representation.
+
+    Produces the exact byte layout expected in a Hugo directory block:
+    bytes 0-9 are the name with access bits, 10-13 load address,
+    14-17 exec address, 18-21 length, 22-24 start sector, 25 sequence.
+    """
+    buf = bytearray(ADFS_ENTRY_SIZE)
+
+    buf[0:10] = _encodeEntryName(entry.name, entry.access)
+
+    _write32le(buf, 0x0A, entry.load_addr)
+    _write32le(buf, 0x0E, entry.exec_addr)
+    _write32le(buf, 0x12, entry.length)
+    _write24le(buf, 0x16, entry.start_sector)
+    buf[0x19] = entry.sequence
+
+    return bytes(buf)
 
 
 # -----------------------------------------------------------------------
@@ -275,6 +349,36 @@ class ADFSSide:
             )
 
         return bytes(self._image.data[offset:end])
+
+    def _writeSector(self, sector_num: int, data: bytes) -> None:
+        """Write one 256-byte sector to the backing store."""
+        offset = self._sectorOffset(sector_num)
+        end = offset + ADFS_SECTOR_SIZE
+
+        if end > len(self._image.data):
+            raise ADFSError(
+                f"Sector {sector_num} at offset {offset} extends beyond "
+                f"the image ({len(self._image.data)} bytes)"
+            )
+
+        self._image.data[offset:end] = data[:ADFS_SECTOR_SIZE]
+
+    def _writeSectors(self, start_sector: int, data: bytes) -> None:
+        """Write a contiguous block of sectors to the backing store.
+
+        The data length must be a multiple of 256 bytes.
+        """
+        count = len(data) // ADFS_SECTOR_SIZE
+        offset = self._sectorOffset(start_sector)
+        end = offset + count * ADFS_SECTOR_SIZE
+
+        if end > len(self._image.data):
+            raise ADFSError(
+                f"Sectors {start_sector}-{start_sector + count - 1} "
+                f"extend beyond the image ({len(self._image.data)} bytes)"
+            )
+
+        self._image.data[offset:end] = data[:count * ADFS_SECTOR_SIZE]
 
     # -------------------------------------------------------------------
     # Free space map

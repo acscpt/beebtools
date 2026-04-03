@@ -45,8 +45,13 @@ from beebtools.adfs import (
     ADFS_HUGO_MAGIC,
     _adfsChecksum,
     _decodeString,
+    _encodeString,
     _read24le,
     _read32le,
+    _write24le,
+    _write32le,
+    _encodeEntryName,
+    _encodeEntry,
 )
 
 
@@ -59,19 +64,9 @@ def _computeChecksum(sector: bytearray) -> int:
     return _adfsChecksum(bytes(sector))
 
 
-def _write24le(buf: bytearray, offset: int, value: int) -> None:
-    """Write a 24-bit little-endian integer into buf."""
-    buf[offset] = value & 0xFF
-    buf[offset + 1] = (value >> 8) & 0xFF
-    buf[offset + 2] = (value >> 16) & 0xFF
-
-
-def _write32le(buf: bytearray, offset: int, value: int) -> None:
-    """Write a 32-bit little-endian integer into buf."""
-    buf[offset] = value & 0xFF
-    buf[offset + 1] = (value >> 8) & 0xFF
-    buf[offset + 2] = (value >> 16) & 0xFF
-    buf[offset + 3] = (value >> 24) & 0xFF
+def _encodeAdfsEntryName(name: str, access: int) -> bytes:
+    """Thin wrapper for backward compatibility with existing test code."""
+    return _encodeEntryName(name, access)
 
 
 def _blankFreeSpaceMap(
@@ -116,27 +111,6 @@ def _blankFreeSpaceMap(
     sec1[0xFF] = _computeChecksum(sec1)
 
     return sec0 + sec1
-
-
-def _encodeAdfsEntryName(name: str, access: int) -> bytes:
-    """Encode a 10-byte ADFS entry name field with access bits in bit 7.
-
-    The name is padded with 0x0D terminators if shorter than 10 chars.
-    Access bits are ORed into bit 7 of each byte position.
-    """
-    raw = bytearray(10)
-
-    for i in range(10):
-        if i < len(name):
-            raw[i] = ord(name[i]) & 0x7F
-        else:
-            raw[i] = 0x0D
-
-        # OR in access bit for this position.
-        if access & (1 << i):
-            raw[i] |= 0x80
-
-    return bytes(raw)
 
 
 def _makeDirectoryEntry(
@@ -360,6 +334,250 @@ class TestIntReaders:
     def testRead32le(self):
         data = bytes([0x78, 0x56, 0x34, 0x12])
         assert _read32le(data, 0) == 0x12345678
+
+
+# -----------------------------------------------------------------------
+# Integer writer tests
+# -----------------------------------------------------------------------
+
+class TestIntWriters:
+
+    def testWrite24leRoundTrip(self):
+        buf = bytearray(8)
+        _write24le(buf, 2, 0x123456)
+        assert _read24le(buf, 2) == 0x123456
+
+    def testWrite32leRoundTrip(self):
+        buf = bytearray(8)
+        _write32le(buf, 1, 0x12345678)
+        assert _read32le(buf, 1) == 0x12345678
+
+    def testWrite24leZero(self):
+        buf = bytearray(4)
+        _write24le(buf, 0, 0)
+        assert buf[0:3] == b"\x00\x00\x00"
+
+    def testWrite32leZero(self):
+        buf = bytearray(4)
+        _write32le(buf, 0, 0)
+        assert buf == b"\x00\x00\x00\x00"
+
+    def testWrite24leMaxValue(self):
+        buf = bytearray(3)
+        _write24le(buf, 0, 0xFFFFFF)
+        assert buf == b"\xFF\xFF\xFF"
+
+    def testWrite32leMaxValue(self):
+        buf = bytearray(4)
+        _write32le(buf, 0, 0xFFFFFFFF)
+        assert buf == b"\xFF\xFF\xFF\xFF"
+
+
+# -----------------------------------------------------------------------
+# String encoding tests
+# -----------------------------------------------------------------------
+
+class TestEncodeString:
+
+    def testSimpleRoundTrip(self):
+        encoded = _encodeString("HELLO", 10)
+        assert _decodeString(encoded) == "HELLO"
+
+    def testPaddedWith0x0D(self):
+        encoded = _encodeString("AB", 5)
+        assert encoded == bytes([0x41, 0x42, 0x0D, 0x0D, 0x0D])
+
+    def testFullLengthNoPadding(self):
+        encoded = _encodeString("ABCDEFGHIJ", 10)
+        assert _decodeString(encoded) == "ABCDEFGHIJ"
+
+    def testEmptyString(self):
+        encoded = _encodeString("", 5)
+        assert encoded == bytes([0x0D] * 5)
+
+    def testTruncatesToLength(self):
+        encoded = _encodeString("TOOLONGNAME", 5)
+        assert len(encoded) == 5
+        assert _decodeString(encoded) == "TOOLO"
+
+
+# -----------------------------------------------------------------------
+# Entry name encoding tests
+# -----------------------------------------------------------------------
+
+class TestEncodeEntryName:
+
+    def testSimpleNameNoAccess(self):
+        encoded = _encodeEntryName("TEST", 0x00)
+        # Characters should be plain ASCII, remainder padded with 0x0D.
+        assert encoded[0] == ord("T")
+        assert encoded[3] == ord("T")
+        assert encoded[4] == 0x0D
+
+    def testAccessBitsInBit7(self):
+        # Access 0x03 sets bits 0 (R) and 1 (W).
+        encoded = _encodeEntryName("AB", 0x03)
+        assert encoded[0] == ord("A") | 0x80  # bit 0 set
+        assert encoded[1] == ord("B") | 0x80  # bit 1 set
+        assert encoded[2] == 0x0D             # no access bit 2
+
+    def testRoundTripWithParseEntry(self):
+        # Build a full 26-byte entry and verify _parseEntry recovers it.
+        entry = ADFSEntry(
+            name="MYFILE",
+            directory="$",
+            load_addr=0x1900,
+            exec_addr=0x8023,
+            length=0x1234,
+            start_sector=0x07,
+            locked=True,
+            is_directory=False,
+            access=0x07,  # R + W + L
+            sequence=0x42,
+        )
+
+        raw = _encodeEntry(entry)
+        assert len(raw) == ADFS_ENTRY_SIZE
+
+        # Place in a buffer and parse.
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+        parsed = side._parseEntry(raw, 0)
+
+        assert parsed.name == "MYFILE"
+        assert parsed.load_addr == 0x1900
+        assert parsed.exec_addr == 0x8023
+        assert parsed.length == 0x1234
+        assert parsed.start_sector == 0x07
+        assert parsed.locked is True
+        assert parsed.is_directory is False
+        assert parsed.access == 0x07
+        assert parsed.sequence == 0x42
+
+    def testFullLengthName(self):
+        encoded = _encodeEntryName("ABCDEFGHIJ", 0x00)
+        name = ""
+        for i in range(10):
+            ch = encoded[i] & 0x7F
+            if ch == 0x0D:
+                break
+            name += chr(ch)
+        assert name == "ABCDEFGHIJ"
+
+    def testDirectoryAccessBits(self):
+        # Directory entries have 'D' bit (bit 3) plus R, W, L.
+        encoded = _encodeEntryName("GAMES", 0x0F)
+        # Bits 0,1,2,3 should all be set in first 4 byte positions.
+        for i in range(4):
+            assert encoded[i] & 0x80 != 0
+        assert encoded[4] & 0x80 == 0  # bit 4 not set
+
+
+# -----------------------------------------------------------------------
+# Entry encoding tests
+# -----------------------------------------------------------------------
+
+class TestEncodeEntry:
+
+    def testBasicFieldsEncoded(self):
+        entry = ADFSEntry(
+            name="DATA",
+            directory="$",
+            load_addr=0x2000,
+            exec_addr=0x3000,
+            length=0x100,
+            start_sector=7,
+            locked=False,
+            is_directory=False,
+            access=0x03,
+            sequence=0,
+        )
+
+        raw = _encodeEntry(entry)
+        assert len(raw) == ADFS_ENTRY_SIZE
+        assert _read32le(raw, 0x0A) == 0x2000
+        assert _read32le(raw, 0x0E) == 0x3000
+        assert _read32le(raw, 0x12) == 0x100
+        assert _read24le(raw, 0x16) == 7
+
+    def testZeroLengthFile(self):
+        entry = ADFSEntry(
+            name="EMPTY",
+            directory="$",
+            load_addr=0,
+            exec_addr=0,
+            length=0,
+            start_sector=0,
+            locked=False,
+            is_directory=False,
+            access=0x03,
+            sequence=0,
+        )
+
+        raw = _encodeEntry(entry)
+        assert _read32le(raw, 0x12) == 0
+
+    def testLockedFileAccess(self):
+        entry = ADFSEntry(
+            name="SECRET",
+            directory="$",
+            load_addr=0,
+            exec_addr=0,
+            length=100,
+            start_sector=10,
+            locked=True,
+            is_directory=False,
+            access=0x07,  # R + W + L
+            sequence=0,
+        )
+
+        raw = _encodeEntry(entry)
+        # Bit 2 (L) should be set in byte 2's high bit.
+        assert raw[2] & 0x80 != 0
+
+
+# -----------------------------------------------------------------------
+# Sector write tests
+# -----------------------------------------------------------------------
+
+class TestSectorWrite:
+
+    def testWriteSectorReadBack(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Write a pattern to sector 10.
+        pattern = bytes(range(256))
+        side._writeSector(10, pattern)
+        assert side._readSector(10) == pattern
+
+    def testWriteSectorsReadBack(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Write two sectors at once.
+        data = bytes(range(256)) + bytes(range(255, -1, -1))
+        side._writeSectors(20, data)
+        assert side._readSectors(20, 2) == data
+
+    def testWriteSectorOutOfBoundsRaises(self):
+        image_data = _blankAdfs(total_sectors=10)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        with pytest.raises(ADFSError):
+            side._writeSector(10, bytes(256))
+
+    def testWriteSectorsOutOfBoundsRaises(self):
+        image_data = _blankAdfs(total_sectors=10)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        with pytest.raises(ADFSError):
+            side._writeSectors(9, bytes(512))
 
 
 # -----------------------------------------------------------------------
