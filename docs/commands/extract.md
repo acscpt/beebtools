@@ -54,9 +54,7 @@ The output directory defaults to the disc image filename stem (`bbc_d1/` for `bb
 
 ### Output layout
 
-Files are laid out hierarchically. On a DFS image the DFS directory character
-becomes a real subdirectory. On ADFS images the full directory tree is
-recreated as nested filesystem directories.
+Files are laid out hierarchically. On a DFS image the DFS directory character becomes a real subdirectory. On ADFS images the full directory tree is recreated as nested filesystem directories.
 
 **DFS single-sided (`.ssd`):**
 
