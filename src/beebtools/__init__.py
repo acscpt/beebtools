@@ -53,6 +53,7 @@ Modules:
 from .detokenize import detokenize, decodeLineRef
 from .tokenize import tokenize, encodeLineRef
 from .pretty import prettyPrint
+from .boot import BootOption
 from .dfs import (
     DFSEntry,
     DFSCatalogue,
@@ -60,7 +61,6 @@ from .dfs import (
     DFSSide,
     DFSError,
     DFSFormatError,
-    BootOption,
     openDiscImage,
     createDiscImage,
     looksLikeTokenizedBasic,

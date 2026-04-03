@@ -26,7 +26,7 @@ Exceptions:
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-from .dfs import BootOption
+from .boot import BootOption
 
 
 # -----------------------------------------------------------------------
