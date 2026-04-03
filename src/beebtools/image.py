@@ -10,7 +10,9 @@ work uniformly with either format.
 
 Also provides openImage() which detects the filing system format from
 the file extension and delegates to the appropriate format-specific
-opener. This keeps the DFS and ADFS modules independent of each other.
+opener, and createImage() which creates a blank formatted disc image
+from the extension. This keeps the DFS and ADFS modules independent of
+each other.
 
 Supported formats:
     .ssd  -- DFS single-sided
@@ -23,8 +25,12 @@ from typing import Any, Iterator, List, Optional, Protocol, runtime_checkable
 
 from .entry import DiscCatalogue, DiscEntry, DiscFile
 
-from .adfs import ADFSImage, ADFSFormatError, openAdfsImage
-from .dfs import DFSImage, DFSFormatError, openDiscImage
+from .adfs import (
+    ADFSImage, ADFSFormatError, openAdfsImage,
+    createAdfsImage, ADFS_S_SECTORS, ADFS_M_SECTORS, ADFS_L_SECTORS,
+)
+from .boot import BootOption
+from .dfs import DFSImage, DFSFormatError, openDiscImage, createDiscImage
 
 
 # -----------------------------------------------------------------------
@@ -168,3 +174,59 @@ def _extractExtension(path: str) -> str:
         return ""
 
     return name[dot:].lower()
+
+
+def createImage(
+    output_path: str,
+    tracks: int = 80,
+    title: str = "",
+    boot_option: BootOption = BootOption.OFF,
+) -> DiscImage:
+    """Create a blank formatted disc image.
+
+    Format is determined from the output path extension:
+        .ssd  -- DFS single-sided
+        .dsd  -- DFS double-sided interleaved
+        .adf  -- ADFS (40-track: ADFS-S 160K, 80-track: ADFS-M 320K)
+        .adl  -- ADFS-L 640K
+
+    Args:
+        output_path: Path whose extension determines the format.
+        tracks:      Number of tracks (40 or 80). Controls DFS track
+                     count and ADFS image size for .adf files.
+        title:       Disc title (up to 12 characters).
+        boot_option: Boot option (0-3).
+
+    Returns:
+        A blank DFSImage or ADFSImage depending on the extension.
+
+    Raises:
+        DFSFormatError: If the extension is unrecognised.
+    """
+    ext = _extractExtension(output_path)
+
+    if ext in _DFS_EXTENSIONS:
+        # Create a DFS image. DSD flag determined by extension.
+        is_dsd = (ext == ".dsd")
+        return createDiscImage(
+            tracks=tracks, is_dsd=is_dsd,
+            title=title, boot_option=boot_option,
+        )
+
+    if ext in _ADFS_EXTENSIONS:
+        # Map tracks and extension to the correct ADFS sector count.
+        if ext == ".adl":
+            total_sectors = ADFS_L_SECTORS
+        elif tracks == 40:
+            total_sectors = ADFS_S_SECTORS
+        else:
+            total_sectors = ADFS_M_SECTORS
+        return createAdfsImage(
+            total_sectors=total_sectors,
+            title=title, boot_option=boot_option,
+        )
+
+    raise DFSFormatError(
+        f"Unrecognised disc image extension '{ext}'. "
+        f"Expected .ssd, .dsd, .adf, or .adl"
+    )

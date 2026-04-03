@@ -64,15 +64,8 @@ from .dfs import (
     DFSFormatError,
     openDiscImage,
     createDiscImage,
-    looksLikeTokenizedBasic,
-    looksLikePlainText,
-    sortCatalogueEntries,
     validateDfsName,
     splitDfsPath,
-    # Backward-compatibility aliases
-    isBasic,
-    looksLikeText,
-    DFSDisc,
 )
 from .adfs import (
     ADFSEntry,
@@ -90,9 +83,13 @@ from .adfs import (
     ADFS_M_SECTORS,
     ADFS_L_SECTORS,
 )
-from .image import openImage, DiscSide, DiscImage
+from .image import openImage, createImage, DiscSide, DiscImage
 from .inf import InfData, parseInf, formatInf
-from .disc import search, extractAll, buildImage, buildAdfsImage
+from .disc import (
+    search, extractAll, buildImage,
+    looksLikeTokenizedBasic, looksLikePlainText,
+    sortCatalogueEntries,
+)
 from .cli import main
 
 __all__ = [
@@ -118,15 +115,8 @@ __all__ = [
     "isBasicExecAddr",
     "openDiscImage",
     "createDiscImage",
-    "looksLikeTokenizedBasic",
-    "looksLikePlainText",
-    "sortCatalogueEntries",
     "validateDfsName",
     "splitDfsPath",
-    # Backward-compatibility aliases
-    "isBasic",
-    "looksLikeText",
-    "DFSDisc",
     # .inf sidecar format
     "InfData",
     "parseInf",
@@ -148,13 +138,16 @@ __all__ = [
     "ADFS_L_SECTORS",
     # Image dispatcher
     "openImage",
+    "createImage",
     "DiscSide",
     "DiscImage",
-    # Orchestration
+    # Orchestration (disc.py)
     "search",
     "extractAll",
     "buildImage",
-    "buildAdfsImage",
+    "looksLikeTokenizedBasic",
+    "looksLikePlainText",
+    "sortCatalogueEntries",
     "main",
 ]
 

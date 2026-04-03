@@ -592,11 +592,11 @@ class TestSortCatalogueEntries:
         ]
 
     def testSortByName(self):
-        """Sorting by name should produce strict alphabetical ordering across entries from different directories."""
+        """Sorting by name should produce alphabetical ordering by full path (directory.name)."""
         from beebtools import sortCatalogueEntries
         result = sortCatalogueEntries(self._entries(), "name")
-        names = [e.name for e in result]
-        assert names == ["ALPHA", "MIDDLE", "ZEBRA"]
+        names = [e.fullName for e in result]
+        assert names == ["$.ALPHA", "$.ZEBRA", "T.MIDDLE"]
 
     def testSortByCatalog(self):
         """Sorting by catalogue position should preserve the original physical disc order of entries."""

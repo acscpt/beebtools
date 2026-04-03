@@ -21,10 +21,7 @@ from .dfs import (
     DFSError,
     BootOption,
     createDiscImage,
-    looksLikeTokenizedBasic,
-    looksLikePlainText,
     openDiscImage,
-    sortCatalogueEntries,
 )
 from .adfs import (
     ADFSError,
@@ -34,10 +31,13 @@ from .adfs import (
     ADFS_M_SECTORS,
     ADFS_L_SECTORS,
 )
-from .entry import DiscFile
+from .entry import DiscError, DiscFile
 from .image import openImage
 from .inf import parseInf
-from .disc import search, extractAll, buildImage, buildAdfsImage
+from .disc import (
+    search, extractAll, buildImage,
+    looksLikeTokenizedBasic, looksLikePlainText, sortCatalogueEntries,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -604,62 +604,36 @@ def _cmdDeleteAdfs(args: Namespace) -> None:
 def cmdBuild(args: Namespace) -> None:
     """Build a disc image from a directory of files with .inf sidecars.
 
+    The output format is determined by the file extension of args.output.
+
     Args:
         args: Parsed argparse namespace for the 'build' subcommand.
     """
-    if _isAdfsPath(args.output):
-        _cmdBuildAdfs(args)
-        return
-
-    is_dsd = args.output.lower().endswith(".dsd")
-
     try:
         image_bytes = buildImage(
             source_dir=args.dir,
+            output_path=args.output,
             tracks=args.tracks,
-            is_dsd=is_dsd,
             title=args.title or "",
             boot_option=args.boot,
         )
-    except DFSError as e:
+    except DiscError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
     with open(args.output, "wb") as f:
         f.write(image_bytes)
 
-    fmt = "DSD" if is_dsd else "SSD"
-    print(f"Built {args.tracks}-track {fmt}: {args.output}")
-
-
-def _cmdBuildAdfs(args: Namespace) -> None:
-    """Build an ADFS disc image from a directory tree with .inf sidecars."""
-    is_adl = args.output.lower().endswith(".adl")
-
-    if is_adl:
-        total_sectors = ADFS_L_SECTORS
-    elif args.tracks == 40:
-        total_sectors = ADFS_S_SECTORS
-    else:
-        total_sectors = ADFS_M_SECTORS
-
-    try:
-        image_bytes = buildAdfsImage(
-            source_dir=args.dir,
-            total_sectors=total_sectors,
-            title=args.title or "",
-            boot_option=args.boot,
-        )
-    except ADFSError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    with open(args.output, "wb") as f:
-        f.write(image_bytes)
-
-    fmt = "ADL" if is_adl else "ADF"
-    size_kb = (total_sectors * 256) // 1024
-    print(f"Built {size_kb}K {fmt}: {args.output}")
+    # Determine human-readable format description from extension.
+    ext = os.path.splitext(args.output)[1].lower()
+    _FMT_LABELS = {
+        ".ssd": f"{args.tracks}-track SSD",
+        ".dsd": f"{args.tracks}-track DSD",
+        ".adf": f"{len(image_bytes) // 1024}K ADF",
+        ".adl": f"{len(image_bytes) // 1024}K ADL",
+    }
+    label = _FMT_LABELS.get(ext, ext)
+    print(f"Built {label}: {args.output}")
 
 
 def main() -> None:

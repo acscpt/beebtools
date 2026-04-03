@@ -21,7 +21,7 @@ Exceptions:
 """
 
 from dataclasses import dataclass
-from typing import Iterator, List, Optional, Sequence, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 from .boot import BootOption
 from .entry import DiscError, DiscFormatError, DiscFile, isBasicExecAddr
@@ -1050,86 +1050,10 @@ def validateDfsName(directory: str, name: str) -> None:
 
 
 # -----------------------------------------------------------------------
-# Content detection
-# -----------------------------------------------------------------------
-
-def looksLikeTokenizedBasic(data: bytes) -> bool:
-    """True if data begins with the BBC BASIC line marker 0x0D.
-
-    Every valid tokenized BBC BASIC program starts with 0x0D (the line
-    start marker for the first line). This is a necessary-but-not-sufficient
-    check; combine with DFSEntry.isBasic for reliable BASIC detection.
-    """
-    return len(data) > 0 and data[0] == 0x0D
-
-
-# Bytes acceptable in a plain-text file: printable ASCII plus common
-# whitespace (tab, carriage return, line feed).
-_PLAIN_TEXT_BYTES = frozenset(range(0x20, 0x7F)) | {0x09, 0x0A, 0x0D}
-
-
-def looksLikePlainText(data: bytes) -> bool:
-    """True if every byte is printable ASCII or common whitespace.
-
-    Checks for printable ASCII (0x20-0x7E) plus tab (0x09), line feed
-    (0x0A), and carriage return (0x0D). An empty file is not plain text.
-    """
-    if not data:
-        return False
-    return all(b in _PLAIN_TEXT_BYTES for b in data)
-
-
-# -----------------------------------------------------------------------
-# Sorting
-# -----------------------------------------------------------------------
-
-def sortCatalogueEntries(
-    entries: Sequence[DFSEntry], sort_mode: str
-) -> List[DFSEntry]:
-    """Return catalogue entries in the requested display order.
-
-    Args:
-        entries:   Sequence of DFSEntry objects.
-        sort_mode: One of 'name', 'catalog', or 'size'.
-            name    -- alphabetical by filename (case-insensitive)
-            catalog -- original on-disc DFS catalogue order
-            size    -- ascending file length
-
-    Returns:
-        New list of DFSEntry in the requested order.
-    """
-    if sort_mode == "catalog":
-        return list(entries)
-
-    if sort_mode == "size":
-        return sorted(
-            entries,
-            key=lambda e: (e.length, e.name.upper(), e.directory.upper()),
-        )
-
-    # Default: alphabetical by bare filename, then directory.
-    return sorted(
-        entries,
-        key=lambda e: (e.name.upper(), e.directory.upper()),
-    )
-
-
-# -----------------------------------------------------------------------
 # Backward-compatibility aliases
 # -----------------------------------------------------------------------
 
 # The old API used standalone functions and dict-based entries. These
 # aliases ease the transition in callers that have not been updated yet.
 
-def isBasic(entry: DFSEntry) -> bool:
-    """Backward-compatible wrapper around DFSEntry.isBasic property."""
-    return entry.isBasic
 
-
-def looksLikeText(data: bytes) -> bool:
-    """Backward-compatible alias for looksLikeTokenizedBasic."""
-    return looksLikeTokenizedBasic(data)
-
-
-# DFSDisc is the old class name for DFSSide.
-DFSDisc = DFSSide
