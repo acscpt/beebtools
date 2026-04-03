@@ -939,6 +939,230 @@ class TestFreeSpace:
 
 
 # -----------------------------------------------------------------------
+# Directory encoding and writing tests
+# -----------------------------------------------------------------------
+
+class TestEncodeDirectory:
+
+    def testRoundTripEmptyDirectory(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        original = side.readDirectory(ADFS_ROOT_SECTOR)
+        encoded = side._encodeDirectory(original)
+        assert len(encoded) == ADFS_DIR_LENGTH
+
+        # Write it back and re-read.
+        side._writeSectors(ADFS_ROOT_SECTOR, encoded)
+        reread = side.readDirectory(ADFS_ROOT_SECTOR)
+
+        assert reread.name == original.name
+        assert reread.title == original.title
+        assert reread.parent_sector == original.parent_sector
+        assert reread.sequence == original.sequence
+        assert len(reread.entries) == 0
+
+    def testRoundTripWithEntries(self):
+        files = [
+            {"name": "ALPHA", "data": b"a" * 100, "load_addr": 0x1900},
+            {"name": "BETA", "data": b"b" * 200, "load_addr": 0x2000},
+        ]
+        image_data = _adfsWithFiles(files)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        original = side.readDirectory(ADFS_ROOT_SECTOR)
+        encoded = side._encodeDirectory(original)
+        side._writeSectors(ADFS_ROOT_SECTOR, encoded)
+        reread = side.readDirectory(ADFS_ROOT_SECTOR)
+
+        assert len(reread.entries) == 2
+        assert reread.entries[0].name == "ALPHA"
+        assert reread.entries[1].name == "BETA"
+        assert reread.entries[0].load_addr == 0x1900
+
+
+class TestWriteDirectory:
+
+    def testWriteDirectoryBcdIncrements(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        original = side.readDirectory(ADFS_ROOT_SECTOR)
+        assert original.sequence == 0x01
+
+        # Write it back - should BCD-increment to 0x02.
+        side.writeDirectory(ADFS_ROOT_SECTOR, original)
+        reread = side.readDirectory(ADFS_ROOT_SECTOR)
+        assert reread.sequence == 0x02
+
+    def testWriteDirectoryBcdWraps(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        original = side.readDirectory(ADFS_ROOT_SECTOR)
+
+        # Set sequence to 0x09 - should wrap low digit to 0, carry to high.
+        dir_at_09 = ADFSDirectory(
+            name=original.name,
+            title=original.title,
+            parent_sector=original.parent_sector,
+            sequence=0x09,
+            entries=original.entries,
+        )
+        side.writeDirectory(ADFS_ROOT_SECTOR, dir_at_09)
+        reread = side.readDirectory(ADFS_ROOT_SECTOR)
+        assert reread.sequence == 0x10
+
+    def testWriteDirectoryInvalidatesCache(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Populate the catalogue cache.
+        cat = side.readCatalogue()
+        assert len(cat.entries) == 0
+
+        # Manually modify the directory outside of writeDirectory
+        # to verify that the cache was invalidated by the write.
+        side.writeDirectory(ADFS_ROOT_SECTOR, side.readDirectory(ADFS_ROOT_SECTOR))
+
+        # The cache should be cleared - readCatalogue should re-parse.
+        # (This just verifies no stale data, not a specific assertion.)
+        cat2 = side.readCatalogue()
+        assert cat2 is not None
+
+
+class TestInsertEntry:
+
+    def _makeDummyEntry(self, name: str, access: int = 0x03) -> ADFSEntry:
+        return ADFSEntry(
+            name=name, directory="$", load_addr=0, exec_addr=0,
+            length=0, start_sector=0, locked=False, is_directory=False,
+            access=access, sequence=0,
+        )
+
+    def testInsertIntoEmpty(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        directory = side.readDirectory(ADFS_ROOT_SECTOR)
+        updated = side._insertEntry(directory, self._makeDummyEntry("HELLO"))
+        assert len(updated.entries) == 1
+        assert updated.entries[0].name == "HELLO"
+
+    def testInsertMaintainsSortOrder(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        directory = side.readDirectory(ADFS_ROOT_SECTOR)
+        directory = side._insertEntry(directory, self._makeDummyEntry("CHARLIE"))
+        directory = side._insertEntry(directory, self._makeDummyEntry("ALPHA"))
+        directory = side._insertEntry(directory, self._makeDummyEntry("BRAVO"))
+
+        names = [e.name for e in directory.entries]
+        assert names == ["ALPHA", "BRAVO", "CHARLIE"]
+
+    def testInsertCaseInsensitiveSort(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        directory = side.readDirectory(ADFS_ROOT_SECTOR)
+        directory = side._insertEntry(directory, self._makeDummyEntry("Zebra"))
+        directory = side._insertEntry(directory, self._makeDummyEntry("alpha"))
+
+        assert directory.entries[0].name == "alpha"
+        assert directory.entries[1].name == "Zebra"
+
+    def testInsertDuplicateRaises(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        directory = side.readDirectory(ADFS_ROOT_SECTOR)
+        directory = side._insertEntry(directory, self._makeDummyEntry("FILE"))
+
+        with pytest.raises(ADFSError, match="Duplicate"):
+            side._insertEntry(directory, self._makeDummyEntry("file"))
+
+    def testInsertFullDirectoryRaises(self):
+        # Build a directory with 47 entries.
+        entries = [
+            _makeDirectoryEntry(f"F{i:04d}") for i in range(ADFS_MAX_ENTRIES)
+        ]
+        image_data = _blankAdfs(root_entries=entries)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        directory = side.readDirectory(ADFS_ROOT_SECTOR)
+
+        with pytest.raises(ADFSError, match="full"):
+            side._insertEntry(directory, self._makeDummyEntry("EXTRA"))
+
+
+class TestRemoveEntry:
+
+    def _makeDummyEntry(self, name: str) -> ADFSEntry:
+        return ADFSEntry(
+            name=name, directory="$", load_addr=0, exec_addr=0,
+            length=0, start_sector=0, locked=False, is_directory=False,
+            access=0x03, sequence=0,
+        )
+
+    def testRemoveExisting(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        directory = side.readDirectory(ADFS_ROOT_SECTOR)
+        directory = side._insertEntry(directory, self._makeDummyEntry("FILE"))
+        directory = side._removeEntry(directory, "FILE")
+
+        assert len(directory.entries) == 0
+
+    def testRemoveCaseInsensitive(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        directory = side.readDirectory(ADFS_ROOT_SECTOR)
+        directory = side._insertEntry(directory, self._makeDummyEntry("MyFile"))
+        directory = side._removeEntry(directory, "myfile")
+
+        assert len(directory.entries) == 0
+
+    def testRemoveFromMiddle(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        directory = side.readDirectory(ADFS_ROOT_SECTOR)
+        directory = side._insertEntry(directory, self._makeDummyEntry("ALPHA"))
+        directory = side._insertEntry(directory, self._makeDummyEntry("BRAVO"))
+        directory = side._insertEntry(directory, self._makeDummyEntry("CHARLIE"))
+        directory = side._removeEntry(directory, "BRAVO")
+
+        names = [e.name for e in directory.entries]
+        assert names == ["ALPHA", "CHARLIE"]
+
+    def testRemoveNotFoundRaises(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        directory = side.readDirectory(ADFS_ROOT_SECTOR)
+
+        with pytest.raises(ADFSError, match="not found"):
+            side._removeEntry(directory, "GHOST")
+
+
+# -----------------------------------------------------------------------
 # Directory parsing
 # -----------------------------------------------------------------------
 

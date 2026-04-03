@@ -702,6 +702,158 @@ class ADFSSide:
         )
 
     # -------------------------------------------------------------------
+    # Directory writing
+    # -------------------------------------------------------------------
+
+    @staticmethod
+    def _encodeDirectory(directory: ADFSDirectory) -> bytes:
+        """Encode an ADFSDirectory into a 0x500-byte block.
+
+        Entries are written in their existing order (caller must ensure
+        case-insensitive sort). The block has Hugo markers in both
+        header and footer, with sequence bytes matching.
+        """
+        buf = bytearray(ADFS_DIR_LENGTH)
+
+        # Header: sequence byte + "Hugo".
+        buf[0] = directory.sequence
+        buf[1:5] = ADFS_HUGO_MAGIC
+
+        # Write entries starting at offset 5.
+        offset = ADFS_HEADER_SIZE
+
+        for entry in directory.entries:
+            buf[offset:offset + ADFS_ENTRY_SIZE] = _encodeEntry(entry)
+            offset += ADFS_ENTRY_SIZE
+
+        # End-of-entries marker (zero byte).
+        if offset < _FOOTER_END_MARKER:
+            buf[offset] = 0x00
+
+        # Footer: directory name (10 bytes at 0x4CC).
+        buf[_FOOTER_NAME:_FOOTER_NAME + 10] = _encodeString(
+            directory.name, 10
+        )
+
+        # Parent sector (3 bytes at 0x4D6).
+        _write24le(buf, _FOOTER_PARENT, directory.parent_sector)
+
+        # Directory title (19 bytes at 0x4D9).
+        buf[_FOOTER_TITLE:_FOOTER_TITLE + 19] = _encodeString(
+            directory.title, 19
+        )
+
+        # Footer sequence + "Hugo" (at 0x4FA-0x4FE).
+        buf[_FOOTER_SEQ] = directory.sequence
+        buf[_FOOTER_HUGO:_FOOTER_HUGO + 4] = ADFS_HUGO_MAGIC
+
+        return bytes(buf)
+
+    def writeDirectory(self, sector: int, directory: ADFSDirectory) -> None:
+        """Encode a directory and write it to disc.
+
+        BCD-increments the sequence number before writing. Invalidates
+        the catalogue cache so the next readCatalogue() re-parses.
+        """
+        # BCD-increment the sequence number.
+        seq = directory.sequence
+        low = (seq & 0x0F) + 1
+
+        if low > 9:
+            low = 0
+            high = ((seq >> 4) + 1) & 0x0F
+        else:
+            high = (seq >> 4) & 0x0F
+
+        new_seq = (high << 4) | low
+
+        updated = ADFSDirectory(
+            name=directory.name,
+            title=directory.title,
+            parent_sector=directory.parent_sector,
+            sequence=new_seq,
+            entries=directory.entries,
+        )
+
+        raw = self._encodeDirectory(updated)
+        self._writeSectors(sector, raw)
+
+        # Invalidate caches.
+        self._catalogue = None
+
+    @staticmethod
+    def _insertEntry(
+        directory: ADFSDirectory, entry: ADFSEntry
+    ) -> ADFSDirectory:
+        """Return a new directory with the entry inserted in sorted order.
+
+        Entries are sorted case-insensitively by name. Raises ADFSError
+        if the directory is full or a duplicate name exists.
+        """
+        if len(directory.entries) >= ADFS_MAX_ENTRIES:
+            raise ADFSError(
+                f"Directory '{directory.name}' is full "
+                f"({ADFS_MAX_ENTRIES} entries)"
+            )
+
+        # Check for duplicate name (case-insensitive).
+        entry_upper = entry.name.upper()
+
+        for existing in directory.entries:
+            if existing.name.upper() == entry_upper:
+                raise ADFSError(
+                    f"Duplicate name '{entry.name}' in "
+                    f"directory '{directory.name}'"
+                )
+
+        # Insert in case-insensitive sorted order.
+        entries = list(directory.entries)
+        insert_pos = len(entries)
+
+        for i, existing in enumerate(entries):
+            if entry_upper < existing.name.upper():
+                insert_pos = i
+                break
+
+        entries.insert(insert_pos, entry)
+
+        return ADFSDirectory(
+            name=directory.name,
+            title=directory.title,
+            parent_sector=directory.parent_sector,
+            sequence=directory.sequence,
+            entries=tuple(entries),
+        )
+
+    @staticmethod
+    def _removeEntry(
+        directory: ADFSDirectory, name: str
+    ) -> ADFSDirectory:
+        """Return a new directory with the named entry removed.
+
+        Name matching is case-insensitive. Raises ADFSError if the
+        name is not found.
+        """
+        name_upper = name.upper()
+        entries = list(directory.entries)
+
+        for i, existing in enumerate(entries):
+            if existing.name.upper() == name_upper:
+                entries.pop(i)
+
+                return ADFSDirectory(
+                    name=directory.name,
+                    title=directory.title,
+                    parent_sector=directory.parent_sector,
+                    sequence=directory.sequence,
+                    entries=tuple(entries),
+                )
+
+        raise ADFSError(
+            f"Entry '{name}' not found in directory '{directory.name}'"
+        )
+
+    # -------------------------------------------------------------------
     # Directory tree walker
     # -------------------------------------------------------------------
 
