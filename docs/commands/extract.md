@@ -107,6 +107,15 @@ Add `--inf` to write `.inf` sidecar files alongside each extracted file,
 preserving the load address, exec address, length, and lock flag in the
 standard community interchange format.
 
+The `.inf` file format is the same for DFS and ADFS - it records the leaf
+directory, filename, load address, exec address, length, and optional lock
+flag. The format predates ADFS and has no field for hierarchical paths, so
+for ADFS extractions the directory hierarchy is encoded in the *filesystem
+layout* instead: subdirectories mirror the ADFS tree, and each `.inf` file
+records only the leaf directory name and filename. The `build` command
+reconstructs the full ADFS path from the nested directory structure when
+rebuilding an image.
+
 ## Filename matching
 
 `extract` accepts filenames in several forms:
