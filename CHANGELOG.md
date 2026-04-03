@@ -5,7 +5,7 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-04-03
 
 Internal refactor to enforce strict module layering and eliminate code that
 bled across format boundaries. No CLI or behavioural changes - all existing
