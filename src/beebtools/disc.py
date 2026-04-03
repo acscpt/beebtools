@@ -35,6 +35,7 @@ from .adfs import (
     ADFS_M_SECTORS,
     ADFS_L_SECTORS,
 )
+from .entry import DiscFile
 from .image import openImage
 from .detokenize import detokenize
 from .inf import formatInf, parseInf
@@ -457,14 +458,13 @@ def _addFilesFromDir(side: "DFSSide", side_path: str) -> None:
             with open(data_path, "rb") as f:
                 data = f.read()
 
-            side.addFile(
-                name=inf.name,
-                directory=inf.directory,
+            side.addFile(DiscFile(
+                path=f"{inf.directory}.{inf.name}",
                 data=data,
                 load_addr=inf.load_addr,
                 exec_addr=inf.exec_addr,
                 locked=inf.locked,
-            )
+            ))
 
 
 # -----------------------------------------------------------------------
@@ -566,10 +566,10 @@ def _walkAdfsTree(side: "ADFSSide", fs_dir: str, adfs_parent: str) -> None:
             data = f.read()
 
         # Use the full ADFS path from the .inf sidecar.
-        side.addFile(
+        side.addFile(DiscFile(
             path=inf.fullName,
             data=data,
             load_addr=inf.load_addr,
             exec_addr=inf.exec_addr,
             locked=inf.locked,
-        )
+        ))

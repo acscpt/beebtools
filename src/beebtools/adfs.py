@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from .boot import BootOption
+from .entry import DiscError, DiscFormatError, DiscFile, isBasicExecAddr
 
 
 # -----------------------------------------------------------------------
@@ -55,11 +56,11 @@ _FOOTER_HUGO = 0x4FB           # 4-byte "Hugo" marker
 # Exceptions
 # -----------------------------------------------------------------------
 
-class ADFSError(Exception):
+class ADFSError(DiscError):
     """Base exception for ADFS disc image errors."""
 
 
-class ADFSFormatError(ADFSError):
+class ADFSFormatError(ADFSError, DiscFormatError):
     """Raised when a disc image is structurally invalid or corrupted."""
 
 
@@ -108,8 +109,7 @@ class ADFSEntry:
         """
         if self.isDirectory:
             return False
-        exec_lo = self.exec_addr & 0xFFFF
-        return exec_lo in (0x801F, 0x8023, 0x802B)
+        return isBasicExecAddr(self.exec_addr)
 
 
 @dataclass(frozen=True)
@@ -1036,24 +1036,23 @@ class ADFSSide:
 
         return current_sector, current_dir, leaf_name
 
-    def addFile(
-        self,
-        path: str,
-        data: bytes,
-        load_addr: int = 0,
-        exec_addr: int = 0,
-        locked: bool = False,
-    ) -> None:
+    def addFile(self, spec: DiscFile) -> None:
         """Add a file to the disc image at the given ADFS path.
 
         The parent directory must already exist. The filename is
         validated and the file is inserted in sorted order.
+
+        Args:
+            spec: DiscFile describing the file to add.
         """
-        parent_sector, parent_dir, leaf_name = self._resolveParent(path)
+        parent_sector, parent_dir, leaf_name = self._resolveParent(
+            spec.path
+        )
 
         validateAdfsName(leaf_name)
 
         # Allocate sectors for the file data.
+        data = spec.data
         if len(data) > 0:
             sectors_needed = (
                 (len(data) + ADFS_SECTOR_SIZE - 1) // ADFS_SECTOR_SIZE
@@ -1064,17 +1063,17 @@ class ADFSSide:
 
         # Build the access bits: R + W by default, plus L if locked.
         access = 0x03
-        if locked:
+        if spec.locked:
             access |= 0x04
 
         entry = ADFSEntry(
             name=leaf_name,
             directory="",
-            load_addr=load_addr,
-            exec_addr=exec_addr,
+            load_addr=spec.load_addr,
+            exec_addr=spec.exec_addr,
             length=len(data),
             start_sector=start_sector,
-            locked=locked,
+            locked=spec.locked,
             is_directory=False,
             access=access,
             sequence=0,

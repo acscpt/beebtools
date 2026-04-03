@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
 from .boot import BootOption
+from .entry import DiscError, DiscFormatError, DiscFile, isBasicExecAddr
 
 
 SECTOR_SIZE = 256
@@ -34,11 +35,11 @@ SECTORS_PER_TRACK = 10
 # Exceptions
 # -----------------------------------------------------------------------
 
-class DFSError(Exception):
+class DFSError(DiscError):
     """Base exception for DFS disc image errors."""
 
 
-class DFSFormatError(DFSError):
+class DFSFormatError(DFSError, DiscFormatError):
     """Raised when a disc image is structurally invalid or corrupted."""
 
 
@@ -72,12 +73,9 @@ class DFSEntry:
         """True if this entry looks like a BBC BASIC program.
 
         Checks the execution address for the well-known BASIC entry points
-        0x801F, 0x8023, and 0x802B written by the SAVE command. The top
-        two bits are masked off because they flag I/O processor memory
-        and do not affect the entry point.
+        0x801F, 0x8023, and 0x802B written by the SAVE command.
         """
-        exec_lo = self.exec_addr & 0xFFFF
-        return exec_lo in (0x801F, 0x8023, 0x802B)
+        return isBasicExecAddr(self.exec_addr)
 
     @property
     def isDirectory(self) -> bool:
@@ -547,28 +545,18 @@ class DFSSide:
     # File operations
     # -------------------------------------------------------------------
 
-    def addFile(
-        self,
-        name: str,
-        directory: str,
-        data: bytes,
-        load_addr: int = 0,
-        exec_addr: int = 0,
-        locked: bool = False,
-    ) -> DFSEntry:
+    def addFile(self, spec: DiscFile) -> DFSEntry:
         """Add a file to this disc side.
 
         Validates the filename, checks for duplicates, allocates sectors
         from the top of free space downward, writes the file data, and
         updates the catalogue with an incremented cycle number.
 
+        The path in spec must be in DFS format: a single directory
+        character, a dot, then the filename (e.g. '$.MYPROG').
+
         Args:
-            name:      DFS filename (1-7 characters).
-            directory: DFS directory character (e.g. '$', 'T').
-            data:      File content bytes.
-            load_addr: Load address (default 0).
-            exec_addr: Execution address (default 0).
-            locked:    Lock the file against deletion (default False).
+            spec: DiscFile describing the file to add.
 
         Returns:
             The DFSEntry created for the new file.
@@ -577,6 +565,7 @@ class DFSSide:
             DFSError: If the name is invalid, a duplicate exists, the
                 catalogue is full, or there is not enough free space.
         """
+        directory, name = splitDfsPath(spec.path)
         validateDfsName(directory, name)
 
         cat = self.readCatalogue()
@@ -593,6 +582,7 @@ class DFSSide:
             raise DFSError("Catalogue is full (31 files maximum)")
 
         # Allocate sectors from the top of free space downward.
+        data = spec.data
         if len(data) == 0:
             sectors_needed = 0
         else:
@@ -612,11 +602,11 @@ class DFSSide:
         entry = DFSEntry(
             name=name,
             directory=directory,
-            load_addr=load_addr,
-            exec_addr=exec_addr,
+            load_addr=spec.load_addr,
+            exec_addr=spec.exec_addr,
             length=len(data),
             start_sector=start_sector,
-            locked=locked,
+            locked=spec.locked,
         )
 
         # Write file data to the allocated sectors.
@@ -641,7 +631,7 @@ class DFSSide:
         self.writeCatalogue(new_cat)
         return entry
 
-    def deleteFile(self, name: str, directory: str) -> DFSEntry:
+    def deleteFile(self, path: str) -> None:
         """Remove a file from the catalogue.
 
         The catalogue entry is removed and the cycle number incremented.
@@ -652,15 +642,12 @@ class DFSSide:
         be reused until compact() is called.
 
         Args:
-            name:      DFS filename to delete.
-            directory: DFS directory character.
-
-        Returns:
-            The DFSEntry that was removed.
+            path: Full DFS path (e.g. '$.MYPROG').
 
         Raises:
             DFSError: If the file is not found.
         """
+        directory, name = splitDfsPath(path)
         cat = self.readCatalogue()
 
         found = None
@@ -684,7 +671,6 @@ class DFSSide:
         )
 
         self.writeCatalogue(new_cat)
-        return found
 
     def compact(self) -> int:
         """Defragment file storage by closing gaps between files.
@@ -904,6 +890,29 @@ def createDiscImage(
 # -----------------------------------------------------------------------
 # Name validation
 # -----------------------------------------------------------------------
+
+def splitDfsPath(path: str) -> Tuple[str, str]:
+    """Split a full DFS path into (directory, name).
+
+    DFS paths have the form 'D.NAME' where D is a single directory
+    character and NAME is the 1-7 character filename.
+
+    Args:
+        path: Full DFS path (e.g. '$.MYPROG', 'T.DATA').
+
+    Returns:
+        Tuple of (directory, name).
+
+    Raises:
+        DFSError: If the path is not in 'D.NAME' format.
+    """
+    if len(path) < 3 or path[1] != '.':
+        raise DFSError(
+            f"Invalid DFS path '{path}' - expected format 'D.NAME'"
+        )
+
+    return path[0], path[2:]
+
 
 def validateDfsName(directory: str, name: str) -> None:
     """Validate a DFS directory character and filename.

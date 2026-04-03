@@ -54,6 +54,7 @@ from .detokenize import detokenize, decodeLineRef
 from .tokenize import tokenize, encodeLineRef
 from .pretty import prettyPrint
 from .boot import BootOption
+from .entry import DiscEntry, DiscFile, DiscError, DiscFormatError, isBasicExecAddr
 from .dfs import (
     DFSEntry,
     DFSCatalogue,
@@ -67,6 +68,7 @@ from .dfs import (
     looksLikePlainText,
     sortCatalogueEntries,
     validateDfsName,
+    splitDfsPath,
     # Backward-compatibility aliases
     isBasic,
     looksLikeText,
@@ -107,12 +109,19 @@ __all__ = [
     "DFSError",
     "DFSFormatError",
     "BootOption",
+    # Shared contracts (entry.py)
+    "DiscEntry",
+    "DiscFile",
+    "DiscError",
+    "DiscFormatError",
+    "isBasicExecAddr",
     "openDiscImage",
     "createDiscImage",
     "looksLikeTokenizedBasic",
     "looksLikePlainText",
     "sortCatalogueEntries",
     "validateDfsName",
+    "splitDfsPath",
     # Backward-compatibility aliases
     "isBasic",
     "looksLikeText",

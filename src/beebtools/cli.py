@@ -34,6 +34,7 @@ from .adfs import (
     ADFS_M_SECTORS,
     ADFS_L_SECTORS,
 )
+from .entry import DiscFile
 from .image import openImage
 from .inf import parseInf
 from .disc import search, extractAll, buildImage, buildAdfsImage
@@ -430,14 +431,13 @@ def cmdAdd(args: Namespace) -> None:
         print(f"Tokenized {args.file} ({len(data)} bytes)", file=sys.stderr)
 
     try:
-        entry = side.addFile(
-            name=name,
-            directory=directory,
+        entry = side.addFile(DiscFile(
+            path=f"{directory}.{name}",
             data=data,
             load_addr=load_addr,
             exec_addr=exec_addr,
             locked=locked,
-        )
+        ))
     except DFSError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -526,13 +526,13 @@ def _cmdAddAdfs(args: Namespace) -> None:
         print(f"Tokenized {args.file} ({len(data)} bytes)", file=sys.stderr)
 
     try:
-        side.addFile(
+        side.addFile(DiscFile(
             path=adfs_path,
             data=data,
             load_addr=load_addr,
             exec_addr=exec_addr,
             locked=locked,
-        )
+        ))
     except ADFSError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -560,14 +560,12 @@ def cmdDelete(args: Namespace) -> None:
     dfs_name = args.filename
 
     if len(dfs_name) >= 3 and dfs_name[1] == ".":
-        directory = dfs_name[0]
-        name = dfs_name[2:]
+        dfs_path = dfs_name
     else:
-        directory = "$"
-        name = dfs_name
+        dfs_path = f"$.{dfs_name}"
 
     try:
-        entry = side.deleteFile(name, directory)
+        side.deleteFile(dfs_path)
     except DFSError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -576,7 +574,7 @@ def cmdDelete(args: Namespace) -> None:
     with open(args.image, "wb") as f:
         f.write(image.serialize())
 
-    print(f"Deleted {entry.fullName} from {args.image}")
+    print(f"Deleted {dfs_path} from {args.image}")
 
 
 def _cmdDeleteAdfs(args: Namespace) -> None:

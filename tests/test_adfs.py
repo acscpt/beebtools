@@ -19,6 +19,7 @@ import pytest
 from argparse import Namespace
 
 from beebtools import (
+    DiscFile,
     ADFSEntry,
     ADFSCatalogue,
     ADFSDirectory,
@@ -1289,7 +1290,7 @@ class TestAddFile:
         image = createAdfsImage()
         side = image.sides[0]
 
-        side.addFile("$.HELLO", b"Hello World!", load_addr=0x1900, exec_addr=0x8023)
+        side.addFile(DiscFile("$.HELLO", b"Hello World!", load_addr=0x1900, exec_addr=0x8023))
 
         cat = side.readCatalogue()
         assert len(cat.entries) == 1
@@ -1306,9 +1307,9 @@ class TestAddFile:
         image = createAdfsImage()
         side = image.sides[0]
 
-        side.addFile("$.ALPHA", b"aaa")
-        side.addFile("$.CHARLIE", b"ccc")
-        side.addFile("$.BRAVO", b"bbb")
+        side.addFile(DiscFile("$.ALPHA", b"aaa"))
+        side.addFile(DiscFile("$.CHARLIE", b"ccc"))
+        side.addFile(DiscFile("$.BRAVO", b"bbb"))
 
         cat = side.readCatalogue()
         names = [e.name for e in cat.entries]
@@ -1319,7 +1320,7 @@ class TestAddFile:
         image = createAdfsImage()
         side = image.sides[0]
 
-        side.addFile("$.SECRET", b"data", locked=True)
+        side.addFile(DiscFile("$.SECRET", b"data", locked=True))
 
         cat = side.readCatalogue()
         assert cat.entries[0].locked is True
@@ -1330,7 +1331,7 @@ class TestAddFile:
         side = image.sides[0]
 
         side.mkdir("$.GAMES")
-        side.addFile("$.GAMES.ELITE", b"game data", load_addr=0x2000)
+        side.addFile(DiscFile("$.GAMES.ELITE", b"game data", load_addr=0x2000))
 
         cat = side.readCatalogue()
         # Should have GAMES dir + ELITE file.
@@ -1347,7 +1348,7 @@ class TestAddFile:
         image = createAdfsImage()
         side = image.sides[0]
 
-        side.addFile("$.EMPTY", b"")
+        side.addFile(DiscFile("$.EMPTY", b""))
 
         cat = side.readCatalogue()
         assert cat.entries[0].length == 0
@@ -1365,17 +1366,17 @@ class TestAddFile:
         big_data = bytes(14 * ADFS_SECTOR_SIZE)
 
         with pytest.raises(ADFSError, match="Cannot allocate"):
-            side.addFile("$.BIG", big_data)
+            side.addFile(DiscFile("$.BIG", big_data))
 
     def testAddDuplicateRaises(self):
         """Adding a file whose name already exists in the target directory should raise ADFSError."""
         image = createAdfsImage()
         side = image.sides[0]
 
-        side.addFile("$.FILE", b"first")
+        side.addFile(DiscFile("$.FILE", b"first"))
 
         with pytest.raises(ADFSError, match="Duplicate"):
-            side.addFile("$.FILE", b"second")
+            side.addFile(DiscFile("$.FILE", b"second"))
 
     def testAddBadNameRaises(self):
         """Adding a file with an invalid ADFS name (e.g. containing a space) should raise ADFSError."""
@@ -1383,7 +1384,7 @@ class TestAddFile:
         side = image.sides[0]
 
         with pytest.raises(ADFSError, match="invalid character"):
-            side.addFile("$.BAD NAME", b"data")
+            side.addFile(DiscFile("$.BAD NAME", b"data"))
 
     def testAddMissingParentRaises(self):
         """Adding a file to a subdirectory path that does not exist should raise ADFSError."""
@@ -1391,7 +1392,7 @@ class TestAddFile:
         side = image.sides[0]
 
         with pytest.raises(ADFSError, match="not found"):
-            side.addFile("$.NOSUCH.FILE", b"data")
+            side.addFile(DiscFile("$.NOSUCH.FILE", b"data"))
 
     def testFreeSpaceDecreasesAfterAdd(self):
         """The reported free space should decrease by at least the file size after adding a file."""
@@ -1399,7 +1400,7 @@ class TestAddFile:
         side = image.sides[0]
 
         before = side.freeSpace()
-        side.addFile("$.DATA", bytes(512))
+        side.addFile(DiscFile("$.DATA", bytes(512)))
         after = side.freeSpace()
 
         # 512 bytes = 2 sectors.
@@ -1413,7 +1414,7 @@ class TestDeleteFile:
         image = createAdfsImage()
         side = image.sides[0]
 
-        side.addFile("$.TEMP", b"temporary")
+        side.addFile(DiscFile("$.TEMP", b"temporary"))
         side.deleteFile("$.TEMP")
 
         cat = side.readCatalogue()
@@ -1425,7 +1426,7 @@ class TestDeleteFile:
         side = image.sides[0]
 
         before = side.freeSpace()
-        side.addFile("$.TEMP", bytes(1024))
+        side.addFile(DiscFile("$.TEMP", bytes(1024)))
         during = side.freeSpace()
         side.deleteFile("$.TEMP")
         after = side.freeSpace()
@@ -1439,7 +1440,7 @@ class TestDeleteFile:
         side = image.sides[0]
 
         side.mkdir("$.SUB")
-        side.addFile("$.SUB.FILE", b"nested")
+        side.addFile(DiscFile("$.SUB.FILE", b"nested"))
         side.deleteFile("$.SUB.FILE")
 
         sub_dir = side.readDirectory(
@@ -1470,7 +1471,7 @@ class TestDeleteFile:
         image = createAdfsImage()
         side = image.sides[0]
 
-        side.addFile("$.ONLY", b"sole file")
+        side.addFile(DiscFile("$.ONLY", b"sole file"))
         side.deleteFile("$.ONLY")
 
         root = side.readDirectory(ADFS_ROOT_SECTOR)
@@ -1594,7 +1595,7 @@ class TestCreateAdfsImage:
         image = createAdfsImage()
         side = image.sides[0]
 
-        side.addFile("$.TEST", b"hello")
+        side.addFile(DiscFile("$.TEST", b"hello"))
 
         serialized = image.serialize()
         image2 = ADFSImage(bytearray(serialized), False)

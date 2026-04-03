@@ -15,6 +15,7 @@ from argparse import Namespace
 import pytest
 
 from beebtools.dfs import createDiscImage, openDiscImage, DFSError
+from beebtools.entry import DiscFile
 from beebtools.disc import extractAll, buildImage
 from beebtools.inf import formatInf, parseInf
 from beebtools.cli import cmdCreate, cmdAdd, cmdDelete, cmdBuild
@@ -358,7 +359,7 @@ class TestCmdDelete:
         """Create a SSD with one file and return the image path."""
         image = createDiscImage(tracks=80, title="DELTEST")
         side = image.sides[0]
-        side.addFile("VICTIM", "$", b"\x01" * 100, load_addr=0x1900)
+        side.addFile(DiscFile("$.VICTIM", b"\x01" * 100, load_addr=0x1900))
         out = str(tmp_path / "disc.ssd")
         with open(out, "wb") as f:
             f.write(image.serialize())
@@ -413,8 +414,8 @@ class TestExtractInf:
         # Build a small image with one file.
         image = createDiscImage(tracks=80, title="INFTEST")
         side = image.sides[0]
-        side.addFile("LOADER", "$", b"\xFF" * 256, load_addr=0x1900,
-                     exec_addr=0x1900, locked=True)
+        side.addFile(DiscFile("$.LOADER", b"\xFF" * 256, load_addr=0x1900,
+                     exec_addr=0x1900, locked=True))
 
         img_path = str(tmp_path / "test.ssd")
         with open(img_path, "wb") as f:
@@ -441,7 +442,7 @@ class TestExtractInf:
         """Without write_inf, no .inf sidecars are written."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("DATA", "$", b"\x00" * 10)
+        side.addFile(DiscFile("$.DATA", b"\x00" * 10))
 
         img_path = str(tmp_path / "test.ssd")
         with open(img_path, "wb") as f:
@@ -467,8 +468,8 @@ class TestBuildImage:
         # Create an image with two files.
         original = createDiscImage(tracks=80, title="ROUNDTRP")
         side = original.sides[0]
-        side.addFile("PROG", "T", b"\x0D\x00\x0A\x05\x20\x0D\xFF", load_addr=0x0E00, exec_addr=0x8023)
-        side.addFile("DATA", "$", b"Hello\r", load_addr=0)
+        side.addFile(DiscFile("T.PROG", b"\x0D\x00\x0A\x05\x20\x0D\xFF", load_addr=0x0E00, exec_addr=0x8023))
+        side.addFile(DiscFile("$.DATA", b"Hello\r", load_addr=0))
 
         img_path = str(tmp_path / "original.ssd")
         with open(img_path, "wb") as f:
@@ -1050,10 +1051,10 @@ class TestAdfsExtractRebuildRoundTrip:
         data_a = bytes(range(256)) * 2
         data_b = bytes(range(255, -1, -1)) * 3
 
-        side.addFile(path="$.FILEA", data=data_a,
-                     load_addr=0x1000, exec_addr=0x2000)
-        side.addFile(path="$.FILEB", data=data_b,
-                     load_addr=0x3000, exec_addr=0x4000)
+        side.addFile(DiscFile("$.FILEA", data_a,
+                     load_addr=0x1000, exec_addr=0x2000))
+        side.addFile(DiscFile("$.FILEB", data_b,
+                     load_addr=0x3000, exec_addr=0x4000))
 
         original_path = str(tmp_path / "original.adf")
         with open(original_path, "wb") as f:
