@@ -46,7 +46,7 @@ binary line records with no human-readable structure.
 Binary files (machine code, data, sound samples) are stored as raw bytes and
 extracted as-is.
 
-For BASIC files, `beebtools` does three things in sequence:
+For BASIC files, `beebtools` does two things in sequence when extracting:
 
 1. **Detokenize** - decode the binary line records back to `LIST`-style text,
    expanding keyword tokens, decoding line-number references, and handling
@@ -59,11 +59,16 @@ For BASIC files, `beebtools` does three things in sequence:
    pretty-printer adds spaces around operators and punctuation while leaving
    string literals, `REM` tails, and `DATA` tails completely untouched.
 
-3. **Anti-listing trap detection** - some 1980s software used `*|` followed
-   by `VDU 21` (disable output) bytes as a copy-protection trick. Typing `LIST`
-   on the real machine would blank the screen after that line. `beebtools`
-   converts `*|` statements to `REM *|` and strips the control characters,
-   so the program is readable.
+   `beebtools` also handles anti-listing traps, a simply constructed statement
+   that was embedded within a BASIC program.  A line starting with `*|` followed
+   by `VDU 21` (disable output) bytes.  A simple and effective  copy-protection trick.
+   The pretty-printer converts `*|` statements to `REM *|` and strips the
+   control characters so the program is readable.
+
+When creating images`beebtools` performs the reverse - plain-text BASIC (as produced
+by step 1 or 2) is retokenized back to the binary format the BBC Micro
+expects.  The anti-listing trick is not reversed and re-injected into the program
+though in this case.
 
 ## Features
 
@@ -81,8 +86,7 @@ For BASIC files, `beebtools` does three things in sequence:
   detokenize-edit-retokenize workflow
 
 - Pretty-printer: add operator spacing to make terse BASIC readable
-
-- Anti-listing trap detection: neutralise copy-protection `*|` traps
+  - Anti-listing trap detection: neutralise copy-protection `*|` traps
 
 - Star command awareness: `*SCUMPI` is passed through verbatim, no false spacing
 
