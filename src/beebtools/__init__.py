@@ -10,17 +10,17 @@ except PackageNotFoundError:
     __version__ = "unknown"
 
 """
-beebtools - BBC Micro DFS disc image tool.
+beebtools - BBC Micro DFS and ADFS disc image tool.
 
-Supports .ssd (single-sided) and .dsd (double-sided interleaved) formats.
-BBC BASIC programs are detokenized to produce LIST-style plain text output,
-with an optional pretty-printer that adds operator spacing and handles
-copy-protection anti-listing traps.
+Supports DFS (.ssd, .dsd) and ADFS (.adf, .adl) disc image formats with
+full read and write support. BBC BASIC programs are detokenized to produce
+LIST-style plain text output, with an optional pretty-printer that adds
+operator spacing and handles copy-protection anti-listing traps.
 
 Usage as a library:
-    from beebtools import openDiscImage, detokenize, prettyPrint
+    from beebtools import openImage, detokenize, prettyPrint
 
-    image = openDiscImage("mydisc.dsd")
+    image = openImage("mydisc.adf")
     for side in image.sides:
         catalogue = side.readCatalogue()
         for entry in catalogue.entries:
@@ -33,10 +33,10 @@ Usage as a CLI tool:
     beebtools search  <image> <pattern> [-i] [--pretty]
     beebtools extract <image> <filename> [-o FILE] [--pretty]
     beebtools extract <image> -a [-d DIR] [--pretty] [--inf]
-    beebtools create  <image> [--title TITLE] [--boot OPTION]
+    beebtools create  <output> [--title TITLE] [--boot OPTION]
     beebtools add     <image> <file> [--name N] [--load L] [--exec E]
     beebtools delete  <image> <filename>
-    beebtools build   <dir> <image> [--title TITLE] [--boot OPTION]
+    beebtools build   <dir> <output> [--title TITLE] [--boot OPTION]
 
 Modules:
     tokens        -- BBC BASIC II token table and constants
@@ -44,6 +44,7 @@ Modules:
     tokenize      -- LIST-style text to tokenized binary
     pretty        -- operator spacing and anti-listing trap handling
     dfs           -- DFS disc image reader and writer (.ssd and .dsd)
+    adfs          -- ADFS disc image reader and writer (.adf and .adl)
     inf           -- .inf sidecar file parser and formatter
     disc          -- high-level disc operations (extract, search, build)
     cli           -- command-line interface
@@ -81,10 +82,15 @@ from .adfs import (
     ADFSError,
     ADFSFormatError,
     openAdfsImage,
+    createAdfsImage,
+    validateAdfsName,
+    ADFS_S_SECTORS,
+    ADFS_M_SECTORS,
+    ADFS_L_SECTORS,
 )
 from .image import openImage
 from .inf import InfData, parseInf, formatInf
-from .disc import search, extractAll, buildImage
+from .disc import search, extractAll, buildImage, buildAdfsImage
 from .cli import main
 
 __all__ = [
@@ -125,12 +131,18 @@ __all__ = [
     "ADFSError",
     "ADFSFormatError",
     "openAdfsImage",
+    "createAdfsImage",
+    "validateAdfsName",
+    "ADFS_S_SECTORS",
+    "ADFS_M_SECTORS",
+    "ADFS_L_SECTORS",
     # Image dispatcher
     "openImage",
     # Orchestration
     "search",
     "extractAll",
     "buildImage",
+    "buildAdfsImage",
     "main",
 ]
 

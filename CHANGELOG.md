@@ -15,6 +15,23 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ADFS-L (640K) images. All read commands (`cat`, `extract`, `search`) work
   transparently with both DFS and ADFS images.
 
+- **ADFS write support**: `beebtools create`, `add`, `delete`, and `build`
+  commands now work with ADFS disc images (`.adf`, `.adl`). Format is detected
+  from the file extension. Create supports ADFS-S (160K, 40-track `.adf`),
+  ADFS-M (320K, 80-track `.adf`), and ADFS-L (640K, `.adl`). File paths use
+  the ADFS hierarchical syntax (e.g. `$.GAMES.ELITE`). Build walks the source
+  directory tree recursively, creating subdirectories as needed.
+
+- `createAdfsImage()` library function: creates a blank ADFS disc image with
+  valid free space map and root directory. Accepts format size, title, and boot
+  option parameters.
+
+- `validateAdfsName()` library function: validates ADFS filenames (1-10
+  printable ASCII characters).
+
+- `buildAdfsImage()` library function: assembles an ADFS disc image from a
+  directory tree with `.inf` sidecars, including recursive subdirectory creation.
+
 - `openImage()` format auto-detection dispatcher: detects DFS or ADFS from the
   file extension and delegates to the appropriate parser. Exported from the
   public API.

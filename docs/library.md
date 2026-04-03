@@ -106,7 +106,7 @@ The `BootOption` enum provides the standard DFS boot options.
 ```python
 from beebtools import createDiscImage, BootOption, buildImage
 
-# Create a blank image and add files programmatically
+# Create a blank DFS image and add files programmatically
 image = createDiscImage(tracks=80, title="DEMO", boot_option=BootOption.EXEC)
 side = image.sides[0]
 side.addFile("$", "HELLO", load_addr=0x1900, exec_addr=0x8023, data=b"...")
@@ -115,6 +115,57 @@ raw = image.serialize()
 # Or build from a directory of files with .inf sidecars
 raw = buildImage(source_dir="extracted/", tracks=80, boot_option=BootOption.RUN)
 ```
+
+## Creating and building ADFS disc images
+
+ADFS images support hierarchical directories. Files are addressed by full
+path (e.g. `$.GAMES.ELITE`). Use `createAdfsImage()` to create a blank image
+and `addFile()`, `deleteFile()`, `mkdir()` to manipulate it.
+
+```python
+from beebtools import createAdfsImage, BootOption
+from beebtools import ADFS_S_SECTORS, ADFS_M_SECTORS, ADFS_L_SECTORS
+
+# Create a blank 320K ADFS image
+image = createAdfsImage(
+    total_sectors=ADFS_M_SECTORS,
+    title="GAMES",
+    boot_option=BootOption.RUN,
+)
+side = image.sides[0]
+
+# Create a subdirectory and add a file into it
+side.mkdir("$.GAMES")
+side.addFile(
+    path="$.GAMES.ELITE",
+    data=b"\x00" * 1024,
+    load_addr=0x1900,
+    exec_addr=0x1900,
+)
+
+# Add a file to the root directory
+side.addFile(path="$.BOOT", data=b"*RUN GAMES.ELITE\r")
+
+# Delete a file
+side.deleteFile("$.GAMES.ELITE")
+
+# Write the image to a file
+with open("mydisc.adf", "wb") as f:
+    f.write(image.serialize())
+```
+
+Build an ADFS image from an extracted directory tree:
+
+```python
+from beebtools import buildAdfsImage, ADFS_M_SECTORS
+
+raw = buildAdfsImage(source_dir="extracted/", total_sectors=ADFS_M_SECTORS)
+with open("rebuilt.adf", "wb") as f:
+    f.write(raw)
+```
+
+Format sizes: `ADFS_S_SECTORS` (160K, 640 sectors), `ADFS_M_SECTORS` (320K,
+1280 sectors), `ADFS_L_SECTORS` (640K, 2560 sectors).
 
 ## Working with .inf sidecar files
 
