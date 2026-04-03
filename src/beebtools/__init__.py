@@ -54,6 +54,11 @@ from .tokenize import tokenize, encodeLineRef
 from .pretty import prettyPrint
 from .boot import BootOption
 from .entry import DiscEntry, DiscCatalogue, DiscFile, DiscError, DiscFormatError, isBasicExecAddr
+from .codec import registerCodec
+
+# Register the "bbc" codec so bytes.decode("bbc") / str.encode("bbc") work
+# as soon as the package is imported.
+registerCodec()
 from .dfs import (
     DFSEntry,
     DFSCatalogue,
@@ -112,6 +117,7 @@ __all__ = [
     "DiscError",
     "DiscFormatError",
     "isBasicExecAddr",
+    "registerCodec",
     "openDiscImage",
     "createDiscImage",
     "validateDfsName",

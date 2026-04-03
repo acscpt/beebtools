@@ -196,18 +196,17 @@ def _adfsChecksum(data: bytes) -> int:
 def _decodeString(data: bytes) -> str:
     """Decode an ADFS directory string terminated by 0x0D or 0x00.
 
-    ADFS strings are not space-padded. Characters are masked to 7 bits
-    as a safety measure (footer strings have no access bits, but this
-    ensures clean ASCII regardless).
+    Characters are decoded via the bbc codec (7-bit ASCII), then the
+    result is truncated at the first NUL or 0x0D terminator.
     """
-    chars = []
+    text = data.decode("bbc")
 
-    for b in data:
-        if b == 0x0D or b == 0x00:
-            break
-        chars.append(chr(b & 0x7F))
+    # Truncate at the first terminator (0x0D decodes to \r, 0x00 to \x00).
+    for i, ch in enumerate(text):
+        if ch == '\r' or ch == '\x00':
+            return text[:i]
 
-    return "".join(chars)
+    return text
 
 
 def _encodeString(text: str, length: int) -> bytes:
@@ -216,15 +215,7 @@ def _encodeString(text: str, length: int) -> bytes:
     Truncates to length if the text is too long. Used for directory
     name, title, and footer string fields.
     """
-    buf = bytearray(length)
-
-    for i in range(length):
-        if i < len(text):
-            buf[i] = ord(text[i]) & 0x7F
-        else:
-            buf[i] = 0x0D
-
-    return bytes(buf)
+    return text[:length].encode("bbc").ljust(length, b"\x0d")
 
 
 def _read24le(data: bytes, offset: int) -> int:
@@ -264,15 +255,10 @@ def _encodeEntryName(name: str, access: int) -> bytes:
     Access bits are ORed into bit 7 of each byte position: bit 0 = R,
     bit 1 = W, bit 2 = L, bit 3 = D, etc.
     """
-    buf = bytearray(10)
+    buf = bytearray(name[:10].encode("bbc").ljust(10, b"\x0d"))
 
+    # OR in the access bit for each byte position.
     for i in range(10):
-        if i < len(name):
-            buf[i] = ord(name[i]) & 0x7F
-        else:
-            buf[i] = 0x0D
-
-        # OR in the access bit for this byte position.
         if access & (1 << i):
             buf[i] |= 0x80
 
@@ -730,16 +716,9 @@ class ADFSSide:
             if raw[offset + i] & 0x80:
                 access |= (1 << i)
 
-        # Extract name characters from bits 0-6.
-        name_chars = []
-
-        for i in range(10):
-            ch = raw[offset + i] & 0x7F
-            if ch == 0x0D or ch == 0x00:
-                break
-            name_chars.append(chr(ch))
-
-        name = "".join(name_chars)
+        # Extract name characters from bits 0-6 via decode7bit,
+        # then truncate at the first 0x0D or NUL terminator.
+        name = _decodeString(raw[offset : offset + 10])
 
         # Decode access flags of interest.
         locked = bool(access & 0x04)        # bit 2 = 'L'

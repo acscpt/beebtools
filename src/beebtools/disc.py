@@ -391,7 +391,7 @@ def extractAll(
                     entry.load_addr, entry.exec_addr,
                     entry.length, entry.locked,
                 )
-                with open(out_path + ".inf", "w", encoding="ascii") as f:
+                with open(out_path + ".inf", "w", encoding="utf-8") as f:
                     f.write(inf_line + "\n")
 
     return results
@@ -510,7 +510,7 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
             )
             continue
 
-        with open(inf_path, "r", encoding="ascii") as f:
+        with open(inf_path, "r", encoding="utf-8") as f:
             inf_line = f.readline().strip()
 
         inf = parseInf(inf_line)

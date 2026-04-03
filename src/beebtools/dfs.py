@@ -257,7 +257,7 @@ class DFSSide:
         # either NULs (DFS 0.90/0.98/2.00+) or spaces (DFS 1.00/1.20).
         title = (
             bytes(sec0[0:8]) + bytes(sec1[0:4])
-        ).decode("ascii", errors="replace").rstrip("\x00 ")
+        ).decode("bbc").rstrip("\x00 ")
 
         # --- Cycle number ---
         # BCD value in sector 1 byte 4, incremented each catalogue write.
@@ -325,12 +325,11 @@ class DFSSide:
         # Bytes base..base+6 hold the 7-character filename, space-padded.
         # Byte base+7 holds the directory character in the low 7 bits
         # and the locked attribute in the high bit.
-        raw_name = bytes(sec0[base : base + 7])
         dir_byte = sec0[base + 7]
 
         locked = bool(dir_byte & 0x80)
         directory = chr(dir_byte & 0x7F)
-        name = raw_name.decode("ascii", errors="replace").rstrip()
+        name = sec0[base : base + 7].decode("bbc").rstrip()
 
         # --- Addresses, length, and start sector from sector 1 ---
         # Low 16 bits of each address/length are stored in byte pairs.
@@ -386,8 +385,7 @@ class DFSSide:
         Returns:
             Tuple of (8 bytes for sec0[0:8], 4 bytes for sec1[0:4]).
         """
-        padded = title[:12].ljust(12, "\x00")
-        raw = padded.encode("ascii", errors="replace")
+        raw = title[:12].encode("bbc").ljust(12, b"\x00")
         return raw[:8], raw[8:12]
 
     @staticmethod
@@ -398,7 +396,7 @@ class DFSSide:
             Tuple of (8 bytes for sec0, 8 bytes for sec1).
         """
         # --- Sector 0: name + directory/locked ---
-        name_bytes = entry.name.encode("ascii", errors="replace")[:7].ljust(7, b" ")
+        name_bytes = entry.name[:7].encode("bbc").ljust(7, b" ")
         dir_byte = ord(entry.directory) & 0x7F
         if entry.locked:
             dir_byte |= 0x80
