@@ -54,7 +54,7 @@ from .detokenize import detokenize, decodeLineRef
 from .tokenize import tokenize, encodeLineRef
 from .pretty import prettyPrint
 from .boot import BootOption
-from .entry import DiscEntry, DiscFile, DiscError, DiscFormatError, isBasicExecAddr
+from .entry import DiscEntry, DiscCatalogue, DiscFile, DiscError, DiscFormatError, isBasicExecAddr
 from .dfs import (
     DFSEntry,
     DFSCatalogue,
@@ -90,7 +90,7 @@ from .adfs import (
     ADFS_M_SECTORS,
     ADFS_L_SECTORS,
 )
-from .image import openImage
+from .image import openImage, DiscSide, DiscImage
 from .inf import InfData, parseInf, formatInf
 from .disc import search, extractAll, buildImage, buildAdfsImage
 from .cli import main
@@ -111,6 +111,7 @@ __all__ = [
     "BootOption",
     # Shared contracts (entry.py)
     "DiscEntry",
+    "DiscCatalogue",
     "DiscFile",
     "DiscError",
     "DiscFormatError",
@@ -147,6 +148,8 @@ __all__ = [
     "ADFS_L_SECTORS",
     # Image dispatcher
     "openImage",
+    "DiscSide",
+    "DiscImage",
     # Orchestration
     "search",
     "extractAll",

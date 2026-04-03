@@ -11,7 +11,9 @@ This is a Layer 0 module - no internal imports.
 """
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Protocol, Tuple, runtime_checkable
+
+from .boot import BootOption
 
 
 # -----------------------------------------------------------------------
@@ -41,6 +43,26 @@ class DiscEntry(Protocol):
 
     @property
     def isDirectory(self) -> bool: ...
+
+
+# -----------------------------------------------------------------------
+# Catalogue Protocol
+# -----------------------------------------------------------------------
+
+@runtime_checkable
+class DiscCatalogue(Protocol):
+    """Structural Protocol for disc catalogues.
+
+    Both DFSCatalogue and ADFSCatalogue satisfy this Protocol.
+    Upper layers can access title, boot option, and entries
+    without knowing the concrete catalogue type.
+    """
+
+    title: str
+    cycle: int
+    boot_option: BootOption
+    disc_size: int
+    entries: Tuple[DiscEntry, ...]
 
 
 # -----------------------------------------------------------------------

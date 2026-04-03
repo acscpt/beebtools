@@ -1036,7 +1036,7 @@ class ADFSSide:
 
         return current_sector, current_dir, leaf_name
 
-    def addFile(self, spec: DiscFile) -> None:
+    def addFile(self, spec: DiscFile) -> 'ADFSEntry':
         """Add a file to the disc image at the given ADFS path.
 
         The parent directory must already exist. The filename is
@@ -1044,6 +1044,9 @@ class ADFSSide:
 
         Args:
             spec: DiscFile describing the file to add.
+
+        Returns:
+            The ADFSEntry created for the new file.
         """
         parent_sector, parent_dir, leaf_name = self._resolveParent(
             spec.path
@@ -1085,6 +1088,8 @@ class ADFSSide:
         # Insert the entry into the parent directory and write back.
         updated_dir = self._insertEntry(parent_dir, entry)
         self.writeDirectory(parent_sector, updated_dir)
+
+        return entry
 
     def deleteFile(self, path: str) -> None:
         """Delete a file from the disc image at the given ADFS path.
