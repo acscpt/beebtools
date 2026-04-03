@@ -28,7 +28,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "pytest-cov>=4"]
 
 [project.scripts]
 beebtools = "beebtools:main"
@@ -45,3 +45,10 @@ where = ["src"]
 testpaths = ["tests"]
 # Match camelCase test functions (testFoo) as well as the classic test_foo style.
 python_functions = "test*"
+
+[tool.coverage.run]
+source = ["beebtools"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true

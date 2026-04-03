@@ -84,6 +84,7 @@ def _makeSsdImage(filename: str, file_data: bytes, directory: str = "$",
 class TestSearch:
 
     def testFindsMatchInBasicFile(self, tmp_path):
+        """A search pattern present in a BASIC program's detokenized output should be returned as a result with file and line info."""
         # Program has one PRINT line containing "HELLO".
         prog = _makeProgram(
             (10, bytes([TOK_PRINT]) + b'"HELLO"'),
@@ -100,6 +101,7 @@ class TestSearch:
         assert "HELLO" in results[0]["line"]
 
     def testNoMatchReturnsEmpty(self, tmp_path):
+        """Searching for a string absent from all disc files should return an empty results list."""
         prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"HELLO"'))
         img = str(tmp_path / "test.ssd")
         with open(img, "wb") as f:
@@ -109,6 +111,7 @@ class TestSearch:
         assert results == []
 
     def testIgnoreCaseFlagOff(self, tmp_path):
+        """Without ignore_case, a search for uppercase 'HELLO' should not match a lowercase 'hello' in the file."""
         # Without ignore_case, "hello" should not match "HELLO".
         prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"HELLO"'))
         img = str(tmp_path / "test.ssd")
@@ -119,6 +122,7 @@ class TestSearch:
         assert results == []
 
     def testIgnoreCaseFlagOn(self, tmp_path):
+        """With ignore_case enabled, the same pattern should match regardless of the case of the file content."""
         # With ignore_case, "hello" should match "HELLO".
         prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"HELLO"'))
         img = str(tmp_path / "test.ssd")
@@ -129,6 +133,7 @@ class TestSearch:
         assert len(results) == 1
 
     def testMultipleLinesMatched(self, tmp_path):
+        """When the search pattern appears on more than one BASIC line, every matching line should appear in the results."""
         # Two lines both contain the search term.
         prog = _makeProgram(
             (10, bytes([TOK_PRINT]) + b'"SCORE"'),
@@ -145,6 +150,7 @@ class TestSearch:
         assert results[1]["line_number"] == 20
 
     def testFilenameFilterFullName(self, tmp_path):
+        """Passing a full DFS filename (dir.name) as a filter should restrict results to that file only."""
         # When filename given as full DFS name, only that file is searched.
         prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"HIT"'))
         img = str(tmp_path / "test.ssd")
@@ -157,6 +163,7 @@ class TestSearch:
         assert search(img, "HIT", filename="$.OTHER") == []
 
     def testFilenameFilterBareName(self, tmp_path):
+        """Passing just the bare name without directory prefix should match files in any directory."""
         # Bare name without directory prefix also scopes the search.
         prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"HIT"'))
         img = str(tmp_path / "test.ssd")
@@ -166,6 +173,7 @@ class TestSearch:
         assert len(search(img, "HIT", filename="PROG")) == 1
 
     def testNonBasicFileSkipped(self, tmp_path):
+        """A file that is not tokenized BASIC should be silently skipped rather than raising an error."""
         # A file with binary data (non-BASIC exec address) is not searched.
         binary_data = b"\xDE\xAD\xBE\xEF" * 16
         img = str(tmp_path / "test.ssd")
@@ -177,6 +185,7 @@ class TestSearch:
         assert results == []
 
     def testResultKeysPresent(self, tmp_path):
+        """Each result dict should contain 'file', 'line_number', and 'text' keys with correct types."""
         # Each result dict must contain all required keys.
         prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"KEY"'))
         img = str(tmp_path / "test.ssd")
@@ -218,17 +227,20 @@ class TestCmdSearch:
         return buf.getvalue()
 
     def testMatchPrinted(self, tmp_path):
+        """A matching result should be written to stdout in 'filename: line_number: content' format."""
         prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"WORLD"'))
         output = self._run(tmp_path, prog, "WORLD")
         assert "WORLD" in output
         assert "$.PROG" in output
 
     def testNoMatchPrintsNothing(self, tmp_path):
+        """When no lines match the search pattern, cmdSearch should produce no stdout output."""
         prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"WORLD"'))
         output = self._run(tmp_path, prog, "MISSING")
         assert output == ""
 
     def testLineNumberInOutput(self, tmp_path):
+        """The matched BASIC line number should appear in the printed output alongside the line content."""
         prog = _makeProgram((42, bytes([TOK_PRINT]) + b'"X"'))
         output = self._run(tmp_path, prog, '"X"')
         assert "42" in output
@@ -247,6 +259,7 @@ class TestSearchRegex:
         return img
 
     def testRegexMatchesPattern(self, tmp_path):
+        """In regex mode, a valid pattern should match any line in a BASIC file where the expression finds a hit."""
         # GOTO followed by digits - regex only.
         prog = _makeProgram(
             (10, bytes([TOK_GOTO]) + b"100"),
@@ -258,6 +271,7 @@ class TestSearchRegex:
         assert results[0]["line_number"] == 10
 
     def testLiteralDoesNotInterpretRegexChars(self, tmp_path):
+        """In literal mode, regex metacharacters like '.' should match only themselves and not act as wildcards."""
         # Without use_regex, "GOTO\d+" is a literal string, not a pattern.
         prog = _makeProgram((10, bytes([TOK_GOTO]) + b"100"))
         img = self._img(tmp_path, prog)
@@ -265,6 +279,7 @@ class TestSearchRegex:
         assert results == []
 
     def testInvalidRegexRaisesReError(self, tmp_path):
+        """Passing a syntactically invalid pattern in regex mode should raise re.error."""
         prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"X"'))
         img = self._img(tmp_path, prog)
         import re
@@ -272,6 +287,7 @@ class TestSearchRegex:
             search(img, "[unclosed", use_regex=True)
 
     def testRegexWithIgnoreCase(self, tmp_path):
+        """A regex search combined with ignore_case should match file content regardless of letter case."""
         prog = _makeProgram((10, bytes([TOK_PRINT]) + b'"SCORE"'))
         img = self._img(tmp_path, prog)
         results = search(img, "score", use_regex=True, ignore_case=True)

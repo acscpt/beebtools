@@ -67,15 +67,18 @@ class TestCatalogueStructure:
 
     @pytest.mark.parametrize("path", ALL_DSDS, ids=disc_ids)
     def testDsdOpensTwoSides(self, path):
+        """Opening a double-sided .dsd image should yield catalogue entries from both side 0 and side 1."""
         assert len(openDiscImage(path).sides) == 2
 
     @pytest.mark.parametrize("disc,entries", disc_side_params, ids=disc_side_ids)
     def testEntryCountIsReasonable(self, disc, entries):
+        """The number of entries on any disc side should be between 0 and 31, the DFS maximum."""
         # Standard DFS supports at most 31 files per side.
         assert 0 <= len(entries) <= 31
 
     @pytest.mark.parametrize("disc,entries", disc_side_params, ids=disc_side_ids)
     def testEveryEntryHasRequiredAttributes(self, disc, entries):
+        """Every catalogue entry must expose name, directory, length, load_addr, and exec_addr attributes."""
         required = {"name", "directory", "load_addr", "exec_addr", "length", "start_sector", "locked"}
         for entry in entries:
             entry_attrs = set(vars(entry).keys())
@@ -83,11 +86,13 @@ class TestCatalogueStructure:
 
     @pytest.mark.parametrize("disc,entries", disc_side_params, ids=disc_side_ids)
     def testEntryNamesAreNonEmpty(self, disc, entries):
+        """No catalogue entry read from a real disc should have an empty filename."""
         for entry in entries:
             assert len(entry.name) > 0
 
     @pytest.mark.parametrize("disc,entries", disc_side_params, ids=disc_side_ids)
     def testEntryLengthsArePositive(self, disc, entries):
+        """Every file in a real disc catalogue should report a non-negative length."""
         for entry in entries:
             assert entry.length >= 0
 
@@ -100,6 +105,7 @@ class TestFileExtraction:
 
     @pytest.mark.parametrize("disc,entries", disc_side_params, ids=disc_side_ids)
     def testExtractedLengthMatchesCatalogue(self, disc, entries):
+        """The byte length of extracted data should exactly match the length in the catalogue entry for every file."""
         for entry in entries:
             data = disc.readFile(entry)
             assert len(data) == entry.length, (
@@ -109,6 +115,7 @@ class TestFileExtraction:
 
     @pytest.mark.parametrize("disc,entries", disc_side_params, ids=disc_side_ids)
     def testBasicFilesStartWith0x0d(self, disc, entries):
+        """Any file identified as BASIC on a real DFS disc should begin with the 0x0D line-record marker byte."""
         for entry in entries:
             if entry.isBasic:
                 data = disc.readFile(entry)
@@ -119,6 +126,7 @@ class TestFileExtraction:
 
     @pytest.mark.parametrize("disc,entries", disc_side_params, ids=disc_side_ids)
     def testBasicFilesDetokenizeWithoutError(self, disc, entries):
+        """Calling detokenize() on every BASIC file from a real DFS disc should complete without raising an exception."""
         for entry in entries:
             if entry.isBasic:
                 data = disc.readFile(entry)
@@ -128,6 +136,7 @@ class TestFileExtraction:
 
     @pytest.mark.parametrize("disc,entries", disc_side_params, ids=disc_side_ids)
     def testDetokenizedLinesHaveLineNumbers(self, disc, entries):
+        """Each line produced by detokenize() should begin with a numeric line number, as required by DFS BASIC format."""
         for entry in entries:
             if entry.isBasic:
                 data = disc.readFile(entry)
@@ -145,25 +154,32 @@ class TestFileExtraction:
 class TestLooksLikePlainText:
 
     def testPrintableAsciiIsText(self):
+        """A buffer containing only printable ASCII (0x20-0x7E) should be classified as plain text."""
         assert looksLikePlainText(b"Hello, world!")
 
     def testTabCrLfAccepted(self):
+        """Common whitespace control characters (tab 0x09, CR 0x0D, LF 0x0A) should be treated as valid in plain text."""
         assert looksLikePlainText(b"line1\r\nline2\ttabbed")
 
     def testEmptyIsNotText(self):
+        """An empty byte buffer should not be classified as plain text."""
         assert not looksLikePlainText(b"")
 
     def testHighByteIsNotText(self):
+        """A buffer containing any byte with the high bit set (>= 0x80) should not be classified as plain text."""
         assert not looksLikePlainText(b"Hello\x80world")
 
     def testNulByteIsNotText(self):
+        """A NUL byte (0x00) should disqualify the buffer from being classified as plain text."""
         assert not looksLikePlainText(b"Hello\x00world")
 
     def testControlCharIsNotText(self):
+        """A non-whitespace control character (e.g. 0x01) should cause the buffer to fail the plain text check."""
         # 0x01 is a control char that should not be accepted.
         assert not looksLikePlainText(b"\x01")
 
     def testBasicMarkerIsNotText(self):
+        """A buffer starting with 0x0D (the BBC BASIC line marker) should not be misidentified as plain text."""
         # 0x0D at the start is the BASIC line marker - but a lone 0x0D is
         # carriage return, which IS accepted as whitespace.
         # A tokenized BASIC file will have non-text bytes after the 0x0D.
@@ -253,6 +269,7 @@ class TestValidation:
     # --- openDiscImage: image too small ---
 
     def testSsdTooSmallRaises(self, tmp_path):
+        """An .ssd file shorter than the minimum two-sector catalogue should raise DFSFormatError."""
         path = str(tmp_path / "tiny.ssd")
         with open(path, "wb") as f:
             f.write(b"\x00" * 100)
@@ -261,6 +278,7 @@ class TestValidation:
             openDiscImage(path)
 
     def testDsdTooSmallRaises(self, tmp_path):
+        """A .dsd file too small to hold both sides' catalogues should raise DFSFormatError."""
         path = str(tmp_path / "tiny.dsd")
         with open(path, "wb") as f:
             f.write(b"\x00" * 100)
@@ -269,6 +287,7 @@ class TestValidation:
             openDiscImage(path)
 
     def testSsdMinimumSizeAccepted(self, tmp_path):
+        """An .ssd file at exactly the minimum valid byte size should parse without error."""
         # Exactly 2 sectors (512 bytes) is the minimum valid SSD.
         path = str(tmp_path / "min.ssd")
         with open(path, "wb") as f:
@@ -279,6 +298,7 @@ class TestValidation:
         assert len(cat.entries) == 0
 
     def testDsdMinimumSizeAccepted(self, tmp_path):
+        """A .dsd file at exactly the minimum valid byte size should parse without error."""
         # 20 sectors (5120 bytes) is the minimum valid DSD.
         path = str(tmp_path / "min.dsd")
         with open(path, "wb") as f:
@@ -290,6 +310,7 @@ class TestValidation:
     # --- Catalogue: file offset not a multiple of 8 ---
 
     def testOddFileOffsetRaises(self):
+        """A catalogue entry with an odd sector offset (value 1, 3 ...) should raise DFSFormatError."""
         data = _blankSsd()
         data[SECTOR_SIZE + 5] = 7  # Not a multiple of 8.
         image = DFSImage(data, is_dsd=False)
@@ -299,6 +320,7 @@ class TestValidation:
             side.readCatalogue()
 
     def testFileOffsetOf3Raises(self):
+        """A catalogue entry pointing to sector 3 (inside the catalogue area) should raise DFSFormatError."""
         data = _blankSsd()
         data[SECTOR_SIZE + 5] = 3
         image = DFSImage(data, is_dsd=False)
@@ -309,6 +331,7 @@ class TestValidation:
     # --- Catalogue: start sector overlaps catalogue ---
 
     def testStartSectorZeroWithNonEmptyFileRaises(self):
+        """A non-empty file starting at sector 0 (the catalogue area) should raise DFSFormatError."""
         data = _ssdWithOneFile(start_sector=0, length=16)
         image = DFSImage(data, is_dsd=False)
 
@@ -316,6 +339,7 @@ class TestValidation:
             image.sides[0].readCatalogue()
 
     def testStartSectorOneWithNonEmptyFileRaises(self):
+        """A non-empty file starting at sector 1 (the catalogue area) should raise DFSFormatError."""
         data = _ssdWithOneFile(start_sector=1, length=16)
         image = DFSImage(data, is_dsd=False)
 
@@ -323,6 +347,7 @@ class TestValidation:
             image.sides[0].readCatalogue()
 
     def testStartSectorZeroWithEmptyFileAccepted(self):
+        """An empty (zero-length) file may carry a zero start sector without raising an error."""
         # An empty file (length 0) at sector 0 is allowed - no data to overlap.
         data = _ssdWithOneFile(start_sector=0, length=0)
         image = DFSImage(data, is_dsd=False)
@@ -331,6 +356,7 @@ class TestValidation:
         assert cat.entries[0].length == 0
 
     def testStartSectorTwoAccepted(self):
+        """A file starting at sector 2 (the first valid data sector) should be accepted without error."""
         data = _ssdWithOneFile(start_sector=2, length=16)
         image = DFSImage(data, is_dsd=False)
         cat = image.sides[0].readCatalogue()
@@ -340,6 +366,7 @@ class TestValidation:
     # --- readFile: file extends beyond image ---
 
     def testReadFileBeyondImageRaises(self):
+        """A catalogue entry whose data extent would exceed the image boundary should raise an error."""
         # Create a tiny image but claim a file starts at a high sector.
         data = _ssdWithOneFile(start_sector=900, length=512)
         # Shrink the image so sector 900 is beyond it.
@@ -353,6 +380,7 @@ class TestValidation:
     # --- readSector: sector beyond image ---
 
     def testReadSectorBeyondImageRaises(self):
+        """Reading a sector index beyond the image size should raise DFSFormatError."""
         data = bytearray(2 * SECTOR_SIZE)  # Only 2 sectors.
         image = DFSImage(data, is_dsd=False)
 
@@ -362,16 +390,19 @@ class TestValidation:
     # --- createDiscImage: invalid parameters ---
 
     def testCreateInvalidTrackCountRaises(self):
+        """Passing an unsupported track count (not 40 or 80) to createDiscImage() should raise ValueError."""
         with pytest.raises(ValueError, match="Track count must be 40 or 80"):
             createDiscImage(tracks=60)
 
     def testCreateInvalidBootOptionRaises(self):
+        """Passing a boot option outside the valid range to createDiscImage() should raise ValueError."""
         with pytest.raises(ValueError, match="Boot option must be 0-3"):
             createDiscImage(boot_option=5)
 
     # --- writeSector: wrong data size ---
 
     def testWriteSectorWrongSizeRaises(self):
+        """Writing a sector buffer that is not exactly 256 bytes should raise ValueError."""
         image = createDiscImage(tracks=40)
         side = image.sides[0]
 
@@ -381,6 +412,7 @@ class TestValidation:
     # --- writeFile: data length mismatch ---
 
     def testWriteFileLengthMismatchRaises(self):
+        """Passing file data whose length does not match the entry's length field should raise ValueError."""
         image = createDiscImage(tracks=40)
         side = image.sides[0]
         entry = DFSEntry(
@@ -397,6 +429,7 @@ class TestDFSEntry:
     """Unit tests for DFSEntry properties."""
 
     def testFullName(self):
+        """The fullName property should return 'DIR.NAME' format, matching the DFS catalogue convention."""
         entry = DFSEntry(
             name="PROG", directory="T",
             load_addr=0, exec_addr=0,
@@ -405,6 +438,7 @@ class TestDFSEntry:
         assert entry.fullName == "T.PROG"
 
     def testIsBasicWithKnownExecAddresses(self):
+        """An entry carrying a standard BBC BASIC II execution address should be identified as a BASIC file."""
         for addr in (0x801F, 0x8023, 0x802B):
             entry = DFSEntry(
                 name="X", directory="$",
@@ -414,6 +448,7 @@ class TestDFSEntry:
             assert entry.isBasic, f"exec 0x{addr:04X} should be BASIC"
 
     def testIsBasicWithHighBitsMasked(self):
+        """The BASIC exec address check should succeed when the top address byte is 0xFF, as produced by the MOS pager."""
         # The top two bits of exec_addr flag I/O processor memory.
         # isBasic should mask them off.
         entry = DFSEntry(
@@ -424,6 +459,7 @@ class TestDFSEntry:
         assert entry.isBasic
 
     def testIsNotBasicForBinary(self):
+        """An entry with an execution address that is not a known BASIC entry point should not be identified as BASIC."""
         entry = DFSEntry(
             name="BIN", directory="$",
             load_addr=0x1900, exec_addr=0x1900,
@@ -432,6 +468,7 @@ class TestDFSEntry:
         assert not entry.isBasic
 
     def testFrozenCannotMutate(self):
+        """DFSEntry is a frozen dataclass; any attribute assignment after creation should raise FrozenInstanceError."""
         entry = DFSEntry(
             name="X", directory="$",
             load_addr=0, exec_addr=0,
@@ -445,6 +482,7 @@ class TestCatalogueMetadata:
     """Tests for catalogue metadata fields parsed from synthetic images."""
 
     def testDiscTitle(self):
+        """The disc title string should be assembled correctly from the two 8-byte and 4-byte title fields in the catalogue sectors."""
         data = _blankSsd()
         data[0:8] = b"HELLOSID"
         data[SECTOR_SIZE : SECTOR_SIZE + 4] = b"E\x00\x00\x00"
@@ -453,6 +491,7 @@ class TestCatalogueMetadata:
         assert cat.title == "HELLOSIDE"
 
     def testDiscTitleStripsNulAndSpace(self):
+        """Trailing NUL bytes and spaces in the raw title fields should be stripped from the returned string."""
         data = _blankSsd()
         data[0:8] = b"HI\x00\x00\x00\x00\x00\x00"
         image = DFSImage(data, is_dsd=False)
@@ -460,6 +499,7 @@ class TestCatalogueMetadata:
         assert cat.title == "HI"
 
     def testCycleNumber(self):
+        """The cycle (sequence) number should be read as an unsigned integer from sector 1 of the catalogue."""
         data = _blankSsd()
         data[SECTOR_SIZE + 4] = 0x42  # BCD 42.
         image = DFSImage(data, is_dsd=False)
@@ -467,6 +507,7 @@ class TestCatalogueMetadata:
         assert cat.cycle == 0x42
 
     def testBootOption(self):
+        """The boot option stored in the catalogue should map to the correct BootOption enum member."""
         data = _blankSsd()
         # Boot option in bits 4-5 of sec1[6]. Value 3 = EXEC.
         data[SECTOR_SIZE + 6] = 0x30
@@ -475,6 +516,7 @@ class TestCatalogueMetadata:
         assert cat.boot_option == 3
 
     def testDiscSize(self):
+        """The reported disc size in bytes should equal the total number of sectors multiplied by 256."""
         data = _blankSsd()
         # disc_size = sec1[7] | (sec1[6] bits 0-1 << 8).
         # Set to 800 = 0x320 -> sec1[7]=0x20, sec1[6] bits 0-1 = 3.
@@ -485,24 +527,28 @@ class TestCatalogueMetadata:
         assert cat.disc_size == 800
 
     def testBootOptionEnum(self):
+        """All four BootOption values (NONE, LOAD, RUN, EXEC) should be settable and readable without error."""
         assert BootOption(0).name == "OFF"
         assert BootOption(1).name == "LOAD"
         assert BootOption(2).name == "RUN"
         assert BootOption(3).name == "EXEC"
 
     def testEntryLocked(self):
+        """A catalogue entry with the locked bit set in byte 7 of the first sector should report locked as True."""
         data = _ssdWithOneFile(locked=True)
         image = DFSImage(data, is_dsd=False)
         cat = image.sides[0].readCatalogue()
         assert cat.entries[0].locked is True
 
     def testEntryUnlocked(self):
+        """A catalogue entry without the locked bit should report locked as False."""
         data = _ssdWithOneFile(locked=False)
         image = DFSImage(data, is_dsd=False)
         cat = image.sides[0].readCatalogue()
         assert cat.entries[0].locked is False
 
     def testEntryAddresses(self):
+        """Load address, execution address, and file length should all be parsed correctly from a synthetic catalogue entry."""
         data = _ssdWithOneFile(
             load_addr=0x1900, exec_addr=0x802B, length=256,
         )
@@ -518,15 +564,19 @@ class TestLooksLikeTokenizedBasic:
     """Unit tests for looksLikeTokenizedBasic()."""
 
     def testStartsWith0x0d(self):
+        """A byte sequence beginning with 0x0D satisfies the tokenized BASIC header check."""
         assert looksLikeTokenizedBasic(b"\x0D\x00\x0A\x05\xF1")
 
     def testDoesNotStartWith0x0d(self):
+        """A byte sequence that does not start with 0x0D should not be identified as tokenized BASIC."""
         assert not looksLikeTokenizedBasic(b"\x00\x0D\x0A")
 
     def testEmptyBytes(self):
+        """An empty byte buffer should not pass the tokenized BASIC check."""
         assert not looksLikeTokenizedBasic(b"")
 
     def testSingleByte0x0d(self):
+        """A single 0x0D byte should satisfy the minimal BASIC header check."""
         assert looksLikeTokenizedBasic(b"\x0D")
 
 
@@ -541,18 +591,21 @@ class TestSortCatalogueEntries:
         ]
 
     def testSortByName(self):
+        """Sorting by name should produce strict alphabetical ordering across entries from different directories."""
         from beebtools import sortCatalogueEntries
         result = sortCatalogueEntries(self._entries(), "name")
         names = [e.name for e in result]
         assert names == ["ALPHA", "MIDDLE", "ZEBRA"]
 
     def testSortByCatalog(self):
+        """Sorting by catalogue position should preserve the original physical disc order of entries."""
         from beebtools import sortCatalogueEntries
         result = sortCatalogueEntries(self._entries(), "catalog")
         names = [e.name for e in result]
         assert names == ["ZEBRA", "ALPHA", "MIDDLE"]
 
     def testSortBySize(self):
+        """Sorting by size should order entries from smallest to largest file length."""
         from beebtools import sortCatalogueEntries
         result = sortCatalogueEntries(self._entries(), "size")
         lengths = [e.length for e in result]
@@ -563,16 +616,19 @@ class TestCreateDiscImage:
     """Tests for createDiscImage() and round-tripping."""
 
     def testCreate40TrackSsd(self):
+        """Creating a 40-track .ssd image should return a bytes buffer of the correct size (40 * 10 * 256 bytes)."""
         image = createDiscImage(tracks=40, is_dsd=False)
         assert len(image.data) == 40 * 10 * SECTOR_SIZE
         assert len(image.sides) == 1
 
     def testCreate80TrackDsd(self):
+        """Creating an 80-track .dsd image should return a buffer covering both sides (80 * 10 * 2 * 256 bytes)."""
         image = createDiscImage(tracks=80, is_dsd=True)
         assert len(image.data) == 80 * 20 * SECTOR_SIZE
         assert len(image.sides) == 2
 
     def testBlankCatalogueIsEmpty(self):
+        """A freshly created disc should have zero entries in its catalogue."""
         image = createDiscImage(tracks=80, title="TEST")
         cat = image.sides[0].readCatalogue()
         assert cat.title == "TEST"
@@ -580,11 +636,13 @@ class TestCreateDiscImage:
         assert cat.boot_option == 0
 
     def testBootOptionPreserved(self):
+        """The boot option passed to createDiscImage() should be returned unchanged by the parsed catalogue."""
         image = createDiscImage(tracks=80, boot_option=3)
         cat = image.sides[0].readCatalogue()
         assert cat.boot_option == 3
 
     def testDiscSizeMatchesTracks(self):
+        """The disc size in sectors should equal tracks x 10 x sides, matching the standard DFS encoding."""
         image = createDiscImage(tracks=40)
         cat = image.sides[0].readCatalogue()
         assert cat.disc_size == 400  # 40 * 10
@@ -594,6 +652,7 @@ class TestCreateDiscImage:
         assert cat.disc_size == 800  # 80 * 10
 
     def testDsdBothSidesReadable(self):
+        """Both sides of a newly created .dsd image should each parse independently to empty catalogues."""
         image = createDiscImage(tracks=80, is_dsd=True, title="DUAL")
         for side in image.sides:
             cat = side.readCatalogue()
@@ -601,6 +660,7 @@ class TestCreateDiscImage:
             assert cat.entries == ()
 
     def testSerializeReturnsBytes(self):
+        """Calling serialize() on a disc should return a bytes object whose length matches the image byte count."""
         image = createDiscImage(tracks=40)
         raw = image.serialize()
         assert isinstance(raw, bytes)
@@ -611,6 +671,7 @@ class TestWriteReadRoundTrip:
     """Round-trip tests: write a catalogue then read it back."""
 
     def testRoundTripEmptyCatalogue(self):
+        """A blank disc serialized and then re-parsed should produce an empty catalogue with no entries."""
         image = createDiscImage(tracks=80, title="ROUND", boot_option=2)
         cat = image.sides[0].readCatalogue()
 
@@ -623,6 +684,7 @@ class TestWriteReadRoundTrip:
         assert cat2.entries == ()
 
     def testRoundTripWithEntries(self):
+        """Files written to a disc then re-read after serialization should retain all metadata fields and data bytes."""
         image = createDiscImage(tracks=80, title="FILES")
         side = image.sides[0]
 
@@ -660,6 +722,7 @@ class TestWriteReadRoundTrip:
         assert data == b"\x0D" * 10
 
     def testBcdIncrement(self):
+        """Each write operation should increment the BCD cycle counter stored in sector 1 of the catalogue."""
         from beebtools.dfs import DFSSide
         assert DFSSide._bcdIncrement(0x00) == 0x01
         assert DFSSide._bcdIncrement(0x09) == 0x10
@@ -672,93 +735,116 @@ class TestValidateDfsName:
     """Tests for the validateDfsName function."""
 
     def testValidNameAccepted(self):
+        """A standard '$.PROG' style DFS name should pass validation without raising an error."""
         validateDfsName("$", "BOOT")
 
     def testValidNameNonDefaultDir(self):
+        """A name with a non-default single-character directory (e.g. 'A.FILE') should be accepted."""
         validateDfsName("T", "MYPROG")
 
     def testSingleCharNameAccepted(self):
+        """A one-character filename is the shortest valid DFS name and should be accepted."""
         validateDfsName("$", "A")
 
     def testSevenCharNameAccepted(self):
+        """A seven-character filename matches the DFS maximum length and should be accepted."""
         validateDfsName("$", "ABCDEFG")
 
     def testMaxPrintableDir(self):
+        """The highest printable ASCII character that is otherwise valid should be accepted as a directory."""
         # Tilde is 0x7E, the highest valid printable ASCII.
         validateDfsName("~", "FILE")
 
     def testExclamationDir(self):
+        """The '!' character is a documented valid DFS directory character and should be accepted."""
         # 0x21, the lowest valid directory character.
         validateDfsName("!", "BOOT")
 
     def testEmptyDirectoryRejected(self):
+        """A zero-length directory component should be rejected."""
         with pytest.raises(DFSError):
             validateDfsName("", "FILE")
 
     def testMultiCharDirectoryRejected(self):
+        """A directory token longer than one character should be rejected."""
         with pytest.raises(DFSError):
             validateDfsName("AB", "FILE")
 
     def testSpaceDirectoryRejected(self):
+        """A space character as the directory component should be rejected."""
         with pytest.raises(DFSError):
             validateDfsName(" ", "FILE")
 
     def testControlCharDirectoryRejected(self):
+        """A control character as the directory should be rejected."""
         with pytest.raises(DFSError):
             validateDfsName("\x01", "FILE")
 
     def testDelDirectoryRejected(self):
+        """The DEL character (0x7F) is not a valid DFS directory character and should be rejected."""
         # 0x7F is DEL, just above printable range.
         with pytest.raises(DFSError):
             validateDfsName("\x7F", "FILE")
 
     def testEmptyNameRejected(self):
+        """An empty filename part should be rejected."""
         with pytest.raises(DFSError):
             validateDfsName("$", "")
 
     def testNameTooLongRejected(self):
+        """A filename exceeding seven characters should be rejected."""
         with pytest.raises(DFSError):
             validateDfsName("$", "ABCDEFGH")
 
     def testNameWithControlCharRejected(self):
+        """A filename containing any control character should be rejected."""
         with pytest.raises(DFSError):
             validateDfsName("$", "A\x00B")
 
     def testNameWithHighBitRejected(self):
+        """A filename containing a byte with bit 7 set should be rejected."""
         # 0x80 is beyond printable ASCII.
         with pytest.raises(DFSError):
             validateDfsName("$", "A\x80B")
 
     def testNameWithSpaceRejected(self):
+        """A filename containing a space should be rejected."""
         # Space is forbidden in DFS filenames per the spec.
         with pytest.raises(DFSError):
             validateDfsName("$", "A B")
 
     def testNameWithDotRejected(self):
+        """A filename containing '.' should be rejected; the dot is reserved for directory separation."""
         with pytest.raises(DFSError):
             validateDfsName("$", "A.B")
 
     def testNameWithColonRejected(self):
+        """A filename containing ':' should be rejected."""
         with pytest.raises(DFSError):
             validateDfsName("$", "A:B")
 
     def testNameWithQuoteRejected(self):
+        """A filename containing a double-quote should be rejected."""
         with pytest.raises(DFSError):
             validateDfsName("$", 'A"B')
 
     def testNameWithHashRejected(self):
+        """A filename containing '#' should be rejected."""
         with pytest.raises(DFSError):
             validateDfsName("$", "A#B")
 
     def testNameWithStarRejected(self):
+        """A filename containing '*' (a DFS wildcard) should be rejected."""
         with pytest.raises(DFSError):
             validateDfsName("$", "A*B")
 
     def testForbiddenDirectoryDotRejected(self):
+        """The '.' character is forbidden as a directory component even though it is printable ASCII."""
         with pytest.raises(DFSError):
             validateDfsName(".", "FILE")
 
     def testForbiddenDirectoryHashRejected(self):
+        """The '#' character is forbidden as a directory component."""
         with pytest.raises(DFSError):
             validateDfsName("#", "FILE")
 
@@ -770,17 +856,20 @@ class TestValidateDfsName:
 class TestFreeSpace:
 
     def testEmptyDiscHasFullFreeSpace(self):
+        """A newly created blank 80-track disc should report all data sectors as free."""
         # 80-track disc: 800 sectors, minus 2 for catalogue = 798 free.
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         assert side.freeSpace() == 798 * SECTOR_SIZE
 
     def testFortyTrackDisc(self):
+        """A 40-track disc should report proportionally less free space than an equivalent 80-track disc."""
         image = createDiscImage(tracks=40)
         side = image.sides[0]
         assert side.freeSpace() == 398 * SECTOR_SIZE
 
     def testOneFileReducesFreeSpace(self):
+        """Adding one file should decrease free space by at least the number of bytes in the file."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         side.addFile("TEST", "$", b"\xAA" * 512)
@@ -790,6 +879,7 @@ class TestFreeSpace:
         assert side.freeSpace() == 796 * SECTOR_SIZE
 
     def testTwoFilesReduceFreeSpace(self):
+        """Adding two files should decrease free space by the combined sector usage of both files."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         side.addFile("FILE1", "$", b"\xAA" * 256)
@@ -799,6 +889,7 @@ class TestFreeSpace:
         assert side.freeSpace() == 796 * SECTOR_SIZE
 
     def testDeletedMiddleFileDoesNotFreespace(self):
+        """In DFS, deleting a middle-catalogue file does not reclaim its sectors; only the highest-addressed file does."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
@@ -817,6 +908,7 @@ class TestFreeSpace:
         assert side.freeSpace() == 795 * SECTOR_SIZE
 
     def testDeleteLowestFileFreesSpace(self):
+        """Deleting the file with the lowest start sector (occupying the end of used space in DFS) should increase free space."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         side.addFile("AFILE", "$", b"\xAA" * 256)
@@ -836,6 +928,7 @@ class TestFreeSpace:
 class TestAddFile:
 
     def testAddOneFile(self):
+        """Adding a single file should result in it appearing in the catalogue with the correct name and directory."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
@@ -849,6 +942,7 @@ class TestAddFile:
         assert entry.locked is False
 
     def testAddFileAppearsInCatalogue(self):
+        """After adding a file, iterating the catalogue entries should yield the new file."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         side.addFile("PROG", "T", b"\xAA" * 50)
@@ -859,6 +953,7 @@ class TestAddFile:
         assert cat.entries[0].directory == "T"
 
     def testAddFileDataReadBack(self):
+        """Raw bytes read back from the disc after adding should exactly match the original data written."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         file_data = bytes(range(200))
@@ -869,6 +964,7 @@ class TestAddFile:
         assert read_back == file_data
 
     def testAddMultipleFiles(self):
+        """All files added in sequence should appear in the catalogue with no entries missing."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
@@ -884,6 +980,7 @@ class TestAddFile:
         assert sectors == sorted(sectors, reverse=True)
 
     def testAddFileDataIntegrity(self):
+        """Data from each file should be independently readable; writing one file should not corrupt another."""
         # Add multiple files and verify all data reads back correctly.
         image = createDiscImage(tracks=80)
         side = image.sides[0]
@@ -904,6 +1001,7 @@ class TestAddFile:
         assert side.readFile(names["FILE3"]) == data3
 
     def testAddLockedFile(self):
+        """A file added with the locked flag should report locked as True in the catalogue."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         side.addFile("SECRET", "$", b"\xFF" * 10, locked=True)
@@ -912,6 +1010,7 @@ class TestAddFile:
         assert cat.entries[0].locked is True
 
     def testAddZeroLengthFile(self):
+        """A zero-length file should be representable as a catalogue entry with a zero length field."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         entry = side.addFile("EMPTY", "$", b"")
@@ -923,6 +1022,7 @@ class TestAddFile:
         assert side.readFile(cat.entries[0]) == b""
 
     def testCycleNumberIncremented(self):
+        """The catalogue cycle counter should increment each time a file is written."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
@@ -935,6 +1035,7 @@ class TestAddFile:
         assert cat_after.cycle == 1
 
     def testDuplicateNameRejected(self):
+        """Adding a file whose name already exists in the same directory should raise an error."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         side.addFile("PROG", "$", b"\xAA" * 10)
@@ -943,6 +1044,7 @@ class TestAddFile:
             side.addFile("PROG", "$", b"\xBB" * 10)
 
     def testSameNameDifferentDirAllowed(self):
+        """The same filename under different directories (e.g. '$.FOO' and 'A.FOO') should coexist without error."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         side.addFile("PROG", "$", b"\xAA" * 10)
@@ -952,6 +1054,7 @@ class TestAddFile:
         assert len(cat.entries) == 2
 
     def testCatalogueFullRejected(self):
+        """Attempting to add a file when the catalogue already holds 31 entries should raise an error."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
@@ -967,6 +1070,7 @@ class TestAddFile:
             side.addFile("EXTRA", "$", b"\xBB")
 
     def testDiscFullRejected(self):
+        """Attempting to add a file larger than the available free sectors should raise an error."""
         image = createDiscImage(tracks=40)
         side = image.sides[0]
 
@@ -979,6 +1083,7 @@ class TestAddFile:
             side.addFile("TINY", "$", b"\xBB")
 
     def testInvalidNameRejected(self):
+        """Adding a file with a name that fails DFS validation should raise ValueError."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
@@ -986,6 +1091,7 @@ class TestAddFile:
             side.addFile("TOOLONGNAME", "$", b"\xAA")
 
     def testExactFitSucceeds(self):
+        """A file whose size exactly matches the remaining free sectors should be accepted."""
         image = createDiscImage(tracks=40)
         side = image.sides[0]
 
@@ -1006,6 +1112,7 @@ class TestAddFile:
 class TestDeleteFile:
 
     def testDeleteOnlyFile(self):
+        """Deleting the only file on the disc should leave the catalogue completely empty."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         side.addFile("DOOMED", "$", b"\xAA" * 100)
@@ -1017,6 +1124,7 @@ class TestDeleteFile:
         assert len(cat.entries) == 0
 
     def testDeleteFromMultipleFiles(self):
+        """Deleting one file from a multi-entry catalogue should remove it while leaving all others intact."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         side.addFile("KEEP1", "$", b"\xAA" * 100)
@@ -1033,6 +1141,7 @@ class TestDeleteFile:
         assert len(cat.entries) == 2
 
     def testDeleteNonexistentRaisesError(self):
+        """Attempting to delete a filename not found in the catalogue should raise an error."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
@@ -1040,6 +1149,7 @@ class TestDeleteFile:
             side.deleteFile("GHOST", "$")
 
     def testDeleteWrongDirRaisesError(self):
+        """Specifying the wrong directory letter during deletion should not match any entry and should raise an error."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         side.addFile("PROG", "$", b"\xAA" * 10)
@@ -1048,6 +1158,7 @@ class TestDeleteFile:
             side.deleteFile("PROG", "T")
 
     def testDeletePreservesOtherFileData(self):
+        """After deleting one file, the raw data of all remaining files should be unchanged."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
@@ -1062,6 +1173,7 @@ class TestDeleteFile:
         assert side.readFile(cat.entries[0]) == data_keep
 
     def testDeleteCycleIncremented(self):
+        """The catalogue cycle counter should increment after each deletion."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         side.addFile("TEST", "$", b"\xAA")
@@ -1073,6 +1185,7 @@ class TestDeleteFile:
         assert cycle_after == DFSSide._bcdIncrement(cycle_before)
 
     def testAddAfterDeleteReusesSpace(self):
+        """After deleting the last-written file, its freed sectors should be available for a new addition."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
@@ -1097,12 +1210,14 @@ class TestDeleteFile:
 class TestCompact:
 
     def testCompactEmptyDisc(self):
+        """Compacting an empty disc should succeed without error and leave no entries or data gaps."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         freed = side.compact()
         assert freed == 0
 
     def testCompactNoGaps(self):
+        """Compacting a disc that has no deleted-file gaps should not move any data or change file contents."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         side.addFile("FILE1", "$", b"\xAA" * 256)
@@ -1112,6 +1227,7 @@ class TestCompact:
         assert freed == 0
 
     def testCompactReclaimsGap(self):
+        """After compaction, a gap left by a deleted file should be closed and the subsequent files moved down."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
@@ -1131,6 +1247,7 @@ class TestCompact:
         assert freed == 1 * SECTOR_SIZE
 
     def testCompactPreservesFileData(self):
+        """All files still present after compaction should be readable with their original, unmodified content."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
@@ -1153,6 +1270,7 @@ class TestCompact:
         assert side.readFile(names["BOT"]) == data_bot
 
     def testCompactMultipleGaps(self):
+        """A disc with several non-contiguous gaps should have all remaining files moved to form one contiguous block."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
@@ -1181,6 +1299,7 @@ class TestCompact:
             assert e_low.start_sector + ((e_low.length + SECTOR_SIZE - 1) // SECTOR_SIZE) == e_high.start_sector
 
     def testCompactLargeFile(self):
+        """A large multi-sector file should survive compaction intact, with all sectors relocated correctly."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
@@ -1205,6 +1324,7 @@ class TestCompact:
         assert side.readFile(names["MEDIUM"]) == data_med
 
     def testCompactMakesSpaceForNewFile(self):
+        """After compaction a new file that previously did not fit should now be addable successfully."""
         image = createDiscImage(tracks=40)
         side = image.sides[0]
 
@@ -1243,6 +1363,7 @@ class TestCompact:
 class TestAddFileRoundTrip:
 
     def testCreateAddReadRoundTrip(self):
+        """A full create-add-serialize-reopen-extract cycle should reproduce the original file data exactly."""
         # Build a disc from scratch, add several files, serialize, reopen,
         # and verify every file reads back correctly.
         image = createDiscImage(tracks=80, title="ROUND", boot_option=2)
@@ -1276,6 +1397,7 @@ class TestAddFileRoundTrip:
             assert actual == expected_data, f"Mismatch for {d}.{n}"
 
     def testDsdAddFileBothSides(self):
+        """Files can be added to each side of a .dsd image independently and read back from the correct side."""
         image = createDiscImage(tracks=80, is_dsd=True, title="DUAL")
         side0 = image.sides[0]
         side1 = image.sides[1]

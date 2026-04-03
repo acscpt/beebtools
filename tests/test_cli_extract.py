@@ -132,47 +132,59 @@ def _makeDsdImage(
 class TestSanitizeDfsDir:
 
     def testNormalDirUnchanged(self):
+        """A standard single-letter DFS directory character should pass through the sanitizer unchanged."""
         assert sanitizeDfsDir("T") == "T"
 
     def testDollarDirUnchanged(self):
+        """The '$' default DFS directory character should not be encoded or modified."""
         assert sanitizeDfsDir("$") == "$"
 
     def testExclamationDirUnchanged(self):
+        """The '!' character is a valid DFS directory and should pass through unchanged."""
         assert sanitizeDfsDir("!") == "!"
 
     def testIllegalCharEncoded(self):
+        """A directory character that is illegal on the host filesystem should be percent-encoded to a safe form."""
         assert sanitizeDfsDir("/") == "_x2F_"
 
 
 class TestSanitizeDfsFilename:
 
     def testNormalNameUnchanged(self):
+        """A plain alphanumeric filename with no special characters should not be altered by the sanitizer."""
         assert sanitizeDfsFilename("MYPROG") == "MYPROG"
 
     def testForwardSlashEncoded(self):
+        """A forward slash in a DFS filename would create a phantom directory on the host and must be percent-encoded."""
         assert sanitizeDfsFilename("A/B") == "A_x2F_B"
 
     def testBackslashEncoded(self):
+        """A backslash is illegal in Windows filenames and should be percent-encoded."""
         assert sanitizeDfsFilename("A\\B") == "A_x5C_B"
 
     def testSlashAndBackslashDistinct(self):
+        """Forward slash and backslash should map to distinct encoded sequences so they remain differentiable."""
         slash = sanitizeDfsFilename("A/B")
         backslash = sanitizeDfsFilename("A\\B")
         assert slash != backslash
 
     def testColonEncoded(self):
+        """A colon is illegal in Windows filenames and should be percent-encoded."""
         assert sanitizeDfsFilename("A:B") == "A_x3A_B"
 
     def testControlCharDropped(self):
+        """Control characters (below 0x20) in a DFS filename should be dropped entirely from the output."""
         assert sanitizeDfsFilename("A\x01B") == "AB"
 
     def testAllWindowsIllegalCharsEncoded(self):
+        """All characters illegal under Windows (< > : " / \ | ? *) should each be encoded or dropped."""
         illegal = '\\/:*?"<>|'
         for ch in illegal:
             result = sanitizeDfsFilename(f"A{ch}B")
             assert ch not in result, f"Illegal char {repr(ch)} appeared unencoded in {repr(result)}"
 
     def testWindowsIllegalCharsAllDistinct(self):
+        """Each illegal character must map to a distinct encoded output to avoid two different names colliding."""
         illegal = '\\/:*?"<>|'
         results = [sanitizeDfsFilename(f"_{ch}_") for ch in illegal]
         assert len(results) == len(set(results)), "Two illegal chars produced the same output"
@@ -185,28 +197,34 @@ class TestSanitizeDfsFilename:
 class TestResolveOutputPath:
 
     def testSingleSideHierarchical(self, tmp_path):
+        """A single-sided disc should place extracted files under a subdirectory named after its DFS directory."""
         # Single-sided: out_dir/dir/filename.
         result = resolveOutputPath(str(tmp_path), 0, "$", "FILE", multi_side=False)
         assert result == os.path.join(str(tmp_path), "$", "FILE")
 
     def testSingleSideNonDefaultDir(self, tmp_path):
+        """Files in a non-default DFS directory should be placed in a matching subdirectory of the output."""
         result = resolveOutputPath(str(tmp_path), 0, "T", "PROG", multi_side=False)
         assert result == os.path.join(str(tmp_path), "T", "PROG")
 
     def testDoubleSideSide0(self, tmp_path):
+        """Side 0 files of a double-sided disc should be extracted under a 'side0' subdirectory."""
         result = resolveOutputPath(str(tmp_path), 0, "$", "FILE", multi_side=True)
         assert result == os.path.join(str(tmp_path), "side0", "$", "FILE")
 
     def testDoubleSideSide1(self, tmp_path):
+        """Side 1 files of a double-sided disc should be extracted under a 'side1' subdirectory."""
         result = resolveOutputPath(str(tmp_path), 1, "T", "PROG", multi_side=True)
         assert result == os.path.join(str(tmp_path), "side1", "T", "PROG")
 
     def testDirectoriesCreated(self, tmp_path):
+        """Any missing intermediate directories in the output path should be created automatically."""
         # resolveOutputPath must create all intermediate directories.
         resolveOutputPath(str(tmp_path), 0, "$", "FILE", multi_side=True)
         assert os.path.isdir(os.path.join(str(tmp_path), "side0", "$"))
 
     def testSingleSideDirectoryCreated(self, tmp_path):
+        """The top-level output directory for a single-sided extraction should be created if it does not exist."""
         resolveOutputPath(str(tmp_path), 0, "T", "PROG", multi_side=False)
         assert os.path.isdir(os.path.join(str(tmp_path), "T"))
 
@@ -218,6 +236,7 @@ class TestResolveOutputPath:
 class TestExtractAllSingleSide:
 
     def testSingleSideExtractsHierarchically(self, tmp_path):
+        """Bulk extraction of a single-sided disc should create a directory tree that mirrors the DFS '$' layout."""
         # Build a single-sided image with one binary file.
         img_path = str(tmp_path / "test.ssd")
         with open(img_path, "wb") as f:
@@ -231,6 +250,7 @@ class TestExtractAllSingleSide:
         assert not os.path.isdir(os.path.join(out_dir, "side0"))
 
     def testPlainTextFileSavedAsTxt(self, tmp_path):
+        """A file whose content is identified as plain ASCII text should be saved with a .txt extension."""
         img_path = str(tmp_path / "test.ssd")
         with open(img_path, "wb") as f:
             f.write(_makeSsdImage("README", b"Hello BBC\rworld\r"))
@@ -242,6 +262,7 @@ class TestExtractAllSingleSide:
         assert not os.path.isfile(os.path.join(out_dir, "$", "README.bin"))
 
     def testPlainTextCrNormalisedToLf(self, tmp_path):
+        """Bare carriage-return line endings in extracted plain text should be converted to Unix LF."""
         img_path = str(tmp_path / "test.ssd")
         with open(img_path, "wb") as f:
             f.write(_makeSsdImage("NOTES", b"line one\rline two\r"))
@@ -260,6 +281,7 @@ class TestExtractAllSingleSide:
 class TestExtractAllDoubleSideSubdir:
 
     def testDefaultSubdirLayout(self, tmp_path):
+        """Bulk extraction of a double-sided disc should produce separate side0/ and side1/ directories."""
         img_path = str(tmp_path / "test.dsd")
         with open(img_path, "wb") as f:
             f.write(_makeDsdImage("PROG0", b"\x01" * 16, "PROG1", b"\x02" * 16))
@@ -290,22 +312,26 @@ class TestCmdCatInspect:
         return buf.getvalue()
 
     def testBinaryFileNoType(self, tmp_path):
+        """A binary file should not receive any type label in the cmdCat output, regardless of content."""
         # Binary data: no type label in default or inspect mode.
         output = self._runCat(tmp_path, b"\xDE\xAD\xBE\xEF" * 4, inspect=False)
         assert "BASIC" not in output
         assert "TEXT" not in output
 
     def testTextFileNoLabelWithoutInspect(self, tmp_path):
+        """Without the --inspect flag, a plain text file should appear in the listing without a type label."""
         # Plain text data without --inspect: type column stays blank.
         output = self._runCat(tmp_path, b"Hello BBC\rworld\r", inspect=False)
         assert "TEXT" not in output
 
     def testTextFileLabelledWithInspect(self, tmp_path):
+        """With --inspect active, a file whose content is plain ASCII should be labelled 'TEXT' in the listing."""
         # Plain text data with --inspect: should show TEXT.
         output = self._runCat(tmp_path, b"Hello BBC\rworld\r", inspect=True)
         assert "TEXT" in output
 
     def testBinaryFileStillNoTypeWithInspect(self, tmp_path):
+        """A binary file should remain unlabelled even when --inspect is active."""
         # Binary data with --inspect: still blank (not TEXT).
         output = self._runCat(tmp_path, b"\xDE\xAD\xBE\xEF" * 4, inspect=True)
         assert "BASIC" not in output

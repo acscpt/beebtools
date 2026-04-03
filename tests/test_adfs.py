@@ -282,6 +282,7 @@ def _adfsWithFiles(files: list) -> bytearray:
 class TestAdfsChecksum:
 
     def testAllZerosChecksum(self):
+        """A 256-byte sector of zeros should produce a consistent, deterministic checksum value."""
         # 255 zero bytes - checksum computation starts at 255 and adds zeros.
         data = bytes(256)
         result = _adfsChecksum(data)
@@ -289,6 +290,7 @@ class TestAdfsChecksum:
         assert 0 <= result <= 255
 
     def testKnownChecksumRoundTrip(self):
+        """A valid free-space map sector with a stored checksum should pass re-verification with an identical computed value."""
         # Build a free space map sector and verify the checksum is self-consistent.
         sec = bytearray(256)
         sec[0xFC] = 0x80  # 640 sectors low byte
@@ -299,6 +301,7 @@ class TestAdfsChecksum:
         assert _adfsChecksum(bytes(sec)) == sec[0xFF]
 
     def testCorruptChecksumDetected(self):
+        """Flipping any data byte after storing a correct checksum must produce a different checksum, detecting the corruption."""
         # Build valid map, corrupt one byte, checksum should no longer match.
         sec = bytearray(256)
         sec[0xFF] = _adfsChecksum(bytes(sec))
@@ -314,15 +317,19 @@ class TestAdfsChecksum:
 class TestDecodeString:
 
     def testSimpleName(self):
+        """A name terminated by 0x0D padding bytes should decode to the plain ASCII string only, without the padding."""
         assert _decodeString(b"HELLO\x0d\x0d\x0d\x0d\x0d") == "HELLO"
 
     def testNulTerminator(self):
+        """A name terminated by NUL bytes (0x00) should decode correctly, stopping at the first terminator."""
         assert _decodeString(b"TEST\x00\x00\x00\x00\x00\x00") == "TEST"
 
     def testFullLengthName(self):
+        """A 10-character name (the ADFS maximum) should encode without any truncation."""
         assert _decodeString(b"ABCDEFGHIJ") == "ABCDEFGHIJ"
 
     def testEmptyString(self):
+        """An empty string should encode to a buffer filled entirely with 0x0D terminator bytes."""
         assert _decodeString(b"\x0d\x0d\x0d") == ""
 
 
@@ -333,10 +340,12 @@ class TestDecodeString:
 class TestIntReaders:
 
     def testRead24le(self):
+        """Three bytes stored in little-endian order should be reassembled into the correct 24-bit integer."""
         data = bytes([0x56, 0x34, 0x12, 0xFF])
         assert _read24le(data, 0) == 0x123456
 
     def testRead32le(self):
+        """Four bytes stored in little-endian order should be reassembled into the correct 32-bit integer."""
         data = bytes([0x78, 0x56, 0x34, 0x12])
         assert _read32le(data, 0) == 0x12345678
 
@@ -348,31 +357,37 @@ class TestIntReaders:
 class TestIntWriters:
 
     def testWrite24leRoundTrip(self):
+        """Writing a 24-bit value then reading it back at the same offset should return the original number."""
         buf = bytearray(8)
         _write24le(buf, 2, 0x123456)
         assert _read24le(buf, 2) == 0x123456
 
     def testWrite32leRoundTrip(self):
+        """Writing a 32-bit value then reading it back at the same offset should return the original number."""
         buf = bytearray(8)
         _write32le(buf, 1, 0x12345678)
         assert _read32le(buf, 1) == 0x12345678
 
     def testWrite24leZero(self):
+        """Writing zero as a 24-bit little-endian integer should produce exactly three zero bytes."""
         buf = bytearray(4)
         _write24le(buf, 0, 0)
         assert buf[0:3] == b"\x00\x00\x00"
 
     def testWrite32leZero(self):
+        """Writing zero as a 32-bit little-endian integer should produce exactly four zero bytes."""
         buf = bytearray(4)
         _write32le(buf, 0, 0)
         assert buf == b"\x00\x00\x00\x00"
 
     def testWrite24leMaxValue(self):
+        """Writing 0xFFFFFF (the maximum 24-bit value) should produce three 0xFF bytes."""
         buf = bytearray(3)
         _write24le(buf, 0, 0xFFFFFF)
         assert buf == b"\xFF\xFF\xFF"
 
     def testWrite32leMaxValue(self):
+        """Writing 0xFFFFFFFF (the maximum 32-bit value) should produce four 0xFF bytes."""
         buf = bytearray(4)
         _write32le(buf, 0, 0xFFFFFFFF)
         assert buf == b"\xFF\xFF\xFF\xFF"
@@ -385,22 +400,27 @@ class TestIntWriters:
 class TestEncodeString:
 
     def testSimpleRoundTrip(self):
+        """Encoding a name then decoding it should return the original string unchanged."""
         encoded = _encodeString("HELLO", 10)
         assert _decodeString(encoded) == "HELLO"
 
     def testPaddedWith0x0D(self):
+        """A name shorter than the target buffer length should be right-padded with 0x0D bytes."""
         encoded = _encodeString("AB", 5)
         assert encoded == bytes([0x41, 0x42, 0x0D, 0x0D, 0x0D])
 
     def testFullLengthNoPadding(self):
+        """A name that exactly fills the buffer should encode with no trailing padding bytes."""
         encoded = _encodeString("ABCDEFGHIJ", 10)
         assert _decodeString(encoded) == "ABCDEFGHIJ"
 
     def testEmptyString(self):
+        """An empty string should encode to a buffer filled entirely with 0x0D terminator bytes."""
         encoded = _encodeString("", 5)
         assert encoded == bytes([0x0D] * 5)
 
     def testTruncatesToLength(self):
+        """A name longer than the target length should be silently truncated to fit the buffer."""
         encoded = _encodeString("TOOLONGNAME", 5)
         assert len(encoded) == 5
         assert _decodeString(encoded) == "TOOLO"
@@ -413,6 +433,7 @@ class TestEncodeString:
 class TestEncodeEntryName:
 
     def testSimpleNameNoAccess(self):
+        """A simple name with no access bits set should encode with plain unmodified ASCII bytes."""
         encoded = _encodeEntryName("TEST", 0x00)
         # Characters should be plain ASCII, remainder padded with 0x0D.
         assert encoded[0] == ord("T")
@@ -420,6 +441,7 @@ class TestEncodeEntryName:
         assert encoded[4] == 0x0D
 
     def testAccessBitsInBit7(self):
+        """Access permission bits should be packed into the high bit (bit 7) of each character byte."""
         # Access 0x03 sets bits 0 (R) and 1 (W).
         encoded = _encodeEntryName("AB", 0x03)
         assert encoded[0] == ord("A") | 0x80  # bit 0 set
@@ -427,6 +449,7 @@ class TestEncodeEntryName:
         assert encoded[2] == 0x0D             # no access bit 2
 
     def testRoundTripWithParseEntry(self):
+        """An entry name encoded then parsed through the full entry reader should round-trip correctly."""
         # Build a full 26-byte entry and verify _parseEntry recovers it.
         entry = ADFSEntry(
             name="MYFILE",
@@ -461,6 +484,7 @@ class TestEncodeEntryName:
         assert parsed.sequence == 0x42
 
     def testFullLengthName(self):
+        """A 10-character name (the ADFS maximum) should encode without any truncation."""
         encoded = _encodeEntryName("ABCDEFGHIJ", 0x00)
         name = ""
         for i in range(10):
@@ -471,6 +495,7 @@ class TestEncodeEntryName:
         assert name == "ABCDEFGHIJ"
 
     def testDirectoryAccessBits(self):
+        """A directory entry should have the appropriate access bits set in its encoded name bytes."""
         # Directory entries have 'D' bit (bit 3) plus R, W, L.
         encoded = _encodeEntryName("GAMES", 0x0F)
         # Bits 0,1,2,3 should all be set in first 4 byte positions.
@@ -486,6 +511,7 @@ class TestEncodeEntryName:
 class TestEncodeEntry:
 
     def testBasicFieldsEncoded(self):
+        """All metadata fields (name, load, exec, length, start sector) should appear at their documented byte offsets in the 26-byte entry."""
         entry = ADFSEntry(
             name="DATA",
             directory="$",
@@ -507,6 +533,7 @@ class TestEncodeEntry:
         assert _read24le(raw, 0x16) == 7
 
     def testZeroLengthFile(self):
+        """A zero-length file with a zero start sector should produce a valid entry without garbage values in size or sector fields."""
         entry = ADFSEntry(
             name="EMPTY",
             directory="$",
@@ -524,6 +551,7 @@ class TestEncodeEntry:
         assert _read32le(raw, 0x12) == 0
 
     def testLockedFileAccess(self):
+        """A locked file's access bytes should have the locked bit set in the correct position of the encoded entry."""
         entry = ADFSEntry(
             name="SECRET",
             directory="$",
@@ -549,6 +577,7 @@ class TestEncodeEntry:
 class TestSectorWrite:
 
     def testWriteSectorReadBack(self):
+        """A single 256-byte sector written to an image should be readable back with identical content."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -559,6 +588,7 @@ class TestSectorWrite:
         assert side._readSector(10) == pattern
 
     def testWriteSectorsReadBack(self):
+        """Multiple contiguous sectors written in one call should all read back correctly."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -569,6 +599,7 @@ class TestSectorWrite:
         assert side._readSectors(20, 2) == data
 
     def testWriteSectorOutOfBoundsRaises(self):
+        """Attempting to write to a sector index beyond the image boundary should raise an error."""
         image_data = _blankAdfs(total_sectors=10)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -577,6 +608,7 @@ class TestSectorWrite:
             side._writeSector(10, bytes(256))
 
     def testWriteSectorsOutOfBoundsRaises(self):
+        """Attempting to write a sector range that extends past the end of the image should raise an error."""
         image_data = _blankAdfs(total_sectors=10)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -592,6 +624,7 @@ class TestSectorWrite:
 class TestFreeSpaceMap:
 
     def testValidMapParses(self):
+        """A correctly formed two-sector free-space map should parse to the right total sector count and free block list."""
         image_data = _blankAdfs(total_sectors=640, disc_id=0xABCD, boot_option=2)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -604,6 +637,7 @@ class TestFreeSpaceMap:
         assert fsm.blocks[0] == (7, 640 - 7)
 
     def testCorruptSec0ChecksumRaises(self):
+        """A bad checksum byte in sector 0 of the free-space map should raise ADFSFormatError."""
         image_data = _blankAdfs()
         # Corrupt a byte in sector 0. Use a single-bit flip so the ADFS
         # carry-based checksum detects it (XOR 0xFF is a blind spot).
@@ -615,6 +649,7 @@ class TestFreeSpaceMap:
             side.readFreeSpaceMap()
 
     def testCorruptSec1ChecksumRaises(self):
+        """A bad checksum byte in sector 1 of the free-space map should raise ADFSFormatError."""
         image_data = _blankAdfs()
         # Corrupt a byte in sector 1.
         image_data[0x110] ^= 0x01
@@ -625,6 +660,7 @@ class TestFreeSpaceMap:
             side.readFreeSpaceMap()
 
     def testMultipleFreeBlocks(self):
+        """A disc with several fragmented free blocks should expose all block entries with correct start and length values."""
         sec0 = bytearray(256)
         sec1 = bytearray(256)
 
@@ -669,6 +705,7 @@ class TestFreeSpaceMap:
 class TestWriteFreeSpaceMap:
 
     def testWriteReadRoundTrip(self):
+        """Writing a free-space map then immediately re-reading it should restore an identical in-memory structure."""
         image_data = _blankAdfs(total_sectors=640, disc_id=0xBEEF, boot_option=3)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -684,6 +721,7 @@ class TestWriteFreeSpaceMap:
         assert reread.boot_option == original.boot_option
 
     def testWriteMultipleBlocks(self):
+        """A free-space map with multiple free blocks should persist all entries correctly across a write-read cycle."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -700,6 +738,7 @@ class TestWriteFreeSpaceMap:
         assert reread.blocks == ((7, 50), (100, 200))
 
     def testWriteInvalidatesCache(self):
+        """Writing a new map should clear any cached parsed result so that the next read reflects the updated data."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -725,6 +764,7 @@ class TestWriteFreeSpaceMap:
 class TestAllocateBlock:
 
     def testAllocateFromSingleBlock(self):
+        """Allocating sectors from a single large free block should return the first available sector address."""
         image_data = _blankAdfs(total_sectors=640)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -739,6 +779,7 @@ class TestAllocateBlock:
         assert fsm.blocks[0] == (17, 623)
 
     def testAllocateExactSize(self):
+        """Allocating exactly the remaining free space should succeed and leave an empty free block list."""
         image_data = _blankAdfs(total_sectors=640)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -752,6 +793,7 @@ class TestAllocateBlock:
         assert len(fsm.blocks) == 0
 
     def testAllocateMultipleBlocks(self):
+        """Sequential allocations should each return distinct, non-overlapping sector ranges."""
         image_data = _blankAdfs(total_sectors=640)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -769,6 +811,7 @@ class TestAllocateBlock:
         assert fsm.blocks[0] == (25, 615)
 
     def testAllocateDiscFullRaises(self):
+        """Requesting more sectors than are available on the disc should raise ADFSError indicating disc full."""
         image_data = _blankAdfs(total_sectors=640)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -777,6 +820,7 @@ class TestAllocateBlock:
             side._allocateBlock(634)
 
     def testAllocateFirstFitSkipsSmallBlock(self):
+        """First-fit allocation should skip a free block that is too small and use the next block that fits."""
         # Set up FSM with a small block followed by a large one.
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
@@ -801,6 +845,7 @@ class TestAllocateBlock:
 class TestFreeBlock:
 
     def testFreeBlockSimple(self):
+        """Freeing an isolated block should add it to the free-space map as a standalone new entry."""
         image_data = _blankAdfs(total_sectors=640)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -815,6 +860,7 @@ class TestFreeBlock:
         assert fsm.blocks[0] == (7, 633)
 
     def testFreeBlockMergeRight(self):
+        """A freed block immediately before an existing free block should merge with it into one larger entry."""
         image_data = _blankAdfs(total_sectors=640)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -830,6 +876,7 @@ class TestFreeBlock:
         assert (27, 613) in fsm.blocks
 
     def testFreeBlockMergesAdjacentRight(self):
+        """Two free blocks that become adjacent from the right should be coalesced into a single contiguous block."""
         image_data = _blankAdfs(total_sectors=640)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -850,6 +897,7 @@ class TestFreeBlock:
         assert fsm.blocks[0] == (7, 633)
 
     def testFreeBlockMergesAdjacentLeft(self):
+        """Two free blocks that become adjacent from the left should be coalesced into a single contiguous block."""
         image_data = _blankAdfs(total_sectors=640)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -870,6 +918,7 @@ class TestFreeBlock:
         assert fsm.blocks[0] == (7, 20)
 
     def testFreeBlockMergesBoth(self):
+        """A freed block that is adjacent to free blocks on both sides should merge all three into one entry."""
         image_data = _blankAdfs(total_sectors=640)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -890,6 +939,7 @@ class TestFreeBlock:
         assert fsm.blocks[0] == (7, 120)
 
     def testFreeBlockNoMerge(self):
+        """A freed block that is not adjacent to any other free block should remain as a separate isolated entry."""
         image_data = _blankAdfs(total_sectors=640)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -913,6 +963,7 @@ class TestFreeBlock:
 class TestFreeSpace:
 
     def testFreeSpaceOnBlankDisc(self):
+        """A newly created blank disc should report total capacity minus the map and root directory overhead as free space."""
         image_data = _blankAdfs(total_sectors=640)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -920,6 +971,7 @@ class TestFreeSpace:
         assert side.freeSpace() == 633
 
     def testFreeSpaceAfterAllocation(self):
+        """Available free space should decrease by at least the allocated amount after adding a file."""
         image_data = _blankAdfs(total_sectors=640)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -928,6 +980,7 @@ class TestFreeSpace:
         assert side.freeSpace() == 533
 
     def testFreeSpaceWithMultipleBlocks(self):
+        """The reported free space should be the sum of all free block lengths, not just the largest single block."""
         image_data = _blankAdfs(total_sectors=640)
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -950,6 +1003,7 @@ class TestFreeSpace:
 class TestEncodeDirectory:
 
     def testRoundTripEmptyDirectory(self):
+        """Encoding an empty directory then decoding it should produce a valid directory with zero entries."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -969,6 +1023,7 @@ class TestEncodeDirectory:
         assert len(reread.entries) == 0
 
     def testRoundTripWithEntries(self):
+        """Encoding a directory containing entries then decoding it should preserve all entry fields exactly."""
         files = [
             {"name": "ALPHA", "data": b"a" * 100, "load_addr": 0x1900},
             {"name": "BETA", "data": b"b" * 200, "load_addr": 0x2000},
@@ -991,6 +1046,7 @@ class TestEncodeDirectory:
 class TestWriteDirectory:
 
     def testWriteDirectoryBcdIncrements(self):
+        """Writing a directory to disc should increment its BCD sequence byte, marking it as freshly updated."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -1004,6 +1060,7 @@ class TestWriteDirectory:
         assert reread.sequence == 0x02
 
     def testWriteDirectoryBcdWraps(self):
+        """The BCD sequence counter should wrap from 0x99 back to 0x00 rather than overflowing."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -1023,6 +1080,7 @@ class TestWriteDirectory:
         assert reread.sequence == 0x10
 
     def testWriteDirectoryInvalidatesCache(self):
+        """Writing a directory should clear the cached copy so the next read reflects the newly written content."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -1051,6 +1109,7 @@ class TestInsertEntry:
         )
 
     def testInsertIntoEmpty(self):
+        """Inserting the first entry into an empty directory should result in a one-entry list."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -1061,6 +1120,7 @@ class TestInsertEntry:
         assert updated.entries[0].name == "HELLO"
 
     def testInsertMaintainsSortOrder(self):
+        """Inserting entries in any order should always leave the directory in alphabetical order."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -1074,6 +1134,7 @@ class TestInsertEntry:
         assert names == ["ALPHA", "BRAVO", "CHARLIE"]
 
     def testInsertCaseInsensitiveSort(self):
+        """Sort order during insertion should be case-insensitive so 'B' and 'b' sort together."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -1086,6 +1147,7 @@ class TestInsertEntry:
         assert directory.entries[1].name == "Zebra"
 
     def testInsertDuplicateRaises(self):
+        """Inserting an entry whose name already exists in the directory should raise ADFSError."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -1097,6 +1159,7 @@ class TestInsertEntry:
             side._insertEntry(directory, self._makeDummyEntry("file"))
 
     def testInsertFullDirectoryRaises(self):
+        """Inserting into a directory that already holds the maximum 47 entries should raise ADFSError."""
         # Build a directory with 47 entries.
         entries = [
             _makeDirectoryEntry(f"F{i:04d}") for i in range(ADFS_MAX_ENTRIES)
@@ -1121,6 +1184,7 @@ class TestRemoveEntry:
         )
 
     def testRemoveExisting(self):
+        """Removing an entry by name should leave the directory with exactly one fewer entry."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -1132,6 +1196,7 @@ class TestRemoveEntry:
         assert len(directory.entries) == 0
 
     def testRemoveCaseInsensitive(self):
+        """Entry lookup for removal should be case-insensitive, matching ADFS naming convention."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -1143,6 +1208,7 @@ class TestRemoveEntry:
         assert len(directory.entries) == 0
 
     def testRemoveFromMiddle(self):
+        """Removing an entry from the middle of the list should compact the remaining entries without gaps."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -1157,6 +1223,7 @@ class TestRemoveEntry:
         assert names == ["ALPHA", "CHARLIE"]
 
     def testRemoveNotFoundRaises(self):
+        """Attempting to remove a name not present in the directory should raise ADFSError."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -1174,31 +1241,39 @@ class TestRemoveEntry:
 class TestValidateAdfsName:
 
     def testValidName(self):
+        """A typical alphanumeric ADFS filename should pass validation without raising an error."""
         validateAdfsName("HELLO")
 
     def testSingleChar(self):
+        """A single-character name is the shortest valid ADFS filename."""
         validateAdfsName("A")
 
     def testMaxLength(self):
+        """A name exactly 10 characters long (the ADFS maximum) should pass validation without error."""
         validateAdfsName("ABCDEFGHIJ")
 
     def testEmptyRaises(self):
+        """An empty name string should be rejected with an error."""
         with pytest.raises(ADFSError, match="empty"):
             validateAdfsName("")
 
     def testTooLongRaises(self):
+        """A name exceeding 10 characters (the ADFS limit) should be rejected."""
         with pytest.raises(ADFSError, match="11 characters"):
             validateAdfsName("TOOLONGNAME")
 
     def testSpaceRaises(self):
+        """A name containing a space should be rejected; ADFS forbids spaces in filenames."""
         with pytest.raises(ADFSError, match="invalid character"):
             validateAdfsName("HE LO")
 
     def testControlCharRaises(self):
+        """A name containing a control character (below 0x20) should be rejected."""
         with pytest.raises(ADFSError, match="invalid character"):
             validateAdfsName("BAD\x01")
 
     def testHighBitCharRaises(self):
+        """A name containing a character with bit 7 set should be rejected; ADFS reserves that bit for access control."""
         with pytest.raises(ADFSError, match="invalid character"):
             validateAdfsName("BAD\x80")
 
@@ -1210,6 +1285,7 @@ class TestValidateAdfsName:
 class TestAddFile:
 
     def testAddAndReadBack(self):
+        """A file added to the root directory should be readable back with byte-identical content."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1226,6 +1302,7 @@ class TestAddFile:
         assert data == b"Hello World!"
 
     def testAddMultipleFiles(self):
+        """Multiple files added sequentially should all be present in the catalogue with correct data."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1238,6 +1315,7 @@ class TestAddFile:
         assert names == ["ALPHA", "BRAVO", "CHARLIE"]
 
     def testAddLockedFile(self):
+        """A file added with the locked flag should report locked as True when read from the catalogue."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1247,6 +1325,7 @@ class TestAddFile:
         assert cat.entries[0].locked is True
 
     def testAddToSubdirectory(self):
+        """A file can be placed in a named subdirectory and later extracted from that path."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1264,6 +1343,7 @@ class TestAddFile:
         assert data == b"game data"
 
     def testAddEmptyFile(self):
+        """Adding a zero-length file should succeed and appear in the catalogue with a zero length field."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1276,6 +1356,7 @@ class TestAddFile:
         assert data == b""
 
     def testAddDiscFullRaises(self):
+        """Attempting to add a file when no free sectors remain should raise ADFSError."""
         image = createAdfsImage(total_sectors=20)
         side = image.sides[0]
 
@@ -1287,6 +1368,7 @@ class TestAddFile:
             side.addFile("$.BIG", big_data)
 
     def testAddDuplicateRaises(self):
+        """Adding a file whose name already exists in the target directory should raise ADFSError."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1296,6 +1378,7 @@ class TestAddFile:
             side.addFile("$.FILE", b"second")
 
     def testAddBadNameRaises(self):
+        """Adding a file with an invalid ADFS name (e.g. containing a space) should raise ADFSError."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1303,6 +1386,7 @@ class TestAddFile:
             side.addFile("$.BAD NAME", b"data")
 
     def testAddMissingParentRaises(self):
+        """Adding a file to a subdirectory path that does not exist should raise ADFSError."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1310,6 +1394,7 @@ class TestAddFile:
             side.addFile("$.NOSUCH.FILE", b"data")
 
     def testFreeSpaceDecreasesAfterAdd(self):
+        """The reported free space should decrease by at least the file size after adding a file."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1324,6 +1409,7 @@ class TestAddFile:
 class TestDeleteFile:
 
     def testDeleteAndVerifyGone(self):
+        """A deleted file should no longer appear when the directory is parsed."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1334,6 +1420,7 @@ class TestDeleteFile:
         assert len(cat.entries) == 0
 
     def testDeleteFreesSectors(self):
+        """Deleting a file should return its allocated sectors to the free-space map."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1347,6 +1434,7 @@ class TestDeleteFile:
         assert after == before
 
     def testDeleteFromSubdirectory(self):
+        """A file inside a subdirectory should be removable by specifying its full path."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1360,6 +1448,7 @@ class TestDeleteFile:
         assert len(sub_dir.entries) == 0
 
     def testDeleteNotFoundRaises(self):
+        """Attempting to delete a name that does not exist in the directory should raise ADFSError."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1367,6 +1456,7 @@ class TestDeleteFile:
             side.deleteFile("$.GHOST")
 
     def testDeleteDirectoryRaises(self):
+        """Attempting to delete a directory entry as though it were a file should raise ADFSError."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1376,6 +1466,7 @@ class TestDeleteFile:
             side.deleteFile("$.DIR")
 
     def testDeleteLastFileInDirectory(self):
+        """Deleting the only file remaining in a directory should leave that directory empty and still parseable."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1389,6 +1480,7 @@ class TestDeleteFile:
 class TestMkdir:
 
     def testCreateSubdirectory(self):
+        """A new subdirectory should appear in the parent catalogue and be navigable."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1401,6 +1493,7 @@ class TestMkdir:
         assert dirs[0].access == 0x0F
 
     def testCreateNestedDirectories(self):
+        """Creating a second-level directory inside a first-level directory should succeed."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1417,6 +1510,7 @@ class TestMkdir:
         assert nested[0].directory == "$.DATA"
 
     def testMkdirUsesDiscSpace(self):
+        """Creating a directory allocates sectors for the directory block, which should reduce the reported free space."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1428,6 +1522,7 @@ class TestMkdir:
         assert before - after == 5
 
     def testMkdirDuplicateRaises(self):
+        """Creating a directory whose name already exists in the current parent should raise ADFSError."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1437,6 +1532,7 @@ class TestMkdir:
             side.mkdir("$.DIR")
 
     def testMkdirBadNameRaises(self):
+        """Creating a directory with an invalid ADFS name should raise ADFSError."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1451,24 +1547,28 @@ class TestMkdir:
 class TestCreateAdfsImage:
 
     def testCreateDefaultImage(self):
+        """createAdfsImage() with default arguments should return a structurally valid ADFS image."""
         image = createAdfsImage()
 
         assert len(image.data) == ADFS_M_SECTORS * ADFS_SECTOR_SIZE
         assert image.is_adl is False
 
     def testCreateSmallImage(self):
+        """Creating an ADFS-S (small) size image should produce a buffer of the documented byte size."""
         image = createAdfsImage(total_sectors=ADFS_S_SECTORS)
 
         assert len(image.data) == ADFS_S_SECTORS * ADFS_SECTOR_SIZE
         assert image.is_adl is False
 
     def testCreateLargeImage(self):
+        """Creating an ADFS-L (large) size image should produce a buffer of the documented byte size."""
         image = createAdfsImage(total_sectors=ADFS_L_SECTORS)
 
         assert len(image.data) == ADFS_L_SECTORS * ADFS_SECTOR_SIZE
         assert image.is_adl is True
 
     def testFsmIsValid(self):
+        """The two-sector free-space map in a freshly created image should carry valid checksums."""
         image = createAdfsImage(total_sectors=640, disc_id=0xABCD)
         side = image.sides[0]
 
@@ -1478,6 +1578,7 @@ class TestCreateAdfsImage:
         assert fsm.blocks == ((7, 633),)
 
     def testRootDirectoryIsValid(self):
+        """The root directory block in a new image should parse without error and report the supplied disc title."""
         image = createAdfsImage(title="TestDisc")
         side = image.sides[0]
 
@@ -1489,6 +1590,7 @@ class TestCreateAdfsImage:
         assert len(root.entries) == 0
 
     def testSerializeRoundTrip(self):
+        """Serializing an ADFSImage to bytes and re-loading should produce a structurally identical image."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1502,6 +1604,7 @@ class TestCreateAdfsImage:
         assert cat.entries[0].name == "TEST"
 
     def testBootOptionStored(self):
+        """The boot option provided at creation should be readable from the free-space map after parsing."""
         image = createAdfsImage(boot_option=BootOption.RUN)
         side = image.sides[0]
 
@@ -1509,6 +1612,7 @@ class TestCreateAdfsImage:
         assert fsm.boot_option == BootOption.RUN
 
     def testDefaultTitleIsDollar(self):
+        """When no disc title is given, the title field should default to the string '$'."""
         image = createAdfsImage()
         side = image.sides[0]
 
@@ -1523,6 +1627,7 @@ class TestCreateAdfsImage:
 class TestDirectoryParsing:
 
     def testEmptyRootDirectory(self):
+        """A root directory block with no entry data should parse to an empty entry list."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -1533,6 +1638,7 @@ class TestDirectoryParsing:
         assert len(root.entries) == 0
 
     def testDirectoryWithEntries(self):
+        """A directory block containing entries should parse each one with the correct name and metadata."""
         entries = [
             _makeDirectoryEntry(
                 name="MYPROG",
@@ -1562,12 +1668,14 @@ class TestDirectoryParsing:
         assert root.entries[1].name == "DATA"
 
     def testDirectoryTitle(self):
+        """The 19-byte title field in the directory footer should be decoded and returned as the title attribute."""
         image_data = _blankAdfs(root_title="TestTitle")
         image = ADFSImage(image_data, is_adl=False)
         root = image.sides[0].readDirectory(ADFS_ROOT_SECTOR)
         assert root.title == "TestTitle"
 
     def testInvalidHeaderMagicRaises(self):
+        """A directory block whose header magic is not 'Hugo' should raise ADFSFormatError."""
         image_data = _blankAdfs()
         # Corrupt the "Hugo" header magic at sector 2 offset 1.
         offset = ADFS_ROOT_SECTOR * ADFS_SECTOR_SIZE + 1
@@ -1578,6 +1686,7 @@ class TestDirectoryParsing:
             image.sides[0].readDirectory(ADFS_ROOT_SECTOR)
 
     def testInvalidFooterMagicRaises(self):
+        """A directory block whose footer magic is not 'Hugo' should raise ADFSFormatError."""
         image_data = _blankAdfs()
         # Corrupt the footer "Hugo" at 0x4FB within the directory.
         dir_base = ADFS_ROOT_SECTOR * ADFS_SECTOR_SIZE
@@ -1588,6 +1697,7 @@ class TestDirectoryParsing:
             image.sides[0].readDirectory(ADFS_ROOT_SECTOR)
 
     def testSequenceMismatchRaises(self):
+        """Header and footer sequence bytes that differ should raise ADFSFormatError, indicating a partially written directory."""
         image_data = _blankAdfs()
         dir_base = ADFS_ROOT_SECTOR * ADFS_SECTOR_SIZE
 
@@ -1600,6 +1710,7 @@ class TestDirectoryParsing:
             image.sides[0].readDirectory(ADFS_ROOT_SECTOR)
 
     def testAccessBitsDecodedCorrectly(self):
+        """Access bits packed into the high bit of name bytes should be decoded into the entry's access field."""
         # Create an entry with 'L' (locked, bit 2) and 'D' (directory, bit 3).
         access = 0x0F  # bits 0-3 set: R, W, L, D
         entry_blob = _makeDirectoryEntry(
@@ -1618,6 +1729,7 @@ class TestDirectoryParsing:
         assert e.access == 0x0F
 
     def testNameAccessBitsStripped(self):
+        """The plain name returned by the entry should contain only the filename characters, not the access bits."""
         # Name "AB" with access bits set on all positions should still
         # decode as "AB" with 0x0D terminators stripped.
         access = 0x3FF  # all 10 bits set
@@ -1629,6 +1741,7 @@ class TestDirectoryParsing:
         assert root.entries[0].name == "AB"
 
     def testFullDirectoryWith47Entries(self):
+        """A directory block populated with the maximum 47 entries should parse all of them without truncation."""
         entries = []
         for i in range(ADFS_MAX_ENTRIES):
             name = f"F{i:03d}"
@@ -1650,6 +1763,7 @@ class TestDirectoryParsing:
 class TestEntryProperties:
 
     def testFullNameInRoot(self):
+        """An entry in the root directory should report its full path as '$.filename'."""
         e = ADFSEntry(
             name="MYPROG", directory="$", load_addr=0, exec_addr=0,
             length=0, start_sector=0, locked=False, is_directory=False,
@@ -1658,6 +1772,7 @@ class TestEntryProperties:
         assert e.fullName == "$.MYPROG"
 
     def testFullNameInSubdir(self):
+        """An entry inside a subdirectory should report its full path including the parent directory name."""
         e = ADFSEntry(
             name="ELITE", directory="$.GAMES", load_addr=0, exec_addr=0,
             length=0, start_sector=0, locked=False, is_directory=False,
@@ -1666,6 +1781,7 @@ class TestEntryProperties:
         assert e.fullName == "$.GAMES.ELITE"
 
     def testIsBasicWithKnownEntryPoint(self):
+        """A file with the standard BBC BASIC II execution address should be identified as a BASIC file."""
         e = ADFSEntry(
             name="PROG", directory="$", load_addr=0x0E00, exec_addr=0x802B,
             length=100, start_sector=7, locked=False, is_directory=False,
@@ -1674,6 +1790,7 @@ class TestEntryProperties:
         assert e.isBasic is True
 
     def testIsBasicFalseForDirectory(self):
+        """A directory entry should never be classified as a BASIC file."""
         e = ADFSEntry(
             name="GAMES", directory="$", load_addr=0, exec_addr=0x802B,
             length=0, start_sector=20, locked=False, is_directory=True,
@@ -1682,6 +1799,7 @@ class TestEntryProperties:
         assert e.isBasic is False
 
     def testIsBasicFalseForNonBasicExec(self):
+        """A file with a non-BASIC execution address should not be identified as BASIC."""
         e = ADFSEntry(
             name="DATA", directory="$", load_addr=0x1000, exec_addr=0x1000,
             length=100, start_sector=7, locked=False, is_directory=False,
@@ -1697,6 +1815,7 @@ class TestEntryProperties:
 class TestDirectoryWalker:
 
     def testFlatRootDirectory(self):
+        """Walking a disc with only a root directory should yield every entry exactly once with no recursion."""
         entries = [
             _makeDirectoryEntry(name="FILE1", start_sector=7, length=10),
             _makeDirectoryEntry(name="FILE2", start_sector=8, length=20),
@@ -1711,6 +1830,7 @@ class TestDirectoryWalker:
         assert flat[0].directory == "$"
 
     def testSubdirectoryWalk(self):
+        """Walking a disc with subdirectories should recursively visit all entries in every nested directory."""
         # Create a subdirectory entry in root pointing to sector 20.
         subdir_access = 0x0F  # R + W + L + D
         subdir_entry = _makeDirectoryEntry(
@@ -1771,6 +1891,7 @@ class TestDirectoryWalker:
 class TestCatalogue:
 
     def testCatalogueAttributes(self):
+        """The ADFSCatalogue should expose disc title, boot option, and a flat list of all file entries."""
         image_data = _blankAdfs(
             root_title="TestDisc",
             boot_option=1,
@@ -1785,6 +1906,7 @@ class TestCatalogue:
         assert isinstance(cat.entries, tuple)
 
     def testCatalogueIsCached(self):
+        """Calling catalogue on the same image twice should return the same object, avoiding redundant re-parsing."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         side = image.sides[0]
@@ -1794,6 +1916,7 @@ class TestCatalogue:
         assert cat1 is cat2
 
     def testCatalogueEntriesMatchWalk(self):
+        """The flat entry list from catalogue should exactly match the result of a full recursive directory walk."""
         entries = [
             _makeDirectoryEntry(name="A", start_sector=7, length=10),
             _makeDirectoryEntry(name="B", start_sector=8, length=20),
@@ -1815,6 +1938,7 @@ class TestCatalogue:
 class TestFileExtraction:
 
     def testExtractFileData(self):
+        """Extracting a file should return bytes identical to the data originally written."""
         test_data = b"Hello, ADFS world!" + b"\x00" * 10
         image_data = _adfsWithFiles([
             {"name": "HELLO", "data": test_data, "load_addr": 0x1000},
@@ -1827,6 +1951,7 @@ class TestFileExtraction:
         assert extracted == test_data
 
     def testExtractedLengthMatchesCatalogue(self):
+        """The byte length of each extracted file should match the length in its catalogue entry."""
         files = [
             {"name": "SHORT", "data": b"\x01\x02\x03"},
             {"name": "MEDIUM", "data": bytes(range(256)) * 2},
@@ -1840,6 +1965,7 @@ class TestFileExtraction:
             assert len(data) == entry.length
 
     def testExtractEmptyFile(self):
+        """Extracting a file recorded as zero length should return an empty bytes object."""
         image_data = _adfsWithFiles([
             {"name": "EMPTY", "data": b""},
         ])
@@ -1850,6 +1976,7 @@ class TestFileExtraction:
         assert image.sides[0].readFile(empty) == b""
 
     def testExtractBasicFile(self):
+        """Extracting a tokenized BASIC file should return bytes that pass the looksLikeTokenizedBasic check."""
         # Minimal tokenized BASIC: one line "10 PRINT" followed by end marker.
         basic_data = bytes([
             0x0D,        # line start
@@ -1878,6 +2005,7 @@ class TestFileExtraction:
         assert looksLikeTokenizedBasic(data)
 
     def testSectorBoundsCheckRaises(self):
+        """Extracting a file whose sector range extends beyond the image boundary should raise ADFSError."""
         # Create an entry pointing beyond the image.
         entry = _makeDirectoryEntry(
             name="BAD",
@@ -1899,24 +2027,28 @@ class TestFileExtraction:
 class TestAdfsImage:
 
     def testSingleSidedHasOneSide(self):
+        """An .adf (single-sided) image should expose exactly one disc side."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         assert len(image.sides) == 1
         assert image.sides[0].side == 0
 
     def testDoubleSidedHasOneSide(self):
+        """An .adl (double-sided track-interleaved) image is treated as a single logical side, not split into two."""
         # ADFS always presents one logical filesystem, even for .adl.
         image_data = _blankAdfs(total_sectors=2560)
         image = ADFSImage(image_data, is_adl=True)
         assert len(image.sides) == 1
 
     def testSerializeRoundTrip(self):
+        """Serializing an ADFSImage to bytes and re-loading should produce a structurally identical image."""
         image_data = _blankAdfs()
         image = ADFSImage(image_data, is_adl=False)
         serialized = image.serialize()
         assert serialized == bytes(image_data)
 
     def testIsAdlProperty(self):
+        """The is_adl property should be True for .adl files and False for single-sided .adf files."""
         image_data = _blankAdfs()
         assert ADFSImage(image_data, is_adl=False).is_adl is False
         assert ADFSImage(image_data, is_adl=True).is_adl is True
@@ -1929,6 +2061,7 @@ class TestAdfsImage:
 class TestOpenAdfsImage:
 
     def testOpenValidAdf(self, tmp_path):
+        """A valid single-sided .adf image should open without error and expose readable catalogue data."""
         image_data = _blankAdfs(total_sectors=640)
         path = tmp_path / "test.adf"
         path.write_bytes(bytes(image_data))
@@ -1938,6 +2071,7 @@ class TestOpenAdfsImage:
         assert image.is_adl is False
 
     def testOpenValidAdl(self, tmp_path):
+        """A valid double-sided .adl image should open without error."""
         image_data = _blankAdfs(total_sectors=2560)
         path = tmp_path / "test.adl"
         path.write_bytes(bytes(image_data))
@@ -1947,6 +2081,7 @@ class TestOpenAdfsImage:
         assert image.is_adl is True
 
     def testTooSmallRaises(self, tmp_path):
+        """An image file smaller than the minimum valid ADFS size should raise ADFSFormatError."""
         path = tmp_path / "tiny.adf"
         path.write_bytes(b"\x00" * 100)
 
@@ -1954,6 +2089,7 @@ class TestOpenAdfsImage:
             openAdfsImage(str(path))
 
     def testMissingHugoRaises(self, tmp_path):
+        """An image whose root directory lacks the 'Hugo' magic bytes should raise ADFSFormatError."""
         # Image large enough but no Hugo marker.
         image_data = bytearray(640 * 256)
         path = tmp_path / "nope.adf"
@@ -1963,6 +2099,7 @@ class TestOpenAdfsImage:
             openAdfsImage(str(path))
 
     def testFileNotFoundRaises(self, tmp_path):
+        """Passing a path to a non-existent file should raise FileNotFoundError."""
         with pytest.raises(FileNotFoundError):
             openAdfsImage(str(tmp_path / "nonexistent.adf"))
 
@@ -1974,6 +2111,7 @@ class TestOpenAdfsImage:
 class TestFormatDetection:
 
     def testAdfRoutesToAdfs(self, tmp_path):
+        """openImage() given an .adf file should return an ADFSImage instance, not a DFS disc."""
         image_data = _blankAdfs(total_sectors=640)
         path = tmp_path / "test.adf"
         path.write_bytes(bytes(image_data))
@@ -1982,6 +2120,7 @@ class TestFormatDetection:
         assert isinstance(image, ADFSImage)
 
     def testAdlRoutesToAdfs(self, tmp_path):
+        """openImage() given an .adl file should return an ADFSImage instance."""
         image_data = _blankAdfs(total_sectors=2560)
         path = tmp_path / "test.adl"
         path.write_bytes(bytes(image_data))
@@ -1990,6 +2129,7 @@ class TestFormatDetection:
         assert isinstance(image, ADFSImage)
 
     def testSsdStillRoutesToDfs(self, tmp_path):
+        """openImage() given a .ssd file should still return a DFS disc object."""
         from beebtools import createDiscImage, DFSImage
         dfs = createDiscImage(tracks=80)
         path = tmp_path / "test.ssd"
@@ -2018,11 +2158,13 @@ class TestRealAdfsImages:
 
     @pytest.mark.parametrize("path", ALL_ADFS, ids=adfs_ids)
     def testOpensWithoutError(self, path):
+        """Each real .adl image in tests/resources/ should open without raising any exception."""
         image = openAdfsImage(path)
         assert len(image.sides) >= 1
 
     @pytest.mark.parametrize("path", ALL_ADFS, ids=adfs_ids)
     def testCatalogueNonEmpty(self, path):
+        """A real disc image should contain at least one catalogue entry."""
         image = openAdfsImage(path)
         for side in image.sides:
             cat = side.readCatalogue()
@@ -2030,6 +2172,7 @@ class TestRealAdfsImages:
 
     @pytest.mark.parametrize("path", ALL_ADFS, ids=adfs_ids)
     def testEntryNamesAreNonEmpty(self, path):
+        """Every entry name read from a real disc image should be a non-empty string."""
         image = openAdfsImage(path)
         for side in image.sides:
             cat = side.readCatalogue()
@@ -2038,6 +2181,7 @@ class TestRealAdfsImages:
 
     @pytest.mark.parametrize("path", ALL_ADFS, ids=adfs_ids)
     def testExtractedLengthMatchesCatalogue(self, path):
+        """The byte length of each extracted file should match the length in its catalogue entry."""
         image = openAdfsImage(path)
         for side in image.sides:
             cat = side.readCatalogue()
@@ -2048,6 +2192,7 @@ class TestRealAdfsImages:
 
     @pytest.mark.parametrize("path", ALL_ADFS, ids=adfs_ids)
     def testBasicFilesStartWith0x0d(self, path):
+        """Any file flagged as BASIC on a real disc should begin with the 0x0D line-record start byte."""
         image = openAdfsImage(path)
         for side in image.sides:
             cat = side.readCatalogue()
@@ -2059,6 +2204,7 @@ class TestRealAdfsImages:
 
     @pytest.mark.parametrize("path", ALL_ADFS, ids=adfs_ids)
     def testDetokenizedLinesHaveLineNumbers(self, path):
+        """Detokenizing each BASIC file from a real disc should produce lines that start with numeric line numbers."""
         image = openAdfsImage(path)
         for side in image.sides:
             cat = side.readCatalogue()
@@ -2077,22 +2223,26 @@ class TestRealAdfsImages:
 class TestSanitizeEntryPath:
 
     def testFlatDfsDir(self):
+        """A DFS-style '$' directory should map to a safe, usable host filesystem component."""
         safe_dir, safe_name = sanitizeEntryPath("$", "MYPROG")
         assert safe_dir == "$"
         assert safe_name == "MYPROG"
 
     def testAdfsRootDir(self):
+        """An ADFS root '$' path should produce a single safe top-level component."""
         safe_dir, safe_name = sanitizeEntryPath("$", "README")
         assert safe_dir == "$"
         assert safe_name == "README"
 
     def testAdfsNestedPath(self):
+        """A two-level ADFS path should be joined into a correctly structured host filesystem path."""
         safe_dir, safe_name = sanitizeEntryPath("$.GAMES", "ELITE")
         expected_dir = os.path.join("$", "GAMES")
         assert safe_dir == expected_dir
         assert safe_name == "ELITE"
 
     def testAdfsDeeplyNestedPath(self):
+        """A multi-level ADFS path should produce a fully joined host filesystem path with all levels preserved."""
         safe_dir, safe_name = sanitizeEntryPath("$.A.B.C", "FILE")
         expected_dir = os.path.join("$", "A", "B", "C")
         assert safe_dir == expected_dir
@@ -2123,6 +2273,7 @@ class TestCmdCatAdfs:
         return buf.getvalue()
 
     def testShowsFileEntries(self, tmp_path):
+        """cmdCat on an ADFS image should list each file entry's name and size."""
         image_data = _adfsWithFiles([
             {"name": "README", "data": b"Hello", "load_addr": 0x1000, "exec_addr": 0x1000},
         ])
@@ -2132,6 +2283,7 @@ class TestCmdCatAdfs:
         assert "00001000" in output
 
     def testShowsDirType(self, tmp_path):
+        """cmdCat should distinguish directory entries from files in its output."""
         # Create a directory entry (access bit 3 = 0x08).
         subdir_entry = _makeDirectoryEntry(
             name="GAMES",
@@ -2159,6 +2311,7 @@ class TestCmdCatAdfs:
         assert "DIR" in output
 
     def testDynamicColumnWidth(self, tmp_path):
+        """The name column should expand to accommodate the longest filename present in the directory."""
         # A file with a long hierarchical name should widen the column.
         subdir_entry = _makeDirectoryEntry(
             name="LONGDIRNAM",
@@ -2193,6 +2346,7 @@ class TestCmdCatAdfs:
         assert "$.LONGDIRNAM.MYFILE" in output
 
     def testBasicFileShowsBasicType(self, tmp_path):
+        """A file identified as BASIC should be labelled 'BASIC' in the cmdCat output."""
         # BASIC file exec address triggers "BASIC" label.
         basic_data = bytes([
             0x0D, 0x00, 0x0A, 0x07, 0xF1, 0x0D, 0xFF,
@@ -2208,6 +2362,7 @@ class TestCmdCatAdfs:
         assert "BASIC" in output
 
     def testEmptyCatalogueShowsEmpty(self, tmp_path):
+        """An ADFS image with no files should produce a catalogue listing with no file rows."""
         image_data = _blankAdfs()
         output = self._runCat(tmp_path, image_data)
         assert "(empty)" in output
@@ -2220,6 +2375,7 @@ class TestCmdCatAdfs:
 class TestCmdExtractAdfs:
 
     def testExtractByFullName(self, tmp_path):
+        """Extracting with a full '$dir/name' path should write the correct file contents to the output location."""
         test_data = b"file content here"
         image_data = _adfsWithFiles([
             {"name": "README", "data": test_data, "load_addr": 0x1000, "exec_addr": 0x1000},
@@ -2243,6 +2399,7 @@ class TestCmdExtractAdfs:
             assert f.read() == test_data
 
     def testExtractByBareName(self, tmp_path):
+        """Extracting with just the bare filename (no directory) should locate and extract the file."""
         test_data = b"bare name match"
         image_data = _adfsWithFiles([
             {"name": "MYDATA", "data": test_data, "load_addr": 0x1000, "exec_addr": 0x1000},
@@ -2266,6 +2423,7 @@ class TestCmdExtractAdfs:
             assert f.read() == test_data
 
     def testExtractBasicDetokenizes(self, tmp_path):
+        """Extracting a BASIC file without --raw should produce readable detokenized plain text, not binary."""
         basic_data = bytes([
             0x0D, 0x00, 0x0A, 0x07, 0xF1, 0x0D, 0xFF,
         ])
@@ -2296,6 +2454,7 @@ class TestCmdExtractAdfs:
         assert "PRINT" in content
 
     def testExtractFileNotFound(self, tmp_path):
+        """Attempting to extract a filename not present in the ADFS catalogue should raise an appropriate error."""
         image_data = _adfsWithFiles([
             {"name": "README", "data": b"data", "load_addr": 0, "exec_addr": 0},
         ])
@@ -2321,6 +2480,7 @@ class TestCmdExtractAdfs:
 class TestExtractAllAdfs:
 
     def testExtractSkipsDirectoryEntries(self, tmp_path):
+        """Bulk extraction should not attempt to write directory entries as files to the output directory."""
         # Create an image with a directory entry and a file entry.
         subdir_entry = _makeDirectoryEntry(
             name="GAMES",
@@ -2360,6 +2520,7 @@ class TestExtractAllAdfs:
         assert "README" in results[0]["path"]
 
     def testExtractHierarchicalLayout(self, tmp_path):
+        """Files in ADFS subdirectories should be extracted into matching subdirectories on the host filesystem."""
         # Create an image with a subdirectory containing a file.
         subdir_entry = _makeDirectoryEntry(
             name="DATA",
@@ -2412,6 +2573,7 @@ class TestExtractAllAdfs:
 class TestSearchAdfs:
 
     def testSearchSkipsDirectoryEntries(self, tmp_path):
+        """Disc search should skip directory entries and only inspect regular files."""
         # Create an image with a directory entry and a BASIC file.
         basic_data = bytes([
             0x0D, 0x00, 0x0A, 0x0A, 0xF1, 0x22, 0x48, 0x49, 0x22, 0x0D, 0xFF,
