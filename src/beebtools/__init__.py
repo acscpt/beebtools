@@ -20,13 +20,12 @@ operator spacing and handles copy-protection anti-listing traps.
 Usage as a library:
     from beebtools import openImage, detokenize, prettyPrint
 
-    image = openImage("mydisc.adf")
-    for side in image.sides:
-        catalogue = side.readCatalogue()
-        for entry in catalogue.entries:
-            data = side.readFile(entry)
-            lines = detokenize(data)
-            print("\\n".join(prettyPrint(lines)))
+    with openImage("mydisc.adf") as image:
+        for side in image:
+            for entry in side.readCatalogue():
+                data = side.readFile(entry)
+                lines = detokenize(data)
+                print("\\n".join(prettyPrint(lines)))
 
 Usage as a CLI tool:
     beebtools cat     <image>

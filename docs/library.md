@@ -13,15 +13,15 @@ optional pretty-printer adds operator spacing in a single pass.
 from beebtools import openImage, detokenize, prettyPrint
 
 # openImage auto-detects DFS (.ssd/.dsd) or ADFS (.adf/.adl)
-image = openImage("mydisc.dsd")
-for side in image.sides:
-    catalogue = side.readCatalogue()
-    print(f"Disc: {catalogue.title} (boot={catalogue.boot_option.name})")
-    for entry in catalogue.entries:
-        if entry.isBasic:
-            data = side.readFile(entry)
-            lines = prettyPrint(detokenize(data))
-            print("\n".join(lines))
+with openImage("mydisc.dsd") as image:
+    for side in image:
+        catalogue = side.readCatalogue()
+        print(f"Disc: {catalogue.title} (boot={catalogue.boot_option.name})")
+        for entry in catalogue:
+            if entry.isBasic:
+                data = side.readFile(entry)
+                lines = prettyPrint(detokenize(data))
+                print("\n".join(lines))
 ```
 
 You can also open a specific format directly with `openDiscImage()` (DFS)
@@ -38,12 +38,14 @@ compatibility. Entries can be sorted by name, catalogue order, or size.
 ```python
 from beebtools import openImage, sortCatalogueEntries
 
-image = openImage("mydisc.ssd")
-catalogue = image.sides[0].readCatalogue()
+with openImage("mydisc.ssd") as image:
+    side = image[0]
+    catalogue = side.readCatalogue()
+    print(f"{len(catalogue)} files, {side.freeSpace()} bytes free")
 
-for entry in sortCatalogueEntries(catalogue.entries, "size"):
-    print(f"{entry.fullName:<12s}  load={entry.load_addr:#010x}  "
-          f"length={entry.length}  {'BASIC' if entry.isBasic else ''}")
+    for entry in sortCatalogueEntries(catalogue.entries, "size"):
+        print(f"{entry.fullName:<12s}  load={entry.load_addr:#010x}  "
+              f"length={entry.length}  {'BASIC' if entry.isBasic else ''}")
 ```
 
 ## Reading ADFS disc images
@@ -56,10 +58,9 @@ each entry's `directory` field containing the full parent path.
 from beebtools import openAdfsImage
 
 image = openAdfsImage("game.adf")
-side = image.sides[0]
-catalogue = side.readCatalogue()
+side = image[0]
 
-for entry in catalogue.entries:
+for entry in side.readCatalogue():
     if entry.isDirectory:
         print(f"  [DIR] {entry.fullName}")
     elif entry.isBasic:
@@ -104,16 +105,18 @@ build an entire image from a directory of files with `.inf` sidecars.
 The `BootOption` enum provides the standard boot options (shared by DFS and ADFS).
 
 ```python
-from beebtools import createDiscImage, BootOption, buildImage
+from beebtools import createDiscImage, DiscFile, BootOption, buildImage
 
 # Create a blank DFS image and add files programmatically
 image = createDiscImage(tracks=80, title="DEMO", boot_option=BootOption.EXEC)
-side = image.sides[0]
-side.addFile("$", "HELLO", load_addr=0x1900, exec_addr=0x8023, data=b"...")
+side = image[0]
+side.addFile(DiscFile(path="$.HELLO", data=b"...",
+                      load_addr=0x1900, exec_addr=0x8023))
 raw = image.serialize()
 
 # Or build from a directory of files with .inf sidecars
-raw = buildImage(source_dir="extracted/", tracks=80, boot_option=BootOption.RUN)
+raw = buildImage(source_dir="extracted/", output_path="rebuilt.ssd",
+                 tracks=80, boot_option=BootOption.RUN)
 ```
 
 ## Creating and building ADFS disc images
@@ -123,7 +126,7 @@ path (e.g. `$.GAMES.ELITE`). Use `createAdfsImage()` to create a blank image
 and `addFile()`, `deleteFile()`, `mkdir()` to manipulate it.
 
 ```python
-from beebtools import createAdfsImage, BootOption
+from beebtools import createAdfsImage, DiscFile, BootOption
 from beebtools import ADFS_S_SECTORS, ADFS_M_SECTORS, ADFS_L_SECTORS
 
 # Create a blank 320K ADFS image
@@ -132,19 +135,19 @@ image = createAdfsImage(
     title="GAMES",
     boot_option=BootOption.RUN,
 )
-side = image.sides[0]
+side = image[0]
 
 # Create a subdirectory and add a file into it
 side.mkdir("$.GAMES")
-side.addFile(
+side.addFile(DiscFile(
     path="$.GAMES.ELITE",
     data=b"\x00" * 1024,
     load_addr=0x1900,
     exec_addr=0x1900,
-)
+))
 
 # Add a file to the root directory
-side.addFile(path="$.BOOT", data=b"*RUN GAMES.ELITE\r")
+side.addFile(DiscFile(path="$.BOOT", data=b"*RUN GAMES.ELITE\r"))
 
 # Delete a file
 side.deleteFile("$.GAMES.ELITE")
@@ -157,9 +160,9 @@ with open("mydisc.adf", "wb") as f:
 Build an ADFS image from an extracted directory tree:
 
 ```python
-from beebtools import buildAdfsImage, ADFS_M_SECTORS
+from beebtools import buildImage
 
-raw = buildAdfsImage(source_dir="extracted/", total_sectors=ADFS_M_SECTORS)
+raw = buildImage(source_dir="extracted/", output_path="rebuilt.adf")
 with open("rebuilt.adf", "wb") as f:
     f.write(raw)
 ```
