@@ -391,7 +391,6 @@ def _buildReport(
 
     # Mermaid pie chart gives a visual split of outcomes.
     lines.append("```mermaid")
-    lines.append("%%{init: {'themeVariables': {'pie1': '#2ea043', 'pie2': '#cf222e', 'pie3': '#d29922', 'pie4': '#8250df'}}}%%")
     lines.append("pie title Test outcomes")
     lines.append(f"    \"Passed\" : {passed}")
     lines.append(f"    \"Failed\" : {failed}")
@@ -418,7 +417,6 @@ def _buildReport(
         lines.append(_coverageBar(overall))
         lines.append("")
         lines.append("```mermaid")
-        lines.append("%%{init: {'themeVariables': {'pie1': '#2ea043', 'pie2': '#cf222e'}}}%%")
         lines.append("pie title Covered vs missed statements")
         lines.append(f"    \"Covered\" : {covered}")
         lines.append(f"    \"Missed\" : {total_miss}")
