@@ -5,26 +5,31 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Tests](https://github.com/acscpt/beebtools/actions/workflows/tests.yml/badge.svg)](https://github.com/acscpt/beebtools/actions/workflows/tests.yml)
 
-A Python tool for working with BBC Micro DFS disc images.
+A Python tool for working with BBC Micro DFS and ADFS disc images.
 
-`beebtools` can read disc catalogues, extract and detokenize BBC BASIC programs to
-a more human-readable (and text editor friendly) format, including a pretty-printer 
+`beebtools` reads DFS (`.ssd`/`.dsd`) and ADFS (`.adf`/`.adl`) disc images.
+It can list catalogues, extract and detokenize BBC BASIC programs to a more
+human-readable (and text editor friendly) format, and includes a pretty-printer
 that makes dense BBC BASIC code more legible.
 
-## Disc images and the DFS catalogue
+## Disc images
 
-BBC Micro software is widely preserved as `.ssd` (single-sided) and `.dsd`
-(double-sided interleaved) disc images. Each image is a raw sector-by-sector
-dump of the original floppy disc, laid out according to Acorn's Disc Filing
-System (DFS).
+BBC Micro software is widely preserved as disc images - raw sector-by-sector
+dumps of original floppy discs. `beebtools` supports two filing systems:
 
-The first two sectors of each disc side hold the catalogue: disc title, file
-count, and one entry per file giving its name, DFS directory prefix, load and
-exec addresses, byte length, and start sector. `beebtools` reads this catalogue
-and can list it in a human-readable table, sorted by name, catalogue order, or
-file size.
+- **DFS** (Disc Filing System) - `.ssd` (single-sided) and `.dsd` (double-sided
+  interleaved) images. Flat catalogue with up to 31 files per side, single-character
+  directory prefixes (`$`, `T`, etc.).
 
-Files are extracted by DFS name (`T.MYPROG`, `$.!BOOT`) or by bare name when
+- **ADFS** (Advanced Disc Filing System) - `.adf` (single-sided) and `.adl`
+  (double-sided) images. Hierarchical directory tree with up to 47 entries per
+  directory, full path names like `$.GAMES.ELITE`. Supports ADFS-S (160K),
+  ADFS-M (320K), and ADFS-L (640K) old-map disc images.
+
+`beebtools` reads catalogues from both formats and can list them in a
+human-readable table, sorted by name, catalogue order, or file size.
+
+Files are extracted by name (`T.MYPROG`, `$.GAMES.ELITE`) or by bare name when
 unambiguous. On a double-sided `.dsd` image both sides are catalogued; if the
 same bare name appears on both sides, `beebtools` tells you and asks you to be
 specific. Bulk extraction (`-a`) pulls every file off the disc at once.
@@ -64,7 +69,9 @@ For BASIC files, `beebtools` does three things in sequence:
 
 - Read DFS catalogues from `.ssd` and `.dsd` disc images
 
-- Extract individual files by DFS name (`T.MYPROG`, or bare `MYPROG`)
+- Read ADFS catalogues from `.adf` and `.adl` disc images (old-map, Hugo directories)
+
+- Extract individual files by name (`T.MYPROG`, `$.GAMES.ELITE`, or bare `MYPROG`)
 
 - Bulk-extract everything from a disc image at once
 
@@ -104,8 +111,10 @@ pip install -e ".[dev]"
 
 ## Commands
 
-`beebtools` provides commands for inspecting, extracting, and building DFS disc
-images. Each command has its own detailed reference page.
+`beebtools` provides commands for inspecting, extracting, and building disc
+images. Read commands (`cat`, `extract`, `search`) work with both DFS and ADFS
+images. Write commands (`create`, `add`, `delete`, `build`) are DFS-only. Each
+command has its own detailed reference page.
 
 | Command | Description |
 | --- | --- |
@@ -134,6 +143,15 @@ beebtools extract mydisc.dsd -a --pretty -d output/
 
 # Extract everything with .inf sidecars preserving DFS metadata
 beebtools extract mydisc.dsd -a --inf -d output/
+
+# List an ADFS disc catalogue
+beebtools cat game.adf
+
+# Extract a file from an ADFS disc by full path
+beebtools extract game.adf $.GAMES.ELITE --pretty
+
+# Bulk-extract an ADFS disc
+beebtools extract game.adf -a -d output/
 
 # Create a blank disc image
 beebtools create blank.ssd --title "MY DISC" --boot EXEC
@@ -176,9 +194,10 @@ spacing rules and anti-listing trap handling.
 ## Using as a library
 
 ```python
-from beebtools import openDiscImage, detokenize, tokenize, prettyPrint
+from beebtools import openImage, detokenize, tokenize, prettyPrint
 
-image = openDiscImage("mydisc.dsd")
+# openImage auto-detects DFS (.ssd/.dsd) or ADFS (.adf/.adl)
+image = openImage("mydisc.dsd")
 for side in image.sides:
     catalogue = side.readCatalogue()
     for entry in catalogue.entries:
@@ -197,13 +216,18 @@ See [docs/library.md](https://github.com/acscpt/beebtools/blob/main/docs/library
 
 ## Supported formats
 
-| Format | Description |
-| --- | --- |
-| `.ssd` | Single-sided 40 or 80 track |
-| `.dsd` | Double-sided interleaved |
+| Format | Filing system | Description |
+| --- | --- | --- |
+| `.ssd` | DFS | Single-sided 40 or 80 track |
+| `.dsd` | DFS | Double-sided interleaved |
+| `.adf` | ADFS | Single-sided (ADFS-S 160K, ADFS-M 320K) |
+| `.adl` | ADFS | Double-sided (ADFS-L 640K) |
 
-Both 40-track and 80-track images are supported. The tool does not
-currently support Watford DFS extended catalogues (62-file discs).
+DFS: both 40-track and 80-track images are supported. Watford DFS extended
+catalogues (62-file discs) are not supported.
+
+ADFS: old-map (small directory, "Hugo" format) images are supported (read-only).
+New-map large-directory formats (ADFS-D/E/F/G) are not supported.
 
 ## Documentation
 

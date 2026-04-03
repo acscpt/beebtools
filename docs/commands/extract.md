@@ -6,6 +6,7 @@
 beebtools extract <image> <filename> [-o FILE] [--pretty]
 ```
 
+Works with both DFS (`.ssd`/`.dsd`) and ADFS (`.adf`/`.adl`) disc images.
 BASIC programs are automatically detected and detokenized to plain text.
 All other files are extracted as raw bytes.
 
@@ -18,6 +19,9 @@ beebtools extract mydisc.dsd T.MYPROG -o myprog.bas --pretty
 
 # Bare filename - works when the name is unique across all sides
 beebtools extract mydisc.dsd MYPROG
+
+# Extract from an ADFS image by full path
+beebtools extract game.adf $.GAMES.ELITE --pretty
 ```
 
 For binary files written with `-o`, the load address, exec address, and
@@ -50,8 +54,11 @@ The output directory defaults to the disc image filename stem (`bbc_d1/` for `bb
 
 ### Output layout
 
-Files are laid out hierarchically using the DFS directory character as a real
-subdirectory. On a single-sided `.ssd` image:
+Files are laid out hierarchically. On a DFS image the DFS directory character
+becomes a real subdirectory. On ADFS images the full directory tree is
+recreated as nested filesystem directories.
+
+**DFS single-sided (`.ssd`):**
 
 ```
 bbc_d1/
@@ -62,8 +69,7 @@ bbc_d1/
     PROG.bas
 ```
 
-On a double-sided `.dsd` image, an additional `side0/` and `side1/` level
-keeps the two sides separate:
+**DFS double-sided (`.dsd`):**
 
 ```
 bbc_d1/
@@ -79,6 +85,22 @@ bbc_d1/
       GAME.bas
 ```
 
+**ADFS (`.adf`/`.adl`):**
+
+```
+game/
+  $/
+    !BOOT.txt
+    README.bin
+    GAMES/
+      ELITE.bas
+      REVS.bin
+    DATA/
+      SCORES.bin
+```
+
+Directory entries from ADFS images are skipped - only files are extracted.
+
 ### .inf sidecars
 
 Add `--inf` to write `.inf` sidecar files alongside each extracted file,
@@ -87,15 +109,16 @@ standard community interchange format.
 
 ## Filename matching
 
-`extract` accepts DFS filenames in two forms:
+`extract` accepts filenames in several forms:
 
-- Explicit: `T.MYPROG`, `$.MENU`, `$.!BOOT`
-- Bare: `MYPROG` - works when the name is unique on the disc
+- DFS explicit: `T.MYPROG`, `$.MENU`, `$.!BOOT`
+- ADFS full path: `$.GAMES.ELITE`, `$.DATA.SCORES`
+- Bare: `MYPROG` or `ELITE` - works when the name is unique on the disc
 
 Ambiguous bare names report all matches:
 
 ```text
-Ambiguous filename 'LOADER' - specify with directory prefix.
+Ambiguous filename 'LOADER' - specify with full path.
   Side 0: $.LOADER
   Side 1: T.LOADER
 ```

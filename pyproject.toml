@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "beebtools"
 version = "0.3.0"
-description = "BBC Micro DFS disc image tool - catalogue, extract, create, and build with BBC BASIC detokenizer"
+description = "BBC Micro disc image tool - DFS and ADFS catalogue, extract, create, and build with BBC BASIC detokenizer"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
 authors = [
     {name = "acscpt"}
 ]
-keywords = ["bbc-micro", "acorn", "dfs", "disc", "basic", "bbc-basic", "detokenize", "retro", "8bit", "ssd", "dsd", "create", "build"]
+keywords = ["bbc-micro", "acorn", "dfs", "adfs", "disc", "basic", "bbc-basic", "detokenize", "retro", "8bit", "ssd", "dsd", "adf", "adl", "create", "build"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",

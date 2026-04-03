@@ -9,6 +9,31 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **ADFS disc image support** (read-only): `beebtools` now reads `.adf`
+  (single-sided) and `.adl` (double-sided) ADFS disc images using the old-map
+  small-directory ("Hugo") format. Supports ADFS-S (160K), ADFS-M (320K), and
+  ADFS-L (640K) images. All read commands (`cat`, `extract`, `search`) work
+  transparently with both DFS and ADFS images.
+
+- `openImage()` format auto-detection dispatcher: detects DFS or ADFS from the
+  file extension and delegates to the appropriate parser. Exported from the
+  public API.
+
+- ADFS library types exported from the public API: `ADFSEntry`, `ADFSCatalogue`,
+  `ADFSDirectory`, `ADFSFreeSpaceMap`, `ADFSImage`, `ADFSSide`, `ADFSError`,
+  `ADFSFormatError`, `openAdfsImage`.
+
+- `beebtools cat` on ADFS images shows the full hierarchical directory tree with
+  directory entries labelled as `DIR`. Column width adjusts dynamically for long
+  ADFS path names.
+
+- `beebtools extract` accepts ADFS full paths (e.g. `$.GAMES.ELITE`) as well as
+  bare filenames. Bulk extraction (`-a`) creates nested filesystem directories
+  matching the ADFS directory hierarchy. Directory entries are skipped.
+
+- `beebtools search` works on ADFS images, searching all BASIC files across the
+  entire directory tree.
+
 - BBC BASIC II tokenizer (`tokenize.py`): converts LIST-style plain text back
   to tokenized binary - the inverse of the detokenizer. `tokenize()` and
   `encodeLineRef()` are exported from the public API.

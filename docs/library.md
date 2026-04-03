@@ -5,13 +5,15 @@ The public API is imported directly from the `beebtools` package.
 ## Reading and detokenizing
 
 Open a disc image, walk the catalogue, and convert tokenized BBC BASIC
-programs back to readable text. The optional pretty-printer adds operator
-spacing in a single pass.
+programs back to readable text. `openImage()` auto-detects the format
+from the file extension and works with both DFS and ADFS images. The
+optional pretty-printer adds operator spacing in a single pass.
 
 ```python
-from beebtools import openDiscImage, detokenize, prettyPrint
+from beebtools import openImage, detokenize, prettyPrint
 
-image = openDiscImage("mydisc.dsd")
+# openImage auto-detects DFS (.ssd/.dsd) or ADFS (.adf/.adl)
+image = openImage("mydisc.dsd")
 for side in image.sides:
     catalogue = side.readCatalogue()
     print(f"Disc: {catalogue.title} (boot={catalogue.boot_option.name})")
@@ -22,22 +24,57 @@ for side in image.sides:
             print("\n".join(lines))
 ```
 
+You can also open a specific format directly with `openDiscImage()` (DFS)
+or `openAdfsImage()` (ADFS).
+
 ## Inspecting catalogue entries
 
-Each `DFSEntry` carries the file's name, directory prefix, load and exec
-addresses, byte length, lock flag, and an `isBasic` property that checks
-the exec address against known BASIC entry points. Entries can be sorted
-by name, catalogue order, or size.
+Both `DFSEntry` and `ADFSEntry` carry the file's name, directory, load and
+exec addresses, byte length, lock flag, and an `isBasic` property that checks
+the exec address against known BASIC entry points. Both types expose
+`fullName`, `isBasic`, and `isDirectory` properties for duck-typing
+compatibility. Entries can be sorted by name, catalogue order, or size.
 
 ```python
-from beebtools import openDiscImage, sortCatalogueEntries
+from beebtools import openImage, sortCatalogueEntries
 
-image = openDiscImage("mydisc.ssd")
+image = openImage("mydisc.ssd")
 catalogue = image.sides[0].readCatalogue()
 
 for entry in sortCatalogueEntries(catalogue.entries, "size"):
     print(f"{entry.fullName:<12s}  load={entry.load_addr:#010x}  "
           f"length={entry.length}  {'BASIC' if entry.isBasic else ''}")
+```
+
+## Reading ADFS disc images
+
+ADFS images use hierarchical directories. The catalogue returned by
+`readCatalogue()` is a flattened view of the entire directory tree, with
+each entry's `directory` field containing the full parent path.
+
+```python
+from beebtools import openAdfsImage
+
+image = openAdfsImage("game.adf")
+side = image.sides[0]
+catalogue = side.readCatalogue()
+
+for entry in catalogue.entries:
+    if entry.isDirectory:
+        print(f"  [DIR] {entry.fullName}")
+    elif entry.isBasic:
+        print(f"  [BAS] {entry.fullName}")
+    else:
+        print(f"        {entry.fullName}  {entry.length} bytes")
+```
+
+You can also walk the raw directory tree for structured access:
+
+```python
+side = image.sides[0]
+root = side.readDirectory(2)   # root directory at sector 2
+for entry in root.entries:
+    print(entry.name, "DIR" if entry.isDirectory else "")
 ```
 
 ## Searching BASIC source

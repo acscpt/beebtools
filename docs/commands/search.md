@@ -4,6 +4,10 @@
 beebtools search <image> <pattern> [filename] [-i] [-r] [--pretty]
 ```
 
+Works with both DFS (`.ssd`/`.dsd`) and ADFS (`.adf`/`.adl`) disc images.
+On ADFS images, the search covers all BASIC files across the entire directory
+tree. Directory entries are skipped automatically.
+
 Detokenizes every BASIC file on the disc and scans each line for the pattern.
 Matching lines are printed with the filename and line number:
 
