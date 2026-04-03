@@ -957,6 +957,203 @@ class ADFSSide:
 
         return data[:entry.length]
 
+    # -------------------------------------------------------------------
+    # File and directory write operations
+    # -------------------------------------------------------------------
+
+    def writeFile(self, entry: ADFSEntry, data: bytes) -> None:
+        """Write raw bytes to the sectors indicated by an entry.
+
+        Pads the data to a sector boundary. Does not update the
+        directory or FSM - this is a low-level primitive used by
+        addFile and mkdir.
+        """
+        if len(data) == 0:
+            return
+
+        sectors_needed = (
+            (len(data) + ADFS_SECTOR_SIZE - 1) // ADFS_SECTOR_SIZE
+        )
+
+        # Pad to a full sector boundary.
+        padded = bytearray(sectors_needed * ADFS_SECTOR_SIZE)
+        padded[:len(data)] = data
+
+        self._writeSectors(entry.start_sector, bytes(padded))
+
+    def _resolveParent(self, path: str) -> Tuple[int, ADFSDirectory, str]:
+        """Resolve a dotted ADFS path to its parent directory.
+
+        Returns (parent_sector, parent_directory, leaf_name).
+        Raises ADFSError if any intermediate directory is not found.
+        """
+        parts = path.split(".")
+
+        # Strip the leading '$' root prefix.
+        if parts[0] == "$":
+            parts = parts[1:]
+
+        if not parts:
+            raise ADFSError(f"Invalid path: '{path}'")
+
+        leaf_name = parts[-1]
+        dir_parts = parts[:-1]
+
+        # Walk from root to the parent directory.
+        current_sector = ADFS_ROOT_SECTOR
+        current_dir = self.readDirectory(ADFS_ROOT_SECTOR)
+
+        for part in dir_parts:
+            part_upper = part.upper()
+            found = False
+
+            for entry in current_dir.entries:
+                if entry.name.upper() == part_upper and entry.isDirectory:
+                    current_sector = entry.start_sector
+                    current_dir = self.readDirectory(entry.start_sector)
+                    found = True
+                    break
+
+            if not found:
+                raise ADFSError(
+                    f"Directory '{part}' not found in path '{path}'"
+                )
+
+        return current_sector, current_dir, leaf_name
+
+    def addFile(
+        self,
+        path: str,
+        data: bytes,
+        load_addr: int = 0,
+        exec_addr: int = 0,
+        locked: bool = False,
+    ) -> None:
+        """Add a file to the disc image at the given ADFS path.
+
+        The parent directory must already exist. The filename is
+        validated and the file is inserted in sorted order.
+        """
+        parent_sector, parent_dir, leaf_name = self._resolveParent(path)
+
+        validateAdfsName(leaf_name)
+
+        # Allocate sectors for the file data.
+        if len(data) > 0:
+            sectors_needed = (
+                (len(data) + ADFS_SECTOR_SIZE - 1) // ADFS_SECTOR_SIZE
+            )
+            start_sector = self._allocateBlock(sectors_needed)
+        else:
+            start_sector = 0
+
+        # Build the access bits: R + W by default, plus L if locked.
+        access = 0x03
+        if locked:
+            access |= 0x04
+
+        entry = ADFSEntry(
+            name=leaf_name,
+            directory="",
+            load_addr=load_addr,
+            exec_addr=exec_addr,
+            length=len(data),
+            start_sector=start_sector,
+            locked=locked,
+            is_directory=False,
+            access=access,
+            sequence=0,
+        )
+
+        # Write the file data.
+        self.writeFile(entry, data)
+
+        # Insert the entry into the parent directory and write back.
+        updated_dir = self._insertEntry(parent_dir, entry)
+        self.writeDirectory(parent_sector, updated_dir)
+
+    def deleteFile(self, path: str) -> None:
+        """Delete a file from the disc image at the given ADFS path.
+
+        Refuses to delete directories. Frees the file's sectors back
+        to the FSM.
+        """
+        parent_sector, parent_dir, leaf_name = self._resolveParent(path)
+
+        # Find the entry.
+        name_upper = leaf_name.upper()
+        target = None
+
+        for entry in parent_dir.entries:
+            if entry.name.upper() == name_upper:
+                target = entry
+                break
+
+        if target is None:
+            raise ADFSError(
+                f"File '{leaf_name}' not found in directory"
+            )
+
+        if target.isDirectory:
+            raise ADFSError(
+                f"Cannot delete directory '{leaf_name}' with deleteFile - "
+                f"directories must be empty and removed individually"
+            )
+
+        # Remove from directory and write back.
+        updated_dir = self._removeEntry(parent_dir, leaf_name)
+        self.writeDirectory(parent_sector, updated_dir)
+
+        # Free the file's sectors.
+        if target.length > 0:
+            sectors_used = (
+                (target.length + ADFS_SECTOR_SIZE - 1) // ADFS_SECTOR_SIZE
+            )
+            self._freeBlock(target.start_sector, sectors_used)
+
+    def mkdir(self, path: str) -> None:
+        """Create a new subdirectory at the given ADFS path.
+
+        The parent directory must already exist. The new directory is
+        allocated 5 sectors from the FSM and initialised with Hugo
+        markers, parent pointer, and an empty entry list.
+        """
+        parent_sector, parent_dir, leaf_name = self._resolveParent(path)
+
+        validateAdfsName(leaf_name)
+
+        # Allocate 5 sectors for the directory.
+        dir_sector = self._allocateBlock(5)
+
+        # Build and write the empty directory.
+        new_dir = ADFSDirectory(
+            name=leaf_name,
+            title=leaf_name,
+            parent_sector=parent_sector,
+            sequence=0x01,
+            entries=(),
+        )
+        raw = self._encodeDirectory(new_dir)
+        self._writeSectors(dir_sector, raw)
+
+        # Create the directory entry with D + R + W + L access.
+        dir_entry = ADFSEntry(
+            name=leaf_name,
+            directory="",
+            load_addr=0,
+            exec_addr=0,
+            length=ADFS_DIR_LENGTH,
+            start_sector=dir_sector,
+            locked=False,
+            is_directory=True,
+            access=0x0F,  # R + W + L + D
+            sequence=0,
+        )
+
+        # Insert into parent and write back.
+        updated_dir = self._insertEntry(parent_dir, dir_entry)
+        self.writeDirectory(parent_sector, updated_dir)
+
 
 # -----------------------------------------------------------------------
 # ADFSImage - disc image container
@@ -1046,3 +1243,81 @@ def openAdfsImage(path: str) -> ADFSImage:
         )
 
     return ADFSImage(bytearray(raw), is_adl)
+
+
+def validateAdfsName(name: str) -> None:
+    """Validate an ADFS filename.
+
+    An ADFS name must be 1-10 characters, printable ASCII (0x21-0x7E),
+    with no spaces or control characters. Bit 7 is reserved for access
+    flag encoding so characters above 0x7E are disallowed.
+
+    Raises:
+        ADFSError: If the name is invalid.
+    """
+    if not name:
+        raise ADFSError("ADFS filename must not be empty")
+
+    if len(name) > 10:
+        raise ADFSError(
+            f"ADFS filename '{name}' is {len(name)} characters "
+            f"(maximum is 10)"
+        )
+
+    for ch in name:
+        code = ord(ch)
+
+        if code < 0x21 or code > 0x7E:
+            raise ADFSError(
+                f"ADFS filename '{name}' contains invalid character "
+                f"0x{code:02X} (must be 0x21-0x7E)"
+            )
+
+
+# -----------------------------------------------------------------------
+# ADFS format size constants
+# -----------------------------------------------------------------------
+
+ADFS_S_SECTORS = 640    # 160K, single-sided 40-track
+ADFS_M_SECTORS = 1280   # 320K, single-sided 80-track
+ADFS_L_SECTORS = 2560   # 640K, double-sided 80-track
+
+
+def createAdfsImage(
+    total_sectors: int = ADFS_M_SECTORS,
+    title: str = "",
+    boot_option: BootOption = BootOption.OFF,
+    disc_id: int = 0,
+) -> ADFSImage:
+    """Create a blank ADFS disc image with a valid FSM and root directory.
+
+    Returns an ADFSImage ready for addFile/mkdir operations.
+    """
+    data = bytearray(total_sectors * ADFS_SECTOR_SIZE)
+    is_adl = total_sectors > ADFS_M_SECTORS
+
+    image = ADFSImage(data, is_adl)
+    side = image.sides[0]
+
+    # Build and write the free space map. The root directory occupies
+    # sectors 2-6, so free space starts at sector 7.
+    fsm = ADFSFreeSpaceMap(
+        blocks=((7, total_sectors - 7),),
+        total_sectors=total_sectors,
+        disc_id=disc_id,
+        boot_option=boot_option,
+    )
+    side.writeFreeSpaceMap(fsm)
+
+    # Build and write the root directory.
+    root = ADFSDirectory(
+        name="$",
+        title=title or "$",
+        parent_sector=ADFS_ROOT_SECTOR,
+        sequence=0x01,
+        entries=(),
+    )
+    raw = ADFSSide._encodeDirectory(root)
+    side._writeSectors(ADFS_ROOT_SECTOR, raw)
+
+    return image

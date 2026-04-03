@@ -43,6 +43,9 @@ from beebtools.adfs import (
     ADFS_MAX_ENTRIES,
     ADFS_ROOT_SECTOR,
     ADFS_HUGO_MAGIC,
+    ADFS_S_SECTORS,
+    ADFS_M_SECTORS,
+    ADFS_L_SECTORS,
     _adfsChecksum,
     _decodeString,
     _encodeString,
@@ -52,6 +55,8 @@ from beebtools.adfs import (
     _write32le,
     _encodeEntryName,
     _encodeEntry,
+    validateAdfsName,
+    createAdfsImage,
 )
 
 
@@ -1160,6 +1165,355 @@ class TestRemoveEntry:
 
         with pytest.raises(ADFSError, match="not found"):
             side._removeEntry(directory, "GHOST")
+
+
+# -----------------------------------------------------------------------
+# Name validation tests
+# -----------------------------------------------------------------------
+
+class TestValidateAdfsName:
+
+    def testValidName(self):
+        validateAdfsName("HELLO")
+
+    def testSingleChar(self):
+        validateAdfsName("A")
+
+    def testMaxLength(self):
+        validateAdfsName("ABCDEFGHIJ")
+
+    def testEmptyRaises(self):
+        with pytest.raises(ADFSError, match="empty"):
+            validateAdfsName("")
+
+    def testTooLongRaises(self):
+        with pytest.raises(ADFSError, match="11 characters"):
+            validateAdfsName("TOOLONGNAME")
+
+    def testSpaceRaises(self):
+        with pytest.raises(ADFSError, match="invalid character"):
+            validateAdfsName("HE LO")
+
+    def testControlCharRaises(self):
+        with pytest.raises(ADFSError, match="invalid character"):
+            validateAdfsName("BAD\x01")
+
+    def testHighBitCharRaises(self):
+        with pytest.raises(ADFSError, match="invalid character"):
+            validateAdfsName("BAD\x80")
+
+
+# -----------------------------------------------------------------------
+# File write operation tests
+# -----------------------------------------------------------------------
+
+class TestAddFile:
+
+    def testAddAndReadBack(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.addFile("$.HELLO", b"Hello World!", load_addr=0x1900, exec_addr=0x8023)
+
+        cat = side.readCatalogue()
+        assert len(cat.entries) == 1
+        assert cat.entries[0].name == "HELLO"
+        assert cat.entries[0].load_addr == 0x1900
+        assert cat.entries[0].exec_addr == 0x8023
+        assert cat.entries[0].length == 12
+
+        data = side.readFile(cat.entries[0])
+        assert data == b"Hello World!"
+
+    def testAddMultipleFiles(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.addFile("$.ALPHA", b"aaa")
+        side.addFile("$.CHARLIE", b"ccc")
+        side.addFile("$.BRAVO", b"bbb")
+
+        cat = side.readCatalogue()
+        names = [e.name for e in cat.entries]
+        assert names == ["ALPHA", "BRAVO", "CHARLIE"]
+
+    def testAddLockedFile(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.addFile("$.SECRET", b"data", locked=True)
+
+        cat = side.readCatalogue()
+        assert cat.entries[0].locked is True
+
+    def testAddToSubdirectory(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.mkdir("$.GAMES")
+        side.addFile("$.GAMES.ELITE", b"game data", load_addr=0x2000)
+
+        cat = side.readCatalogue()
+        # Should have GAMES dir + ELITE file.
+        file_entries = [e for e in cat.entries if not e.isDirectory]
+        assert len(file_entries) == 1
+        assert file_entries[0].name == "ELITE"
+        assert file_entries[0].directory == "$.GAMES"
+
+        data = side.readFile(file_entries[0])
+        assert data == b"game data"
+
+    def testAddEmptyFile(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.addFile("$.EMPTY", b"")
+
+        cat = side.readCatalogue()
+        assert cat.entries[0].length == 0
+
+        data = side.readFile(cat.entries[0])
+        assert data == b""
+
+    def testAddDiscFullRaises(self):
+        image = createAdfsImage(total_sectors=20)
+        side = image.sides[0]
+
+        # 20 sectors total, 7 reserved (FSM + root dir) = 13 free.
+        # Try to add a file needing 14 sectors.
+        big_data = bytes(14 * ADFS_SECTOR_SIZE)
+
+        with pytest.raises(ADFSError, match="Cannot allocate"):
+            side.addFile("$.BIG", big_data)
+
+    def testAddDuplicateRaises(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.addFile("$.FILE", b"first")
+
+        with pytest.raises(ADFSError, match="Duplicate"):
+            side.addFile("$.FILE", b"second")
+
+    def testAddBadNameRaises(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        with pytest.raises(ADFSError, match="invalid character"):
+            side.addFile("$.BAD NAME", b"data")
+
+    def testAddMissingParentRaises(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        with pytest.raises(ADFSError, match="not found"):
+            side.addFile("$.NOSUCH.FILE", b"data")
+
+    def testFreeSpaceDecreasesAfterAdd(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        before = side.freeSpace()
+        side.addFile("$.DATA", bytes(512))
+        after = side.freeSpace()
+
+        # 512 bytes = 2 sectors.
+        assert before - after == 2
+
+
+class TestDeleteFile:
+
+    def testDeleteAndVerifyGone(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.addFile("$.TEMP", b"temporary")
+        side.deleteFile("$.TEMP")
+
+        cat = side.readCatalogue()
+        assert len(cat.entries) == 0
+
+    def testDeleteFreesSectors(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        before = side.freeSpace()
+        side.addFile("$.TEMP", bytes(1024))
+        during = side.freeSpace()
+        side.deleteFile("$.TEMP")
+        after = side.freeSpace()
+
+        assert during < before
+        assert after == before
+
+    def testDeleteFromSubdirectory(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.mkdir("$.SUB")
+        side.addFile("$.SUB.FILE", b"nested")
+        side.deleteFile("$.SUB.FILE")
+
+        sub_dir = side.readDirectory(
+            [e for e in side.readCatalogue().entries if e.isDirectory][0].start_sector
+        )
+        assert len(sub_dir.entries) == 0
+
+    def testDeleteNotFoundRaises(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        with pytest.raises(ADFSError, match="not found"):
+            side.deleteFile("$.GHOST")
+
+    def testDeleteDirectoryRaises(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.mkdir("$.DIR")
+
+        with pytest.raises(ADFSError, match="Cannot delete directory"):
+            side.deleteFile("$.DIR")
+
+    def testDeleteLastFileInDirectory(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.addFile("$.ONLY", b"sole file")
+        side.deleteFile("$.ONLY")
+
+        root = side.readDirectory(ADFS_ROOT_SECTOR)
+        assert len(root.entries) == 0
+
+
+class TestMkdir:
+
+    def testCreateSubdirectory(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.mkdir("$.GAMES")
+
+        cat = side.readCatalogue()
+        dirs = [e for e in cat.entries if e.isDirectory]
+        assert len(dirs) == 1
+        assert dirs[0].name == "GAMES"
+        assert dirs[0].access == 0x0F
+
+    def testCreateNestedDirectories(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.mkdir("$.DATA")
+        side.mkdir("$.DATA.SCORES")
+
+        cat = side.readCatalogue()
+        dirs = [e for e in cat.entries if e.isDirectory]
+        assert len(dirs) == 2
+
+        # The nested dir should be accessible.
+        nested = [d for d in dirs if d.name == "SCORES"]
+        assert len(nested) == 1
+        assert nested[0].directory == "$.DATA"
+
+    def testMkdirUsesDiscSpace(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        before = side.freeSpace()
+        side.mkdir("$.SUB")
+        after = side.freeSpace()
+
+        # A directory takes 5 sectors.
+        assert before - after == 5
+
+    def testMkdirDuplicateRaises(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.mkdir("$.DIR")
+
+        with pytest.raises(ADFSError, match="Duplicate"):
+            side.mkdir("$.DIR")
+
+    def testMkdirBadNameRaises(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        with pytest.raises(ADFSError, match="invalid character"):
+            side.mkdir("$.BAD NAME")
+
+
+# -----------------------------------------------------------------------
+# Image creation tests
+# -----------------------------------------------------------------------
+
+class TestCreateAdfsImage:
+
+    def testCreateDefaultImage(self):
+        image = createAdfsImage()
+
+        assert len(image.data) == ADFS_M_SECTORS * ADFS_SECTOR_SIZE
+        assert image.is_adl is False
+
+    def testCreateSmallImage(self):
+        image = createAdfsImage(total_sectors=ADFS_S_SECTORS)
+
+        assert len(image.data) == ADFS_S_SECTORS * ADFS_SECTOR_SIZE
+        assert image.is_adl is False
+
+    def testCreateLargeImage(self):
+        image = createAdfsImage(total_sectors=ADFS_L_SECTORS)
+
+        assert len(image.data) == ADFS_L_SECTORS * ADFS_SECTOR_SIZE
+        assert image.is_adl is True
+
+    def testFsmIsValid(self):
+        image = createAdfsImage(total_sectors=640, disc_id=0xABCD)
+        side = image.sides[0]
+
+        fsm = side.readFreeSpaceMap()
+        assert fsm.total_sectors == 640
+        assert fsm.disc_id == 0xABCD
+        assert fsm.blocks == ((7, 633),)
+
+    def testRootDirectoryIsValid(self):
+        image = createAdfsImage(title="TestDisc")
+        side = image.sides[0]
+
+        root = side.readDirectory(ADFS_ROOT_SECTOR)
+        assert root.name == "$"
+        assert root.title == "TestDisc"
+        assert root.parent_sector == ADFS_ROOT_SECTOR
+        assert root.sequence == 0x01
+        assert len(root.entries) == 0
+
+    def testSerializeRoundTrip(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        side.addFile("$.TEST", b"hello")
+
+        serialized = image.serialize()
+        image2 = ADFSImage(bytearray(serialized), False)
+        cat = image2.sides[0].readCatalogue()
+
+        assert len(cat.entries) == 1
+        assert cat.entries[0].name == "TEST"
+
+    def testBootOptionStored(self):
+        image = createAdfsImage(boot_option=BootOption.RUN)
+        side = image.sides[0]
+
+        fsm = side.readFreeSpaceMap()
+        assert fsm.boot_option == BootOption.RUN
+
+    def testDefaultTitleIsDollar(self):
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        root = side.readDirectory(ADFS_ROOT_SECTOR)
+        assert root.title == "$"
 
 
 # -----------------------------------------------------------------------
