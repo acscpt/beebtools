@@ -1888,7 +1888,7 @@ class TestFileExtraction:
         image = ADFSImage(image_data, is_adl=False)
         cat = image.sides[0].readCatalogue()
 
-        with pytest.raises(ADFSFormatError, match="extend beyond"):
+        with pytest.raises(ADFSFormatError, match="extends beyond"):
             image.sides[0].readFile(cat.entries[0])
 
 

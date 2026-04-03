@@ -3,7 +3,7 @@
 
 """ADFS disc image reader (old map, small directory).
 
-Supports .adf (single-sided) and .adl (double-sided sequential) formats.
+Supports .adf (single-sided) and .adl (double-sided track-interleaved) formats.
 Handles ADFS-S (160K), ADFS-M (320K), and ADFS-L (640K) disc images.
 Provides catalogue parsing, directory walking, and file extraction for
 Acorn ADFS old-map disc images.
@@ -319,10 +319,32 @@ class ADFSSide:
     def _sectorOffset(self, sector_num: int) -> int:
         """Byte offset of a logical sector in the backing store.
 
-        ADFS uses sequential track layout with no interleaving.
-        Logical sectors map directly to byte offsets.
+        .adf (single-sided) files store sectors sequentially: logical sector
+        N is at byte offset N * 256.
+
+        .adl (double-sided) files use track-interleaved layout: track 0 side 0,
+        track 0 side 1, track 1 side 0, track 1 side 1, etc.  Logical sectors
+        0-1279 are on side 0 and 1280-2559 are on side 1.
         """
-        return sector_num * ADFS_SECTOR_SIZE
+        if not self._image.is_adl:
+            return sector_num * ADFS_SECTOR_SIZE
+
+        # Interleaved layout: 16 sectors per half-track, 32 file-sectors per
+        # track pair.  Side 0 occupies the first 16 file-sectors of each pair;
+        # side 1 occupies the second 16.
+        half = ADFS_L_SECTORS // 2  # 1280 sectors per side
+        if sector_num < half:
+            track = sector_num // ADFS_SECTORS_PER_TRACK
+            sec_in_track = sector_num % ADFS_SECTORS_PER_TRACK
+            file_sector = track * 2 * ADFS_SECTORS_PER_TRACK + sec_in_track
+        else:
+            logical_s1 = sector_num - half
+            track = logical_s1 // ADFS_SECTORS_PER_TRACK
+            sec_in_track = logical_s1 % ADFS_SECTORS_PER_TRACK
+            file_sector = (track * 2 * ADFS_SECTORS_PER_TRACK
+                           + ADFS_SECTORS_PER_TRACK + sec_in_track)
+
+        return file_sector * ADFS_SECTOR_SIZE
 
     def _readSector(self, sector_num: int) -> bytes:
         """Read one 256-byte logical sector."""
@@ -338,17 +360,12 @@ class ADFSSide:
         return bytes(self._image.data[offset:end])
 
     def _readSectors(self, start_sector: int, count: int) -> bytes:
-        """Read multiple contiguous sectors as a single block."""
-        offset = self._sectorOffset(start_sector)
-        end = offset + count * ADFS_SECTOR_SIZE
+        """Read multiple contiguous logical sectors.
 
-        if end > len(self._image.data):
-            raise ADFSFormatError(
-                f"Sectors {start_sector}-{start_sector + count - 1} "
-                f"extend beyond the image ({len(self._image.data)} bytes)"
-            )
-
-        return bytes(self._image.data[offset:end])
+        Reads sector by sector so that track-crossing reads work correctly
+        in the interleaved .adl layout.
+        """
+        return b"".join(self._readSector(start_sector + i) for i in range(count))
 
     def _writeSector(self, sector_num: int, data: bytes) -> None:
         """Write one 256-byte sector to the backing store."""
@@ -366,19 +383,14 @@ class ADFSSide:
     def _writeSectors(self, start_sector: int, data: bytes) -> None:
         """Write a contiguous block of sectors to the backing store.
 
-        The data length must be a multiple of 256 bytes.
+        The data length must be a multiple of 256 bytes.  Writes sector by
+        sector so that track-crossing writes work correctly in the interleaved
+        .adl layout.
         """
         count = len(data) // ADFS_SECTOR_SIZE
-        offset = self._sectorOffset(start_sector)
-        end = offset + count * ADFS_SECTOR_SIZE
-
-        if end > len(self._image.data):
-            raise ADFSError(
-                f"Sectors {start_sector}-{start_sector + count - 1} "
-                f"extend beyond the image ({len(self._image.data)} bytes)"
-            )
-
-        self._image.data[offset:end] = data[:count * ADFS_SECTOR_SIZE]
+        for i in range(count):
+            chunk = data[i * ADFS_SECTOR_SIZE: (i + 1) * ADFS_SECTOR_SIZE]
+            self._writeSector(start_sector + i, chunk)
 
     # -------------------------------------------------------------------
     # Free space map
@@ -1167,7 +1179,7 @@ class ADFSImage:
 
     Owns the bytearray backing store and provides an ADFSSide view
     for the filesystem. Both ADF (single-sided) and ADL (double-sided
-    sequential) layouts are supported as one logical filesystem.
+    track-interleaved) layouts are supported as one logical filesystem.
     """
 
     def __init__(self, data: bytearray, is_adl: bool) -> None:
@@ -1175,7 +1187,7 @@ class ADFSImage:
 
         Args:
             data:   Backing store for the disc image.
-            is_adl: True for .adl double-sided sequential format.
+            is_adl: True for .adl double-sided track-interleaved format.
         """
         self._data = data
         self._is_adl = is_adl
@@ -1210,7 +1222,7 @@ def openAdfsImage(path: str) -> ADFSImage:
 
     Format is inferred from the file extension:
         .adf  -- single-sided (ADFS-S or ADFS-M)
-        .adl  -- double-sided sequential (ADFS-L)
+        .adl  -- double-sided track-interleaved (ADFS-L)
 
     Validates the minimum image size and checks for the Hugo directory
     marker at sector 2.
