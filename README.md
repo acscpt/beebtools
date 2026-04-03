@@ -65,7 +65,7 @@ For BASIC files, `beebtools` does two things in sequence when extracting:
    The pretty-printer converts `*|` statements to `REM *|` and strips the
    control characters so the program is readable.
 
-When creating images`beebtools` performs the reverse - plain-text BASIC (as produced
+When creating images, `beebtools` performs the reverse - plain-text BASIC (as produced
 by step 1 or 2) is retokenized back to the binary format the BBC Micro
 expects.  The anti-listing trick is not reversed and re-injected into the program
 though in this case.
