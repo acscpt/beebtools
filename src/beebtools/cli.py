@@ -19,9 +19,9 @@ from .tokenize import tokenize
 from .pretty import prettyPrint
 from .boot import BootOption
 from .entry import DiscError, DiscFile
-from .image import openImage, createImage
 from .inf import parseInf
 from .disc import (
+    openImage, createImage,
     search, extractAll, buildImage,
     looksLikeTokenizedBasic, looksLikePlainText, sortCatalogueEntries,
 )
