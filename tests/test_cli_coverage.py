@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Heisenberg (acscpt)
 # SPDX-License-Identifier: MIT
 
+from __future__ import annotations
+
 """Tests targeting uncovered CLI paths: _parseBootOption, cmdSearch regex
 error, cmdExtract single-file, cmdAdd error paths, cmdBuild error,
 main() dispatch, and __main__.py entry point.
