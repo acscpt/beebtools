@@ -453,6 +453,133 @@ class ADFSSide:
 
         return self._fsm
 
+    def writeFreeSpaceMap(self, fsm: ADFSFreeSpaceMap) -> None:
+        """Encode an ADFSFreeSpaceMap and write it back to sectors 0-1.
+
+        Recomputes both sector checksums. Invalidates the cached FSM
+        so the next readFreeSpaceMap() call will re-parse from disc.
+        """
+        sec0 = bytearray(ADFS_SECTOR_SIZE)
+        sec1 = bytearray(ADFS_SECTOR_SIZE)
+
+        # Write free-space block pairs.
+        for i, (start, length) in enumerate(fsm.blocks):
+            base = i * 3
+            _write24le(sec0, base, start)
+            _write24le(sec1, base, length)
+
+        # Total sectors on disc (sector 0, offset 0xFC).
+        _write24le(sec0, 0xFC, fsm.total_sectors)
+
+        # Disc identifier (sector 1, offset 0xFB).
+        sec1[0xFB] = fsm.disc_id & 0xFF
+        sec1[0xFC] = (fsm.disc_id >> 8) & 0xFF
+
+        # Boot option (sector 1, offset 0xFD).
+        sec1[0xFD] = fsm.boot_option.value & 0x03
+
+        # End-of-list pointer (sector 1, offset 0xFE).
+        sec1[0xFE] = len(fsm.blocks) * 3
+
+        # Compute and store checksums.
+        sec0[0xFF] = _adfsChecksum(bytes(sec0))
+        sec1[0xFF] = _adfsChecksum(bytes(sec1))
+
+        self._writeSector(0, bytes(sec0))
+        self._writeSector(1, bytes(sec1))
+
+        # Invalidate the cached FSM.
+        self._fsm = None
+
+    def _allocateBlock(self, sectors_needed: int) -> int:
+        """Allocate a contiguous block from the free space map.
+
+        Uses first-fit: scans blocks in order and takes the first one
+        big enough. If the chosen block is larger than needed, it is
+        split. Updates the FSM on disc and returns the start sector.
+
+        Raises:
+            ADFSError: If no block is large enough.
+        """
+        fsm = self.readFreeSpaceMap()
+        blocks = list(fsm.blocks)
+
+        for i, (start, length) in enumerate(blocks):
+            if length >= sectors_needed:
+                # Found a suitable block. Split or consume it.
+                allocated_start = start
+
+                if length == sectors_needed:
+                    blocks.pop(i)
+                else:
+                    blocks[i] = (start + sectors_needed, length - sectors_needed)
+
+                updated = ADFSFreeSpaceMap(
+                    blocks=tuple(blocks),
+                    total_sectors=fsm.total_sectors,
+                    disc_id=fsm.disc_id,
+                    boot_option=fsm.boot_option,
+                )
+                self.writeFreeSpaceMap(updated)
+
+                return allocated_start
+
+        raise ADFSError(
+            f"Cannot allocate {sectors_needed} contiguous sectors: "
+            f"largest free block is "
+            f"{max((l for _, l in blocks), default=0)} sectors"
+        )
+
+    def _freeBlock(self, start_sector: int, length: int) -> None:
+        """Return a block of sectors to the free space map.
+
+        Inserts the block in sorted order by start sector, then
+        merges with any adjacent blocks to keep the list compact.
+        """
+        fsm = self.readFreeSpaceMap()
+        blocks = list(fsm.blocks)
+
+        # Insert in sorted order.
+        insert_pos = 0
+
+        for i, (s, _) in enumerate(blocks):
+            if start_sector < s:
+                break
+            insert_pos = i + 1
+
+        blocks.insert(insert_pos, (start_sector, length))
+
+        # Merge with the right neighbour.
+        if insert_pos + 1 < len(blocks):
+            curr_start, curr_len = blocks[insert_pos]
+            next_start, next_len = blocks[insert_pos + 1]
+
+            if curr_start + curr_len == next_start:
+                blocks[insert_pos] = (curr_start, curr_len + next_len)
+                blocks.pop(insert_pos + 1)
+
+        # Merge with the left neighbour.
+        if insert_pos > 0:
+            prev_start, prev_len = blocks[insert_pos - 1]
+            curr_start, curr_len = blocks[insert_pos]
+
+            if prev_start + prev_len == curr_start:
+                blocks[insert_pos - 1] = (prev_start, prev_len + curr_len)
+                blocks.pop(insert_pos)
+
+        updated = ADFSFreeSpaceMap(
+            blocks=tuple(blocks),
+            total_sectors=fsm.total_sectors,
+            disc_id=fsm.disc_id,
+            boot_option=fsm.boot_option,
+        )
+        self.writeFreeSpaceMap(updated)
+
+    def freeSpace(self) -> int:
+        """Total number of free sectors across all FSM blocks."""
+        fsm = self.readFreeSpaceMap()
+        return sum(length for _, length in fsm.blocks)
+
     # -------------------------------------------------------------------
     # Directory parsing
     # -------------------------------------------------------------------

@@ -658,6 +658,287 @@ class TestFreeSpaceMap:
 
 
 # -----------------------------------------------------------------------
+# Free space map write tests
+# -----------------------------------------------------------------------
+
+class TestWriteFreeSpaceMap:
+
+    def testWriteReadRoundTrip(self):
+        image_data = _blankAdfs(total_sectors=640, disc_id=0xBEEF, boot_option=3)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Read, write back, re-read and compare.
+        original = side.readFreeSpaceMap()
+        side.writeFreeSpaceMap(original)
+        reread = side.readFreeSpaceMap()
+
+        assert reread.blocks == original.blocks
+        assert reread.total_sectors == original.total_sectors
+        assert reread.disc_id == original.disc_id
+        assert reread.boot_option == original.boot_option
+
+    def testWriteMultipleBlocks(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        fsm = ADFSFreeSpaceMap(
+            blocks=((7, 50), (100, 200)),
+            total_sectors=640,
+            disc_id=0x1234,
+            boot_option=BootOption.OFF,
+        )
+        side.writeFreeSpaceMap(fsm)
+        reread = side.readFreeSpaceMap()
+
+        assert reread.blocks == ((7, 50), (100, 200))
+
+    def testWriteInvalidatesCache(self):
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Read to populate cache.
+        original = side.readFreeSpaceMap()
+        assert original.disc_id == 0x1234
+
+        # Write with different disc_id.
+        updated = ADFSFreeSpaceMap(
+            blocks=original.blocks,
+            total_sectors=original.total_sectors,
+            disc_id=0x5678,
+            boot_option=original.boot_option,
+        )
+        side.writeFreeSpaceMap(updated)
+
+        # Re-read should see the new disc_id (cache was invalidated).
+        reread = side.readFreeSpaceMap()
+        assert reread.disc_id == 0x5678
+
+
+class TestAllocateBlock:
+
+    def testAllocateFromSingleBlock(self):
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Initial FSM: one block from sector 7, length 633.
+        start = side._allocateBlock(10)
+        assert start == 7
+
+        # FSM should now have one block: (17, 623).
+        fsm = side.readFreeSpaceMap()
+        assert len(fsm.blocks) == 1
+        assert fsm.blocks[0] == (17, 623)
+
+    def testAllocateExactSize(self):
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Allocate all free space.
+        start = side._allocateBlock(633)
+        assert start == 7
+
+        # FSM should now be empty.
+        fsm = side.readFreeSpaceMap()
+        assert len(fsm.blocks) == 0
+
+    def testAllocateMultipleBlocks(self):
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Allocate three times.
+        s1 = side._allocateBlock(5)
+        s2 = side._allocateBlock(10)
+        s3 = side._allocateBlock(3)
+
+        assert s1 == 7
+        assert s2 == 12
+        assert s3 == 22
+
+        fsm = side.readFreeSpaceMap()
+        assert fsm.blocks[0] == (25, 615)
+
+    def testAllocateDiscFullRaises(self):
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        with pytest.raises(ADFSError, match="Cannot allocate"):
+            side._allocateBlock(634)
+
+    def testAllocateFirstFitSkipsSmallBlock(self):
+        # Set up FSM with a small block followed by a large one.
+        image_data = _blankAdfs()
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        fsm = ADFSFreeSpaceMap(
+            blocks=((7, 3), (50, 100)),
+            total_sectors=640,
+            disc_id=0x1234,
+            boot_option=BootOption.OFF,
+        )
+        side.writeFreeSpaceMap(fsm)
+
+        start = side._allocateBlock(10)
+        assert start == 50
+
+        fsm = side.readFreeSpaceMap()
+        assert (7, 3) in fsm.blocks
+        assert (60, 90) in fsm.blocks
+
+
+class TestFreeBlock:
+
+    def testFreeBlockSimple(self):
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Allocate, then free.
+        start = side._allocateBlock(10)
+        side._freeBlock(start, 10)
+
+        # Should be back to original state.
+        fsm = side.readFreeSpaceMap()
+        assert len(fsm.blocks) == 1
+        assert fsm.blocks[0] == (7, 633)
+
+    def testFreeBlockMergeRight(self):
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Allocate 20 sectors (7-26), leaving (27, 613).
+        side._allocateBlock(20)
+
+        # Free back the first 10 (7-16). Merging right: (7,10) + (27,613)
+        # should NOT merge because there's a gap at 17-26.
+        side._freeBlock(7, 10)
+        fsm = side.readFreeSpaceMap()
+        assert (7, 10) in fsm.blocks
+        assert (27, 613) in fsm.blocks
+
+    def testFreeBlockMergesAdjacentRight(self):
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Set up: two blocks with a gap at 7-16.
+        fsm = ADFSFreeSpaceMap(
+            blocks=((17, 623),),
+            total_sectors=640,
+            disc_id=0x1234,
+            boot_option=BootOption.OFF,
+        )
+        side.writeFreeSpaceMap(fsm)
+
+        # Free 7-16 (adjacent to 17).
+        side._freeBlock(7, 10)
+        fsm = side.readFreeSpaceMap()
+        assert len(fsm.blocks) == 1
+        assert fsm.blocks[0] == (7, 633)
+
+    def testFreeBlockMergesAdjacentLeft(self):
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Set up: block at 7-16, gap at 17-26, nothing else.
+        fsm = ADFSFreeSpaceMap(
+            blocks=((7, 10),),
+            total_sectors=640,
+            disc_id=0x1234,
+            boot_option=BootOption.OFF,
+        )
+        side.writeFreeSpaceMap(fsm)
+
+        # Free 17-26 (adjacent to left block ending at 17).
+        side._freeBlock(17, 10)
+        fsm = side.readFreeSpaceMap()
+        assert len(fsm.blocks) == 1
+        assert fsm.blocks[0] == (7, 20)
+
+    def testFreeBlockMergesBoth(self):
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Set up: two blocks with a gap in between.
+        fsm = ADFSFreeSpaceMap(
+            blocks=((7, 10), (27, 100)),
+            total_sectors=640,
+            disc_id=0x1234,
+            boot_option=BootOption.OFF,
+        )
+        side.writeFreeSpaceMap(fsm)
+
+        # Free the gap at 17-26.
+        side._freeBlock(17, 10)
+        fsm = side.readFreeSpaceMap()
+        assert len(fsm.blocks) == 1
+        assert fsm.blocks[0] == (7, 120)
+
+    def testFreeBlockNoMerge(self):
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        # Set up: blocks at 7-16 and 50-99 (gap 17-49 and gap 100+).
+        fsm = ADFSFreeSpaceMap(
+            blocks=((7, 10), (50, 50)),
+            total_sectors=640,
+            disc_id=0x1234,
+            boot_option=BootOption.OFF,
+        )
+        side.writeFreeSpaceMap(fsm)
+
+        # Free 30-39 (isolated, no merges).
+        side._freeBlock(30, 10)
+        fsm = side.readFreeSpaceMap()
+        assert len(fsm.blocks) == 3
+        assert fsm.blocks == ((7, 10), (30, 10), (50, 50))
+
+
+class TestFreeSpace:
+
+    def testFreeSpaceOnBlankDisc(self):
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        assert side.freeSpace() == 633
+
+    def testFreeSpaceAfterAllocation(self):
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        side._allocateBlock(100)
+        assert side.freeSpace() == 533
+
+    def testFreeSpaceWithMultipleBlocks(self):
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        side = image.sides[0]
+
+        fsm = ADFSFreeSpaceMap(
+            blocks=((7, 50), (100, 30), (200, 20)),
+            total_sectors=640,
+            disc_id=0x1234,
+            boot_option=BootOption.OFF,
+        )
+        side.writeFreeSpaceMap(fsm)
+
+        assert side.freeSpace() == 100
+
+
+# -----------------------------------------------------------------------
 # Directory parsing
 # -----------------------------------------------------------------------
 
