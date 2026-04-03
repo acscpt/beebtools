@@ -24,7 +24,7 @@ Exceptions:
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 from .boot import BootOption
 from .entry import DiscError, DiscFormatError, DiscFile, isBasicExecAddr
@@ -110,6 +110,22 @@ class ADFSEntry:
         if self.isDirectory:
             return False
         return isBasicExecAddr(self.exec_addr)
+
+    def __repr__(self) -> str:
+        """Show class name, full path, load/exec addresses, and length or 'dir'."""
+        kind = "dir" if self.is_directory else f"length={self.length}"
+        return (f"ADFSEntry('{self.fullName}', "
+                f"load=0x{self.load_addr:04X}, "
+                f"exec=0x{self.exec_addr:04X}, "
+                f"{kind})")
+
+    def __str__(self) -> str:
+        """Return the full ADFS path (e.g. '$.GAMES.ELITE')."""
+        return self.fullName
+
+    def __fspath__(self) -> str:
+        """Host-safe path: convert ADFS '$.' separators to '/'."""
+        return self.fullName.replace(".", "/")
 
 
 @dataclass(frozen=True)
@@ -311,6 +327,38 @@ class ADFSSide:
     def side(self) -> int:
         """Side number (always 0 for ADFS)."""
         return self._side
+
+    # -------------------------------------------------------------------
+    # Python data model
+    # -------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        """Show class name, disc title, entry count, and free space."""
+        cat = self.readCatalogue()
+        return (f"ADFSSide(title='{cat.title}', "
+                f"{len(cat.entries)} entries, "
+                f"{self.freeSpace()} sectors free)")
+
+    def __iter__(self) -> Iterator[ADFSEntry]:
+        """Yield catalogue entries for this side."""
+        return iter(self.readCatalogue().entries)
+
+    def __len__(self) -> int:
+        """Number of catalogue entries on this side."""
+        return len(self.readCatalogue().entries)
+
+    def __getitem__(self, key: str) -> ADFSEntry:
+        """Look up a catalogue entry by full path (e.g. '$.GAMES.ELITE')."""
+        for entry in self.readCatalogue().entries:
+            if entry.fullName == key:
+                return entry
+        raise KeyError(key)
+
+    def __contains__(self, key: object) -> bool:
+        """True if an entry with the given full path exists."""
+        if not isinstance(key, str):
+            return False
+        return any(e.fullName == key for e in self.readCatalogue().entries)
 
     # -------------------------------------------------------------------
     # Sector access
@@ -1215,6 +1263,35 @@ class ADFSImage:
     def serialize(self) -> bytes:
         """Return the disc image as immutable bytes for writing to a file."""
         return bytes(self._data)
+
+    # -------------------------------------------------------------------
+    # Python data model
+    # -------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        """Show class name, disc format (ADF/ADL), and side count."""
+        fmt = "ADL" if self._is_adl else "ADF"
+        return f"ADFSImage({fmt}, {len(self._sides)} sides)"
+
+    def __iter__(self) -> Iterator[ADFSSide]:
+        """Yield each side of the disc image."""
+        return iter(self._sides)
+
+    def __len__(self) -> int:
+        """Number of sides (always 1 for ADFS)."""
+        return len(self._sides)
+
+    def __getitem__(self, index: int) -> ADFSSide:
+        """Return the side at the given index."""
+        return self._sides[index]
+
+    def __enter__(self) -> "ADFSImage":
+        """Enter a context manager block. Returns self."""
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Exit a context manager block. No-op for in-memory images."""
+        pass
 
 
 # -----------------------------------------------------------------------

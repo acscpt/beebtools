@@ -21,7 +21,7 @@ Exceptions:
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Iterator, List, Optional, Sequence, Tuple
 
 from .boot import BootOption
 from .entry import DiscError, DiscFormatError, DiscFile, isBasicExecAddr
@@ -82,6 +82,21 @@ class DFSEntry:
         """Always False for DFS entries. DFS has no subdirectories."""
         return False
 
+    def __repr__(self) -> str:
+        """Show class name, full path, load/exec addresses, and length."""
+        return (f"DFSEntry('{self.fullName}', "
+                f"load=0x{self.load_addr:04X}, "
+                f"exec=0x{self.exec_addr:04X}, "
+                f"length={self.length})")
+
+    def __str__(self) -> str:
+        """Return the full DFS filename (e.g. 'T.MYPROG')."""
+        return self.fullName
+
+    def __fspath__(self) -> str:
+        """Host-safe path: replace the DFS directory separator with '/'."""
+        return f"{self.directory}/{self.name}"
+
 
 @dataclass(frozen=True)
 class DFSCatalogue:
@@ -125,6 +140,38 @@ class DFSSide:
     def side(self) -> int:
         """Side number (0 or 1) this reader represents."""
         return self._side
+
+    # -------------------------------------------------------------------
+    # Python data model
+    # -------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        """Show class name, disc title, entry count, and free space."""
+        cat = self.readCatalogue()
+        return (f"DFSSide(title='{cat.title}', "
+                f"{len(cat.entries)} entries, "
+                f"{self.freeSpace()} sectors free)")
+
+    def __iter__(self) -> Iterator[DFSEntry]:
+        """Yield catalogue entries for this side."""
+        return iter(self.readCatalogue().entries)
+
+    def __len__(self) -> int:
+        """Number of catalogue entries on this side."""
+        return len(self.readCatalogue().entries)
+
+    def __getitem__(self, key: str) -> DFSEntry:
+        """Look up a catalogue entry by full path (e.g. 'T.MYPROG')."""
+        for entry in self.readCatalogue().entries:
+            if entry.fullName == key:
+                return entry
+        raise KeyError(key)
+
+    def __contains__(self, key: object) -> bool:
+        """True if an entry with the given full path exists."""
+        if not isinstance(key, str):
+            return False
+        return any(e.fullName == key for e in self.readCatalogue().entries)
 
     # -------------------------------------------------------------------
     # Sector access
@@ -798,6 +845,35 @@ class DFSImage:
     def serialize(self) -> bytes:
         """Return the disc image as immutable bytes for writing to a file."""
         return bytes(self._data)
+
+    # -------------------------------------------------------------------
+    # Python data model
+    # -------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        """Show class name, disc format (SSD/DSD), and side count."""
+        fmt = "DSD" if self._is_dsd else "SSD"
+        return f"DFSImage({fmt}, {len(self._sides)} sides)"
+
+    def __iter__(self) -> Iterator[DFSSide]:
+        """Yield each side of the disc image."""
+        return iter(self._sides)
+
+    def __len__(self) -> int:
+        """Number of sides (1 for SSD, 2 for DSD)."""
+        return len(self._sides)
+
+    def __getitem__(self, index: int) -> DFSSide:
+        """Return the side at the given index."""
+        return self._sides[index]
+
+    def __enter__(self) -> "DFSImage":
+        """Enter a context manager block. Returns self."""
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Exit a context manager block. No-op for in-memory images."""
+        pass
 
 
 # -----------------------------------------------------------------------

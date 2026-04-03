@@ -19,7 +19,7 @@ Supported formats:
     .adl  -- ADFS double-sided (old map, small directory)
 """
 
-from typing import Any, List, Optional, Protocol, runtime_checkable
+from typing import Any, Iterator, List, Optional, Protocol, runtime_checkable
 
 from .entry import DiscCatalogue, DiscEntry, DiscFile
 
@@ -76,6 +76,16 @@ class DiscSide(Protocol):
         """Remove a file from the catalogue by its full path."""
         ...
 
+    def __iter__(self) -> Iterator[DiscEntry]: ...
+
+    def __len__(self) -> int: ...
+
+    def __getitem__(self, key: str) -> DiscEntry: ...
+
+    def __contains__(self, key: object) -> bool: ...
+
+    def __repr__(self) -> str: ...
+
 
 @runtime_checkable
 class DiscImage(Protocol):
@@ -93,6 +103,18 @@ class DiscImage(Protocol):
     def serialize(self) -> bytes:
         """Return the disc image as immutable bytes."""
         ...
+
+    def __iter__(self) -> Iterator[Any]: ...
+
+    def __len__(self) -> int: ...
+
+    def __getitem__(self, index: int) -> DiscSide: ...
+
+    def __enter__(self) -> "DiscImage": ...
+
+    def __exit__(self, *exc: object) -> None: ...
+
+    def __repr__(self) -> str: ...
 
 
 # Extension-to-format mapping. Extensions are matched case-insensitively.
