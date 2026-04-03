@@ -1,6 +1,6 @@
 # beebtools documentation
 
-Detailed reference for the `beebtools` BBC Micro DFS disc image tool.
+Detailed reference for the `beebtools` BBC Micro disc image tool.
 For a quick overview and installation instructions, see the
 [project README](https://github.com/acscpt/beebtools/blob/main/README.md).
 

@@ -104,7 +104,7 @@ Directory entries from ADFS images are skipped - only files are extracted.
 ### .inf sidecars
 
 Add `--inf` to write `.inf` sidecar files alongside each extracted file,
-preserving the DFS load address, exec address, length, and lock flag in the
+preserving the load address, exec address, length, and lock flag in the
 standard community interchange format.
 
 ## Filename matching

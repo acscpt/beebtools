@@ -101,7 +101,7 @@ hits = search("mydisc.ssd", r"PROC\w+", filename="T.MYPROG",
 
 Create blank disc images programmatically, add files one at a time, or
 build an entire image from a directory of files with `.inf` sidecars.
-The `BootOption` enum provides the standard DFS boot options.
+The `BootOption` enum provides the standard boot options (shared by DFS and ADFS).
 
 ```python
 from beebtools import createDiscImage, BootOption, buildImage
@@ -170,8 +170,9 @@ Format sizes: `ADFS_S_SECTORS` (160K, 640 sectors), `ADFS_M_SECTORS` (320K,
 ## Working with .inf sidecar files
 
 The `.inf` format is the standard BBC Micro community interchange format for
-preserving DFS file metadata (load address, exec address, length, lock flag)
-alongside extracted data files. Each `.inf` file is a single line of text
+preserving file metadata (load address, exec address, length, lock flag)
+alongside extracted data files. Used for both DFS and ADFS files, each `.inf`
+file is a single line of text
 sitting next to the data file it describes:
 
 ```

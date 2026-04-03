@@ -87,7 +87,7 @@ For BASIC files, `beebtools` does three things in sequence:
 - Star command awareness: `*SCUMPI` is passed through verbatim, no false spacing
 
 - `.inf` sidecar format support: parse and produce the standard community
-  interchange format for preserving DFS file metadata alongside extracted files
+  interchange format for preserving DFS/ADFS file metadata alongside extracted files
 
 - Create, modify, and build disc images from the command line or as a library
 
@@ -112,9 +112,8 @@ pip install -e ".[dev]"
 ## Commands
 
 `beebtools` provides commands for inspecting, extracting, and building disc
-images. Read commands (`cat`, `extract`, `search`) work with both DFS and ADFS
-images. Write commands (`create`, `add`, `delete`, `build`) are DFS-only. Each
-command has its own detailed reference page.
+images. All commands work with both DFS and ADFS images. Each command has its
+own detailed reference page.
 
 | Command | Description |
 | --- | --- |
@@ -141,7 +140,7 @@ beebtools extract mydisc.dsd T.MYPROG --pretty
 # Extract everything from a double-sided disc
 beebtools extract mydisc.dsd -a --pretty -d output/
 
-# Extract everything with .inf sidecars preserving DFS metadata
+# Extract everything with .inf sidecars preserving file metadata
 beebtools extract mydisc.dsd -a --inf -d output/
 
 # List an ADFS disc catalogue
@@ -167,6 +166,15 @@ beebtools delete mydisc.ssd $.LOADER
 
 # Build a disc image from a directory of files with .inf sidecars
 beebtools build output/ rebuilt.ssd --title "REBUILT"
+
+# Create a blank ADFS image (320K)
+beebtools create blank.adf -t 80 --title "MY ADFS" --boot RUN
+
+# Add a file to an ADFS image with a hierarchical path
+beebtools add mydisc.adf loader.bin --name $.GAMES.LOADER --load 1900 --exec 1900
+
+# Build an ADFS image from a directory tree
+beebtools build output/ rebuilt.adl --title "REBUILT"
 ```
 
 ## Pretty-printer
@@ -226,8 +234,9 @@ See [docs/library.md](https://github.com/acscpt/beebtools/blob/main/docs/library
 DFS: both 40-track and 80-track images are supported. Watford DFS extended
 catalogues (62-file discs) are not supported.
 
-ADFS: old-map (small directory, "Hugo" format) images are supported (read-only).
-New-map large-directory formats (ADFS-D/E/F/G) are not supported.
+ADFS: old-map (small directory, "Hugo" format) images are supported for both
+reading and writing. New-map large-directory formats (ADFS-D/E/F/G) are not
+supported.
 
 ## Documentation
 
