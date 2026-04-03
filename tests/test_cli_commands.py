@@ -1032,3 +1032,60 @@ class TestCmdBuildAdfs:
         assert os.path.isfile(out)
         assert "640K ADL" in buf.getvalue()
         assert os.path.getsize(out) == ADFS_L_SECTORS * 256
+
+
+# =======================================================================
+# ADFS extract-then-rebuild round-trip (11.9)
+# =======================================================================
+
+class TestAdfsExtractRebuildRoundTrip:
+
+    def testExtractAndRebuildPreservesCatalogue(self, tmp_path) -> None:
+        """Extract an ADFS image, rebuild it, and verify the catalogue matches."""
+        # Create an ADFS image with multiple binary files.
+        # Use non-text data to avoid CR/LF normalization during extract.
+        image = createAdfsImage(title="ROUNDTRIP")
+        side = image.sides[0]
+
+        data_a = bytes(range(256)) * 2
+        data_b = bytes(range(255, -1, -1)) * 3
+
+        side.addFile(path="$.FILEA", data=data_a,
+                     load_addr=0x1000, exec_addr=0x2000)
+        side.addFile(path="$.FILEB", data=data_b,
+                     load_addr=0x3000, exec_addr=0x4000)
+
+        original_path = str(tmp_path / "original.adf")
+        with open(original_path, "wb") as f:
+            f.write(image.serialize())
+
+        # Extract all files with .inf sidecars.
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(original_path, extract_dir, write_inf=True)
+
+        # Rebuild from extracted files.
+        rebuilt_bytes = buildAdfsImage(
+            source_dir=extract_dir, title="ROUNDTRIP")
+
+        rebuilt_path = str(tmp_path / "rebuilt.adf")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        # Read both catalogues and compare.
+        orig_image = openAdfsImage(original_path)
+        orig_cat = orig_image.sides[0].readCatalogue()
+        orig_names = sorted(e.fullName for e in orig_cat.entries)
+
+        rebuilt_image = openAdfsImage(rebuilt_path)
+        rebuilt_cat = rebuilt_image.sides[0].readCatalogue()
+        rebuilt_names = sorted(e.fullName for e in rebuilt_cat.entries)
+
+        assert orig_names == rebuilt_names
+
+        # Also verify file data round-trips.
+        for entry in orig_cat.entries:
+            orig_data = orig_image.sides[0].readFile(entry)
+            rebuilt_entry = [e for e in rebuilt_cat.entries
+                             if e.fullName == entry.fullName][0]
+            rebuilt_data = rebuilt_image.sides[0].readFile(rebuilt_entry)
+            assert orig_data == rebuilt_data, f"Data mismatch for {entry.fullName}"
