@@ -17,39 +17,14 @@ from typing import Optional
 from .detokenize import detokenize
 from .tokenize import tokenize
 from .pretty import prettyPrint
-from .dfs import (
-    DFSError,
-    BootOption,
-    createDiscImage,
-    looksLikeTokenizedBasic,
-    looksLikePlainText,
-    openDiscImage,
-    sortCatalogueEntries,
-)
-from .adfs import (
-    ADFSError,
-    openAdfsImage,
-    createAdfsImage,
-    ADFS_S_SECTORS,
-    ADFS_M_SECTORS,
-    ADFS_L_SECTORS,
-)
-from .image import openImage
+from .boot import BootOption
+from .entry import DiscError, DiscFile
 from .inf import parseInf
-from .disc import search, extractAll, buildImage, buildAdfsImage
-
-
-# ---------------------------------------------------------------------------
-# Format detection
-# ---------------------------------------------------------------------------
-
-_ADFS_EXTENSIONS = {".adf", ".adl"}
-
-
-def _isAdfsPath(path: str) -> bool:
-    """Return True if the file path has an ADFS extension (.adf or .adl)."""
-    ext = os.path.splitext(path)[1].lower()
-    return ext in _ADFS_EXTENSIONS
+from .disc import (
+    openImage, createImage,
+    search, extractAll, buildImage,
+    looksLikeTokenizedBasic, looksLikePlainText, sortCatalogueEntries,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -294,52 +269,32 @@ def cmdExtract(args: Namespace) -> None:
 def cmdCreate(args: Namespace) -> None:
     """Create a blank formatted disc image (DFS or ADFS).
 
+    The output format is determined by the file extension of args.output.
+
     Args:
         args: Parsed argparse namespace for the 'create' subcommand.
     """
-    if _isAdfsPath(args.output):
-        _cmdCreateAdfs(args)
-        return
-
-    is_dsd = args.output.lower().endswith(".dsd")
-
-    image = createDiscImage(
+    image = createImage(
+        args.output,
         tracks=args.tracks,
-        is_dsd=is_dsd,
         title=args.title or "",
         boot_option=args.boot,
     )
 
+    image_bytes = image.serialize()
     with open(args.output, "wb") as f:
-        f.write(image.serialize())
+        f.write(image_bytes)
 
-    fmt = "DSD" if is_dsd else "SSD"
-    print(f"Created {args.tracks}-track {fmt}: {args.output}")
-
-
-def _cmdCreateAdfs(args: Namespace) -> None:
-    """Create a blank formatted ADFS disc image."""
-    is_adl = args.output.lower().endswith(".adl")
-
-    if is_adl:
-        total_sectors = ADFS_L_SECTORS
-    elif args.tracks == 40:
-        total_sectors = ADFS_S_SECTORS
-    else:
-        total_sectors = ADFS_M_SECTORS
-
-    image = createAdfsImage(
-        total_sectors=total_sectors,
-        title=args.title or "",
-        boot_option=args.boot,
-    )
-
-    with open(args.output, "wb") as f:
-        f.write(image.serialize())
-
-    fmt = "ADL" if is_adl else "ADF"
-    size_kb = (total_sectors * 256) // 1024
-    print(f"Created {size_kb}K {fmt}: {args.output}")
+    # Determine human-readable format description from extension.
+    ext = os.path.splitext(args.output)[1].lower()
+    _FMT_LABELS = {
+        ".ssd": f"{args.tracks}-track SSD",
+        ".dsd": f"{args.tracks}-track DSD",
+        ".adf": f"{len(image_bytes) // 1024}K ADF",
+        ".adl": f"{len(image_bytes) // 1024}K ADL",
+    }
+    label = _FMT_LABELS.get(ext, ext)
+    print(f"Created {label}: {args.output}")
 
 
 def cmdAdd(args: Namespace) -> None:
@@ -348,11 +303,7 @@ def cmdAdd(args: Namespace) -> None:
     Args:
         args: Parsed argparse namespace for the 'add' subcommand.
     """
-    if _isAdfsPath(args.image):
-        _cmdAddAdfs(args)
-        return
-
-    image = openDiscImage(args.image)
+    image = openImage(args.image)
     side = image.sides[args.side]
 
     if args.inf:
@@ -365,32 +316,34 @@ def cmdAdd(args: Namespace) -> None:
         inf_path = args.file + ".inf"
 
         if not os.path.isfile(inf_path):
-            print(f"Error: .inf sidecar not found: {inf_path}", file=sys.stderr)
+            print(f"Error: .inf sidecar not found: {inf_path}",
+                  file=sys.stderr)
             sys.exit(1)
 
         with open(inf_path, "r", encoding="ascii") as f:
             inf_line = f.readline().strip()
 
         inf = parseInf(inf_line)
-        directory = inf.directory
-        name = inf.name
+        disc_path = inf.fullName
         load_addr = inf.load_addr
         exec_addr = inf.exec_addr
         locked = inf.locked
     else:
         # Metadata from command-line arguments.
-        dfs_name = args.name
+        file_name = args.name
 
-        if not dfs_name:
-            print("Error: --name is required (or use --inf).", file=sys.stderr)
+        if not file_name:
+            print("Error: --name is required (or use --inf).",
+                  file=sys.stderr)
             sys.exit(1)
 
-        if len(dfs_name) >= 3 and dfs_name[1] == ".":
-            directory = dfs_name[0]
-            name = dfs_name[2:]
+        # Ensure path is fully qualified.
+        # DFS names like 'T.MYPROG' or bare 'MYPROG' -> '$.MYPROG'
+        # ADFS names like '$.DIR.FILE' pass through unchanged.
+        if len(file_name) >= 3 and file_name[1] == ".":
+            disc_path = file_name
         else:
-            directory = "$"
-            name = dfs_name
+            disc_path = f"$.{file_name}"
 
         # Apply BASIC defaults first, then let explicit flags override.
         if args.basic:
@@ -430,15 +383,14 @@ def cmdAdd(args: Namespace) -> None:
         print(f"Tokenized {args.file} ({len(data)} bytes)", file=sys.stderr)
 
     try:
-        entry = side.addFile(
-            name=name,
-            directory=directory,
+        entry = side.addFile(DiscFile(
+            path=disc_path,
             data=data,
             load_addr=load_addr,
             exec_addr=exec_addr,
             locked=locked,
-        )
-    except DFSError as e:
+        ))
+    except DiscError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -446,102 +398,7 @@ def cmdAdd(args: Namespace) -> None:
     with open(args.image, "wb") as f:
         f.write(image.serialize())
 
-    print(f"Added {entry.fullName} ({len(data)} bytes) to {args.image}")
-
-
-def _cmdAddAdfs(args: Namespace) -> None:
-    """Add a file to an existing ADFS disc image."""
-    image = openAdfsImage(args.image)
-    side = image.sides[0]
-
-    if args.inf:
-        if args.basic:
-            print("Warning: --basic ignored when --inf is used",
-                  file=sys.stderr)
-
-        # Read metadata from a .inf sidecar file.
-        inf_path = args.file + ".inf"
-
-        if not os.path.isfile(inf_path):
-            print(f"Error: .inf sidecar not found: {inf_path}",
-                  file=sys.stderr)
-            sys.exit(1)
-
-        with open(inf_path, "r", encoding="ascii") as f:
-            inf_line = f.readline().strip()
-
-        inf = parseInf(inf_line)
-        adfs_path = inf.fullName
-        load_addr = inf.load_addr
-        exec_addr = inf.exec_addr
-        locked = inf.locked
-    else:
-        adfs_name = args.name
-
-        if not adfs_name:
-            print("Error: --name is required (or use --inf).",
-                  file=sys.stderr)
-            sys.exit(1)
-
-        # Ensure path is fully qualified with $ prefix.
-        if not adfs_name.startswith("$."):
-            adfs_path = "$." + adfs_name
-        else:
-            adfs_path = adfs_name
-
-        # Apply BASIC defaults first, then let explicit flags override.
-        if args.basic:
-            load_addr = 0x1900
-            exec_addr = 0x8023
-        else:
-            load_addr = 0
-            exec_addr = 0
-
-        if args.load:
-            override = int(args.load, 16)
-            if args.basic:
-                print(f"Note: --load overrides BASIC default"
-                      f" (0x{load_addr:04X} -> 0x{override:04X})",
-                      file=sys.stderr)
-            load_addr = override
-
-        if args.exec_addr:
-            override = int(args.exec_addr, 16)
-            if args.basic:
-                print(f"Note: --exec overrides BASIC default"
-                      f" (0x{exec_addr:04X} -> 0x{override:04X})",
-                      file=sys.stderr)
-            exec_addr = override
-
-        locked = args.locked
-
-    with open(args.file, "rb") as f:
-        data = f.read()
-
-    # Retokenize plain text BASIC when --basic is set.
-    if args.basic and not looksLikeTokenizedBasic(data) and looksLikePlainText(data):
-        text = data.decode("ascii", errors="replace")
-        text_lines = text.splitlines()
-        data = tokenize(text_lines)
-        print(f"Tokenized {args.file} ({len(data)} bytes)", file=sys.stderr)
-
-    try:
-        side.addFile(
-            path=adfs_path,
-            data=data,
-            load_addr=load_addr,
-            exec_addr=exec_addr,
-            locked=locked,
-        )
-    except ADFSError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Write the modified image back to the file.
-    with open(args.image, "wb") as f:
-        f.write(image.serialize())
-
-    print(f"Added {adfs_path} ({len(data)} bytes) to {args.image}")
+    print(f"Added {disc_path} ({len(data)} bytes) to {args.image}")
 
 
 def cmdDelete(args: Namespace) -> None:
@@ -550,25 +407,22 @@ def cmdDelete(args: Namespace) -> None:
     Args:
         args: Parsed argparse namespace for the 'delete' subcommand.
     """
-    if _isAdfsPath(args.image):
-        _cmdDeleteAdfs(args)
-        return
-
-    image = openDiscImage(args.image)
+    image = openImage(args.image)
     side = image.sides[args.side]
 
-    dfs_name = args.filename
+    path = args.filename
 
-    if len(dfs_name) >= 3 and dfs_name[1] == ".":
-        directory = dfs_name[0]
-        name = dfs_name[2:]
+    # Ensure path is fully qualified with a directory prefix.
+    # DFS: 'MYPROG' -> '$.MYPROG', 'T.MYPROG' passes through.
+    # ADFS: '$.DIR.FILE' passes through, 'DIR.FILE' -> '$.DIR.FILE'.
+    if len(path) >= 3 and path[1] == ".":
+        disc_path = path
     else:
-        directory = "$"
-        name = dfs_name
+        disc_path = f"$.{path}"
 
     try:
-        entry = side.deleteFile(name, directory)
-    except DFSError as e:
+        side.deleteFile(disc_path)
+    except DiscError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -576,92 +430,42 @@ def cmdDelete(args: Namespace) -> None:
     with open(args.image, "wb") as f:
         f.write(image.serialize())
 
-    print(f"Deleted {entry.fullName} from {args.image}")
-
-
-def _cmdDeleteAdfs(args: Namespace) -> None:
-    """Delete a file from an ADFS disc image."""
-    image = openAdfsImage(args.image)
-    side = image.sides[0]
-
-    adfs_path = args.filename
-
-    # Ensure path is fully qualified with $ prefix.
-    if not adfs_path.startswith("$."):
-        adfs_path = "$." + adfs_path
-
-    try:
-        side.deleteFile(adfs_path)
-    except ADFSError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Write the modified image back to the file.
-    with open(args.image, "wb") as f:
-        f.write(image.serialize())
-
-    print(f"Deleted {adfs_path} from {args.image}")
+    print(f"Deleted {disc_path} from {args.image}")
 
 
 def cmdBuild(args: Namespace) -> None:
     """Build a disc image from a directory of files with .inf sidecars.
 
+    The output format is determined by the file extension of args.output.
+
     Args:
         args: Parsed argparse namespace for the 'build' subcommand.
     """
-    if _isAdfsPath(args.output):
-        _cmdBuildAdfs(args)
-        return
-
-    is_dsd = args.output.lower().endswith(".dsd")
-
     try:
         image_bytes = buildImage(
             source_dir=args.dir,
+            output_path=args.output,
             tracks=args.tracks,
-            is_dsd=is_dsd,
             title=args.title or "",
             boot_option=args.boot,
         )
-    except DFSError as e:
+    except DiscError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
     with open(args.output, "wb") as f:
         f.write(image_bytes)
 
-    fmt = "DSD" if is_dsd else "SSD"
-    print(f"Built {args.tracks}-track {fmt}: {args.output}")
-
-
-def _cmdBuildAdfs(args: Namespace) -> None:
-    """Build an ADFS disc image from a directory tree with .inf sidecars."""
-    is_adl = args.output.lower().endswith(".adl")
-
-    if is_adl:
-        total_sectors = ADFS_L_SECTORS
-    elif args.tracks == 40:
-        total_sectors = ADFS_S_SECTORS
-    else:
-        total_sectors = ADFS_M_SECTORS
-
-    try:
-        image_bytes = buildAdfsImage(
-            source_dir=args.dir,
-            total_sectors=total_sectors,
-            title=args.title or "",
-            boot_option=args.boot,
-        )
-    except ADFSError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    with open(args.output, "wb") as f:
-        f.write(image_bytes)
-
-    fmt = "ADL" if is_adl else "ADF"
-    size_kb = (total_sectors * 256) // 1024
-    print(f"Built {size_kb}K {fmt}: {args.output}")
+    # Determine human-readable format description from extension.
+    ext = os.path.splitext(args.output)[1].lower()
+    _FMT_LABELS = {
+        ".ssd": f"{args.tracks}-track SSD",
+        ".dsd": f"{args.tracks}-track DSD",
+        ".adf": f"{len(image_bytes) // 1024}K ADF",
+        ".adl": f"{len(image_bytes) // 1024}K ADL",
+    }
+    label = _FMT_LABELS.get(ext, ext)
+    print(f"Built {label}: {args.output}")
 
 
 def main() -> None:

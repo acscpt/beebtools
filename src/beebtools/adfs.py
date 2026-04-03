@@ -24,9 +24,10 @@ Exceptions:
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Iterator, List, Optional, Tuple
 
-from .dfs import BootOption
+from .boot import BootOption
+from .entry import DiscError, DiscFormatError, DiscFile, isBasicExecAddr
 
 
 # -----------------------------------------------------------------------
@@ -55,11 +56,11 @@ _FOOTER_HUGO = 0x4FB           # 4-byte "Hugo" marker
 # Exceptions
 # -----------------------------------------------------------------------
 
-class ADFSError(Exception):
+class ADFSError(DiscError):
     """Base exception for ADFS disc image errors."""
 
 
-class ADFSFormatError(ADFSError):
+class ADFSFormatError(ADFSError, DiscFormatError):
     """Raised when a disc image is structurally invalid or corrupted."""
 
 
@@ -108,8 +109,23 @@ class ADFSEntry:
         """
         if self.isDirectory:
             return False
-        exec_lo = self.exec_addr & 0xFFFF
-        return exec_lo in (0x801F, 0x8023, 0x802B)
+        return isBasicExecAddr(self.exec_addr)
+
+    def __repr__(self) -> str:
+        """Show class name, full path, load/exec addresses, and length or 'dir'."""
+        kind = "dir" if self.is_directory else f"length={self.length}"
+        return (f"ADFSEntry('{self.fullName}', "
+                f"load=0x{self.load_addr:04X}, "
+                f"exec=0x{self.exec_addr:04X}, "
+                f"{kind})")
+
+    def __str__(self) -> str:
+        """Return the full ADFS path (e.g. '$.GAMES.ELITE')."""
+        return self.fullName
+
+    def __fspath__(self) -> str:
+        """Host-safe path: convert ADFS '$.' separators to '/'."""
+        return self.fullName.replace(".", "/")
 
 
 @dataclass(frozen=True)
@@ -311,6 +327,38 @@ class ADFSSide:
     def side(self) -> int:
         """Side number (always 0 for ADFS)."""
         return self._side
+
+    # -------------------------------------------------------------------
+    # Python data model
+    # -------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        """Show class name, disc title, entry count, and free space."""
+        cat = self.readCatalogue()
+        return (f"ADFSSide(title='{cat.title}', "
+                f"{len(cat.entries)} entries, "
+                f"{self.freeSpace()} sectors free)")
+
+    def __iter__(self) -> Iterator[ADFSEntry]:
+        """Yield catalogue entries for this side."""
+        return iter(self.readCatalogue().entries)
+
+    def __len__(self) -> int:
+        """Number of catalogue entries on this side."""
+        return len(self.readCatalogue().entries)
+
+    def __getitem__(self, key: str) -> ADFSEntry:
+        """Look up a catalogue entry by full path (e.g. '$.GAMES.ELITE')."""
+        for entry in self.readCatalogue().entries:
+            if entry.fullName == key:
+                return entry
+        raise KeyError(key)
+
+    def __contains__(self, key: object) -> bool:
+        """True if an entry with the given full path exists."""
+        if not isinstance(key, str):
+            return False
+        return any(e.fullName == key for e in self.readCatalogue().entries)
 
     # -------------------------------------------------------------------
     # Sector access
@@ -1036,24 +1084,26 @@ class ADFSSide:
 
         return current_sector, current_dir, leaf_name
 
-    def addFile(
-        self,
-        path: str,
-        data: bytes,
-        load_addr: int = 0,
-        exec_addr: int = 0,
-        locked: bool = False,
-    ) -> None:
+    def addFile(self, spec: DiscFile) -> 'ADFSEntry':
         """Add a file to the disc image at the given ADFS path.
 
         The parent directory must already exist. The filename is
         validated and the file is inserted in sorted order.
+
+        Args:
+            spec: DiscFile describing the file to add.
+
+        Returns:
+            The ADFSEntry created for the new file.
         """
-        parent_sector, parent_dir, leaf_name = self._resolveParent(path)
+        parent_sector, parent_dir, leaf_name = self._resolveParent(
+            spec.path
+        )
 
         validateAdfsName(leaf_name)
 
         # Allocate sectors for the file data.
+        data = spec.data
         if len(data) > 0:
             sectors_needed = (
                 (len(data) + ADFS_SECTOR_SIZE - 1) // ADFS_SECTOR_SIZE
@@ -1064,17 +1114,17 @@ class ADFSSide:
 
         # Build the access bits: R + W by default, plus L if locked.
         access = 0x03
-        if locked:
+        if spec.locked:
             access |= 0x04
 
         entry = ADFSEntry(
             name=leaf_name,
             directory="",
-            load_addr=load_addr,
-            exec_addr=exec_addr,
+            load_addr=spec.load_addr,
+            exec_addr=spec.exec_addr,
             length=len(data),
             start_sector=start_sector,
-            locked=locked,
+            locked=spec.locked,
             is_directory=False,
             access=access,
             sequence=0,
@@ -1086,6 +1136,8 @@ class ADFSSide:
         # Insert the entry into the parent directory and write back.
         updated_dir = self._insertEntry(parent_dir, entry)
         self.writeDirectory(parent_sector, updated_dir)
+
+        return entry
 
     def deleteFile(self, path: str) -> None:
         """Delete a file from the disc image at the given ADFS path.
@@ -1211,6 +1263,35 @@ class ADFSImage:
     def serialize(self) -> bytes:
         """Return the disc image as immutable bytes for writing to a file."""
         return bytes(self._data)
+
+    # -------------------------------------------------------------------
+    # Python data model
+    # -------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        """Show class name, disc format (ADF/ADL), and side count."""
+        fmt = "ADL" if self._is_adl else "ADF"
+        return f"ADFSImage({fmt}, {len(self._sides)} sides)"
+
+    def __iter__(self) -> Iterator[ADFSSide]:
+        """Yield each side of the disc image."""
+        return iter(self._sides)
+
+    def __len__(self) -> int:
+        """Number of sides (always 1 for ADFS)."""
+        return len(self._sides)
+
+    def __getitem__(self, index: int) -> ADFSSide:
+        """Return the side at the given index."""
+        return self._sides[index]
+
+    def __enter__(self) -> "ADFSImage":
+        """Enter a context manager block. Returns self."""
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Exit a context manager block. No-op for in-memory images."""
+        pass
 
 
 # -----------------------------------------------------------------------

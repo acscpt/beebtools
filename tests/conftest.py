@@ -422,12 +422,12 @@ def _buildReport(
 
         lines.append("### Per-file Coverage")
         lines.append("")
-        lines.append("| File | Stmts | Miss | Coverage | |")
-        lines.append("| --- | ---: | ---: | ---: | --- |")
+        lines.append("| File | Stmts | Miss | Coverage |")
+        lines.append("| --- | ---: | ---: | --- |")
         for filename, stmts, miss, cover in coverage:
             link = _coverageFileLink(filename)
             lines.append(
-                f"| {link} | {stmts} | {miss} | {cover}% | {_coverageBar(cover)} |"
+                f"| {link} | {stmts} | {miss} | {_coverageBar(cover)} |"
             )
         lines.append("")
 

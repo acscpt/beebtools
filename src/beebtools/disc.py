@@ -3,39 +3,29 @@
 
 """High-level disc operations.
 
-Orchestration layer that composes the lower-level modules - dfs (disc I/O),
-detokenize, and pretty - into coherent disc-wide operations.
+Orchestration layer that composes the lower-level modules into coherent
+disc-wide operations. All operations work through Protocols defined in
+image.py, so the same code handles both DFS and ADFS formats.
 
 Layer responsibilities:
-    dfs        -- disc format parsing and sector-level I/O
-    detokenize -- tokenized binary to plain-text transform
-    pretty     -- text post-processing
-    disc       -- cross-layer orchestration (this module)
-    cli        -- argument parsing, output formatting, and user interaction
+    boot       -- BootOption enum (Layer 0)
+    entry      -- DiscEntry Protocol and DiscFile transport (Layer 0)
+    image      -- DiscSide/DiscImage Protocols plus openImage/createImage (Layer 3)
+    detokenize -- tokenized binary to plain-text transform (Layer 2)
+    pretty     -- text post-processing (Layer 2)
+    disc       -- cross-layer orchestration (this module, Layer 4)
+    cli        -- argument parsing, output formatting (Layer 5)
 
 All operations that span more than one lower layer belong here.
 """
 
 import os
 import re
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
-from .dfs import (
-    BootOption,
-    DFSError,
-    createDiscImage,
-    looksLikeTokenizedBasic,
-    looksLikePlainText,
-    openDiscImage,
-)
-from .adfs import (
-    ADFSError,
-    createAdfsImage,
-    ADFS_S_SECTORS,
-    ADFS_M_SECTORS,
-    ADFS_L_SECTORS,
-)
-from .image import openImage
+from .boot import BootOption
+from .entry import DiscEntry, DiscFile
+from .image import DiscSide, createImage, openImage
 from .detokenize import detokenize
 from .inf import formatInf, parseInf
 from .pretty import prettyPrint
@@ -162,6 +152,72 @@ def resolveOutputPath(
     return os.path.join(dir_path, safe_name)
 
 
+# -----------------------------------------------------------------------
+# Content detection (format-agnostic, moved from dfs.py)
+# -----------------------------------------------------------------------
+
+def looksLikeTokenizedBasic(data: bytes) -> bool:
+    """True if data begins with the BBC BASIC line marker 0x0D.
+
+    Every valid tokenized BBC BASIC program starts with 0x0D (the line
+    start marker for the first line). This is a necessary-but-not-sufficient
+    check; combine with DiscEntry.isBasic for reliable BASIC detection.
+    """
+    return len(data) > 0 and data[0] == 0x0D
+
+
+# Bytes acceptable in a plain-text file: printable ASCII plus common
+# whitespace (tab, carriage return, line feed).
+_PLAIN_TEXT_BYTES = frozenset(range(0x20, 0x7F)) | {0x09, 0x0A, 0x0D}
+
+
+def looksLikePlainText(data: bytes) -> bool:
+    """True if every byte is printable ASCII or common whitespace.
+
+    Checks for printable ASCII (0x20-0x7E) plus tab (0x09), line feed
+    (0x0A), and carriage return (0x0D). An empty file is not plain text.
+    """
+    if not data:
+        return False
+    return all(b in _PLAIN_TEXT_BYTES for b in data)
+
+
+
+
+
+# -----------------------------------------------------------------------
+# Sorting (format-agnostic, moved from dfs.py, retyped to DiscEntry)
+# -----------------------------------------------------------------------
+
+def sortCatalogueEntries(
+    entries: Sequence[DiscEntry], sort_mode: str
+) -> List[DiscEntry]:
+    """Return catalogue entries in the requested display order.
+
+    Args:
+        entries:   Sequence of DiscEntry-compatible objects.
+        sort_mode: One of 'name', 'catalog', or 'size'.
+            name    -- alphabetical by full path (case-insensitive)
+            catalog -- original on-disc catalogue order
+            size    -- ascending file length, then alphabetical
+
+    Returns:
+        New list in the requested order.
+    """
+    if sort_mode == "catalog":
+        return list(entries)
+
+    if sort_mode == "size":
+        return sorted(entries, key=lambda e: (e.length, e.fullName.upper()))
+
+    # Default: alphabetical by full path.
+    return sorted(entries, key=lambda e: e.fullName.upper())
+
+
+# -----------------------------------------------------------------------
+# Search
+# -----------------------------------------------------------------------
+
 def search(
     image_path: str,
     pattern: str,
@@ -203,10 +259,8 @@ def search(
 
     image = openImage(image_path)
 
-    for disc in image.sides:
-        catalogue = disc.readCatalogue()
-
-        for entry in catalogue.entries:
+    for side in image:
+        for entry in side:
             # Skip directory entries (ADFS directories are containers, not files).
             if entry.isDirectory:
                 continue
@@ -219,7 +273,7 @@ def search(
             if not entry.isBasic:
                 continue
 
-            data = disc.readFile(entry)
+            data = side.readFile(entry)
             if not looksLikeTokenizedBasic(data):
                 continue
 
@@ -233,7 +287,7 @@ def search(
                 content = line[5:]
                 if compiled.search(content):
                     results.append({
-                        "side": disc.side,
+                        "side": side.side,
                         "filename": entry.fullName,
                         "line_number": int(line[:5]),
                         "line": line,
@@ -282,21 +336,19 @@ def extractAll(
     os.makedirs(out_dir, exist_ok=True)
 
     image = openImage(image_path)
-    multi_side = len(image.sides) > 1
+    multi_side = len(image) > 1
 
     results = []
 
-    for disc in image.sides:
-        catalogue = disc.readCatalogue()
-
-        for entry in catalogue.entries:
+    for side in image:
+        for entry in side:
             # Skip directory entries (ADFS directories are containers, not files).
             if entry.isDirectory:
                 continue
 
             safe_dir, safe_name = sanitizeEntryPath(entry.directory, entry.name)
-            stem = resolveOutputPath(out_dir, disc.side, safe_dir, safe_name, multi_side)
-            data = disc.readFile(entry)
+            stem = resolveOutputPath(out_dir, side.side, safe_dir, safe_name, multi_side)
+            data = side.readFile(entry)
 
             if entry.isBasic and looksLikeTokenizedBasic(data):
                 # Detokenize BASIC and write as plain text.
@@ -347,28 +399,32 @@ def extractAll(
 
 def buildImage(
     source_dir: str,
+    output_path: str,
     tracks: int = 80,
-    is_dsd: bool = False,
     title: str = "",
     boot_option: BootOption = BootOption.OFF,
 ) -> bytes:
     """Build a disc image from a directory of files with .inf sidecars.
 
-    The source directory is expected to be in the hierarchical layout
-    produced by extractAll: one subdirectory per DFS directory character
-    (e.g. '$/', 'T/'), with each data file accompanied by a .inf sidecar.
+    The disc format is determined by the output_path extension:
+        .ssd  -- DFS single-sided
+        .dsd  -- DFS double-sided interleaved
+        .adf  -- ADFS (40-track: 160K, 80-track: 320K)
+        .adl  -- ADFS-L 640K
 
-    For double-sided images (is_dsd=True), the source directory should
-    contain side0/ and side1/ subdirectories.
+    The source directory is expected to follow the hierarchical layout
+    produced by extractAll. For DFS: one subdirectory per directory
+    character (e.g. '$/', 'T/'). For DSD: side0/ and side1/
+    subdirectories. For ADFS: a '$' root directory.
 
     Files without a .inf sidecar are skipped with a warning printed to
-    stderr. The .inf file provides the DFS directory, load address, exec
-    address, and lock flag needed to add the file to the catalogue.
+    stderr. The .inf file provides metadata (disc path, load address,
+    exec address, lock flag) needed to add the file to the catalogue.
 
     Args:
         source_dir:  Path to the root directory of extracted files.
+        output_path: Path whose extension determines the disc format.
         tracks:      Number of tracks (40 or 80).
-        is_dsd:      True for double-sided interleaved format.
         title:       Disc title (up to 12 characters).
         boot_option: Boot option (0-3).
 
@@ -376,200 +432,98 @@ def buildImage(
         The assembled disc image as bytes, ready to write to a file.
 
     Raises:
-        DFSError: If a file cannot be added (name conflict, disc full, etc.).
+        DiscError: If a file cannot be added (name conflict, disc full, etc.).
+        DFSFormatError: If the output_path extension is unrecognised.
     """
-    import sys
-
-    image = createDiscImage(
-        tracks=tracks,
-        is_dsd=is_dsd,
-        title=title,
-        boot_option=boot_option,
+    image = createImage(
+        output_path, tracks=tracks, title=title, boot_option=boot_option,
     )
 
-    if is_dsd:
-        # Expect side0/ and side1/ subdirectories.
-        side_dirs = []
-        for side_index in range(2):
-            side_path = os.path.join(source_dir, f"side{side_index}")
-            if os.path.isdir(side_path):
-                side_dirs.append((side_index, side_path))
+    if len(image) > 1:
+        # Double-sided: expect side0/ and side1/ subdirectories.
+        for i, side in enumerate(image):
+            side_path = os.path.join(source_dir, f"side{i}")
+            _walkSourceTree(side, side_path)
     else:
-        # Single-sided: the source_dir itself holds the DFS directories.
-        side_dirs = [(0, source_dir)]
-
-    for side_index, side_path in side_dirs:
-        side = image.sides[side_index]
-        _addFilesFromDir(side, side_path)
+        # Single-sided: the source_dir itself holds the directory tree.
+        _walkSourceTree(image[0], source_dir)
 
     return image.serialize()
 
 
-def _addFilesFromDir(side: "DFSSide", side_path: str) -> None:
-    """Add all files with .inf sidecars from a directory tree to a disc side.
+def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
+    """Recursively walk a filesystem directory and add files to a disc side.
 
-    Walks the DFS directory subdirectories (e.g. '$/', 'T/') under
-    side_path, reads each .inf sidecar to get DFS metadata, then adds
-    the corresponding data file to the disc side.
+    Handles both DFS and ADFS layouts:
 
-    Args:
-        side:      DFSSide to add files to.
-        side_path: Path to the directory containing DFS dir subdirectories.
-    """
-    import sys
+    DFS directories (e.g. '$', 'T', '+') are implicit - the directory
+    letter is stored as metadata in each file's catalogue entry, so
+    addFile is sufficient. There is no separate directory-creation step.
 
-    # Walk each DFS directory subdirectory.
-    if not os.path.isdir(side_path):
-        return
+    ADFS directories are explicit container entries on disc that must be
+    created with mkdir before files can be placed inside them. Only
+    sub-directories below the root ('$') need creating, since the root
+    already exists on a freshly formatted image.
 
-    for dir_entry in sorted(os.listdir(side_path)):
-        dir_path = os.path.join(side_path, dir_entry)
-
-        if not os.path.isdir(dir_path):
-            continue
-
-        for file_entry in sorted(os.listdir(dir_path)):
-            # Skip .inf files themselves.
-            if file_entry.endswith(".inf"):
-                continue
-
-            data_path = os.path.join(dir_path, file_entry)
-
-            if not os.path.isfile(data_path):
-                continue
-
-            inf_path = data_path + ".inf"
-
-            if not os.path.isfile(inf_path):
-                print(
-                    f"Warning: no .inf sidecar for {data_path}, skipping",
-                    file=sys.stderr,
-                )
-                continue
-
-            # Read the .inf sidecar.
-            with open(inf_path, "r", encoding="ascii") as f:
-                inf_line = f.readline().strip()
-
-            inf = parseInf(inf_line)
-
-            # Read the data file.
-            with open(data_path, "rb") as f:
-                data = f.read()
-
-            side.addFile(
-                name=inf.name,
-                directory=inf.directory,
-                data=data,
-                load_addr=inf.load_addr,
-                exec_addr=inf.exec_addr,
-                locked=inf.locked,
-            )
-
-
-# -----------------------------------------------------------------------
-# ADFS image building
-# -----------------------------------------------------------------------
-
-def buildAdfsImage(
-    source_dir: str,
-    total_sectors: int = ADFS_M_SECTORS,
-    title: str = "",
-    boot_option: BootOption = BootOption.OFF,
-) -> bytes:
-    """Build an ADFS disc image from a directory tree with .inf sidecars.
-
-    The source directory is expected to follow the layout produced by
-    extractAll: a '$' subdirectory at the top level containing the ADFS
-    file hierarchy, with each data file accompanied by a .inf sidecar.
-
-    Subdirectories in the file tree are created as ADFS directories on
-    the image. Files without a .inf sidecar are skipped with a warning.
+    File metadata (disc path, load/exec addresses, lock flag) is read
+    from .inf sidecars accompanying each data file.
 
     Args:
-        source_dir:    Path to the root directory of extracted files.
-        total_sectors: Image size in sectors (ADFS_S/M/L_SECTORS).
-        title:         Disc title for the root directory.
-        boot_option:   Boot option (0-3).
-
-    Returns:
-        The assembled disc image as bytes, ready to write to a file.
-
-    Raises:
-        ADFSError: If a file cannot be added (name conflict, disc full, etc.).
-    """
-    image = createAdfsImage(
-        total_sectors=total_sectors,
-        title=title,
-        boot_option=boot_option,
-    )
-
-    side = image.sides[0]
-
-    # The extractAll layout puts everything under a '$' directory.
-    root_path = os.path.join(source_dir, "$")
-    _walkAdfsTree(side, root_path, "$")
-
-    return image.serialize()
-
-
-def _walkAdfsTree(side: "ADFSSide", fs_dir: str, adfs_parent: str) -> None:
-    """Recursively add files and directories from the filesystem to an ADFS image.
-
-    Creates ADFS subdirectories as they are encountered, then adds
-    files using metadata from their .inf sidecars.
-
-    Args:
-        side:        ADFSSide to add files and directories to.
+        side:        A DiscSide to add files and directories to.
         fs_dir:      Filesystem directory to walk.
-        adfs_parent: ADFS path of the parent directory (e.g. '$').
+        disc_parent: Accumulated disc path of the current directory.
+                     Empty string at the top level.
     """
     import sys
 
     if not os.path.isdir(fs_dir):
         return
 
-    for entry in sorted(os.listdir(fs_dir)):
+    for name in sorted(os.listdir(fs_dir)):
         # Skip .inf sidecar files - they are read alongside their data file.
-        if entry.endswith(".inf"):
+        if name.endswith(".inf"):
             continue
 
-        entry_path = os.path.join(fs_dir, entry)
+        path = os.path.join(fs_dir, name)
 
-        if os.path.isdir(entry_path):
-            # Create the ADFS subdirectory and recurse into it.
-            adfs_path = f"{adfs_parent}.{entry}"
-            side.mkdir(adfs_path)
-            _walkAdfsTree(side, entry_path, adfs_path)
+        if os.path.isdir(path):
+            # Build the disc path for this directory.
+            child_path = f"{disc_parent}.{name}" if disc_parent else name
+
+            # For ADFS images, create subdirectories below the root on disc.
+            # The root-level directories (like '$') already exist.
+            if disc_parent and hasattr(side, "mkdir"):
+                side.mkdir(child_path)
+
+            _walkSourceTree(side, path, child_path)
             continue
 
-        if not os.path.isfile(entry_path):
+        if not os.path.isfile(path):
             continue
 
-        inf_path = entry_path + ".inf"
-
+        # Read the .inf sidecar for disc metadata.
+        inf_path = path + ".inf"
         if not os.path.isfile(inf_path):
             print(
-                f"Warning: no .inf sidecar for {entry_path}, skipping",
+                f"Warning: no .inf sidecar for {path}, skipping",
                 file=sys.stderr,
             )
             continue
 
-        # Read the .inf sidecar for ADFS metadata.
         with open(inf_path, "r", encoding="ascii") as f:
             inf_line = f.readline().strip()
 
         inf = parseInf(inf_line)
 
         # Read the data file.
-        with open(entry_path, "rb") as f:
+        with open(path, "rb") as f:
             data = f.read()
 
-        # Use the full ADFS path from the .inf sidecar.
-        side.addFile(
+        # Add to disc using the path from the .inf sidecar.
+        side.addFile(DiscFile(
             path=inf.fullName,
             data=data,
             load_addr=inf.load_addr,
             exec_addr=inf.exec_addr,
             locked=inf.locked,
-        )
+        ))

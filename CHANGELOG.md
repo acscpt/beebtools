@@ -5,6 +5,51 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-04-03
+
+Internal refactor to enforce strict module layering and eliminate code that
+bled across format boundaries. No CLI or behavioural changes - all existing
+commands work identically.
+
+### Added
+
+- `createImage()` function: creates a blank disc image in the correct format
+  based on the file extension, replacing separate `createDiscImage()` /
+  `createAdfsImage()` calls.
+
+### Changed
+
+The library API has been simplified so that DFS and ADFS disc images are
+handled through a single set of functions rather than format-specific ones.
+
+- **Breaking:** `addFile()` now takes a single `DiscFile` object instead of
+  individual keyword arguments.
+
+- **Breaking:** `buildImage()` now handles both DFS and ADFS formats (detected
+  from the output path extension). `buildAdfsImage()` is removed.
+
+- **Breaking:** `sortCatalogueEntries()` accepts any entry type, not just
+  `DFSEntry`, and sorts by `fullName`.
+
+- `DFSError` and `ADFSError` now share a common `DiscError` base class.
+  Existing `except DFSError` blocks still work; new code can catch `DiscError`
+  to handle both formats.
+
+### Removed
+
+Old aliases and wrapper functions that were carried forward from earlier
+releases have been cleaned up.
+
+- `buildAdfsImage()` - use `buildImage()` with an `.adf`/`.adl` output path.
+
+- `isBasic()` standalone function - use the `isBasic` property on entries.
+
+- `DFSDisc` alias - use `DFSImage`.
+
+- `looksLikeText()` alias - use `looksLikePlainText()`.
+
+---
+
 ## [0.4.0] - 2026-04-03
 
 ### Added

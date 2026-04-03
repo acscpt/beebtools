@@ -21,61 +21,25 @@ Exceptions:
 """
 
 from dataclasses import dataclass
-from enum import IntEnum
-from typing import List, Optional, Sequence, Tuple
+from typing import Iterator, List, Optional, Tuple
+
+from .boot import BootOption
+from .entry import DiscError, DiscFormatError, DiscFile, isBasicExecAddr
 
 
 SECTOR_SIZE = 256
 SECTORS_PER_TRACK = 10
 
 
-class BootOption(IntEnum):
-    """The 2-bit boot option stored in the DFS catalogue descriptor byte.
-
-    Member names match the labels used by the Acorn DFS ROM.  Because
-    BootOption is an IntEnum, members work anywhere a plain int is
-    expected (bitwise operations, comparisons, etc.).
-    """
-
-    OFF = 0
-    LOAD = 1
-    RUN = 2
-    EXEC = 3
-
-    @staticmethod
-    def parse(value: str) -> "BootOption":
-        """Convert a string to a BootOption.
-
-        Accepts a numeric string ('0'-'3') or a name ('OFF', 'LOAD',
-        'RUN', 'EXEC') case-insensitively.
-
-        Raises:
-            ValueError: If the value is not a valid boot option.
-        """
-        by_name = {m.name.lower(): m for m in BootOption}
-        low = value.lower()
-
-        if low in by_name:
-            return by_name[low]
-
-        try:
-            return BootOption(int(value))
-        except (ValueError, KeyError):
-            names = ", ".join(m.name for m in BootOption)
-            raise ValueError(
-                f"invalid boot option '{value}' (choose from {names} or 0-3)"
-            )
-
-
 # -----------------------------------------------------------------------
 # Exceptions
 # -----------------------------------------------------------------------
 
-class DFSError(Exception):
+class DFSError(DiscError):
     """Base exception for DFS disc image errors."""
 
 
-class DFSFormatError(DFSError):
+class DFSFormatError(DFSError, DiscFormatError):
     """Raised when a disc image is structurally invalid or corrupted."""
 
 
@@ -109,17 +73,29 @@ class DFSEntry:
         """True if this entry looks like a BBC BASIC program.
 
         Checks the execution address for the well-known BASIC entry points
-        0x801F, 0x8023, and 0x802B written by the SAVE command. The top
-        two bits are masked off because they flag I/O processor memory
-        and do not affect the entry point.
+        0x801F, 0x8023, and 0x802B written by the SAVE command.
         """
-        exec_lo = self.exec_addr & 0xFFFF
-        return exec_lo in (0x801F, 0x8023, 0x802B)
+        return isBasicExecAddr(self.exec_addr)
 
     @property
     def isDirectory(self) -> bool:
         """Always False for DFS entries. DFS has no subdirectories."""
         return False
+
+    def __repr__(self) -> str:
+        """Show class name, full path, load/exec addresses, and length."""
+        return (f"DFSEntry('{self.fullName}', "
+                f"load=0x{self.load_addr:04X}, "
+                f"exec=0x{self.exec_addr:04X}, "
+                f"length={self.length})")
+
+    def __str__(self) -> str:
+        """Return the full DFS filename (e.g. 'T.MYPROG')."""
+        return self.fullName
+
+    def __fspath__(self) -> str:
+        """Host-safe path: replace the DFS directory separator with '/'."""
+        return f"{self.directory}/{self.name}"
 
 
 @dataclass(frozen=True)
@@ -164,6 +140,38 @@ class DFSSide:
     def side(self) -> int:
         """Side number (0 or 1) this reader represents."""
         return self._side
+
+    # -------------------------------------------------------------------
+    # Python data model
+    # -------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        """Show class name, disc title, entry count, and free space."""
+        cat = self.readCatalogue()
+        return (f"DFSSide(title='{cat.title}', "
+                f"{len(cat.entries)} entries, "
+                f"{self.freeSpace()} sectors free)")
+
+    def __iter__(self) -> Iterator[DFSEntry]:
+        """Yield catalogue entries for this side."""
+        return iter(self.readCatalogue().entries)
+
+    def __len__(self) -> int:
+        """Number of catalogue entries on this side."""
+        return len(self.readCatalogue().entries)
+
+    def __getitem__(self, key: str) -> DFSEntry:
+        """Look up a catalogue entry by full path (e.g. 'T.MYPROG')."""
+        for entry in self.readCatalogue().entries:
+            if entry.fullName == key:
+                return entry
+        raise KeyError(key)
+
+    def __contains__(self, key: object) -> bool:
+        """True if an entry with the given full path exists."""
+        if not isinstance(key, str):
+            return False
+        return any(e.fullName == key for e in self.readCatalogue().entries)
 
     # -------------------------------------------------------------------
     # Sector access
@@ -584,28 +592,18 @@ class DFSSide:
     # File operations
     # -------------------------------------------------------------------
 
-    def addFile(
-        self,
-        name: str,
-        directory: str,
-        data: bytes,
-        load_addr: int = 0,
-        exec_addr: int = 0,
-        locked: bool = False,
-    ) -> DFSEntry:
+    def addFile(self, spec: DiscFile) -> DFSEntry:
         """Add a file to this disc side.
 
         Validates the filename, checks for duplicates, allocates sectors
         from the top of free space downward, writes the file data, and
         updates the catalogue with an incremented cycle number.
 
+        The path in spec must be in DFS format: a single directory
+        character, a dot, then the filename (e.g. '$.MYPROG').
+
         Args:
-            name:      DFS filename (1-7 characters).
-            directory: DFS directory character (e.g. '$', 'T').
-            data:      File content bytes.
-            load_addr: Load address (default 0).
-            exec_addr: Execution address (default 0).
-            locked:    Lock the file against deletion (default False).
+            spec: DiscFile describing the file to add.
 
         Returns:
             The DFSEntry created for the new file.
@@ -614,6 +612,7 @@ class DFSSide:
             DFSError: If the name is invalid, a duplicate exists, the
                 catalogue is full, or there is not enough free space.
         """
+        directory, name = splitDfsPath(spec.path)
         validateDfsName(directory, name)
 
         cat = self.readCatalogue()
@@ -630,6 +629,7 @@ class DFSSide:
             raise DFSError("Catalogue is full (31 files maximum)")
 
         # Allocate sectors from the top of free space downward.
+        data = spec.data
         if len(data) == 0:
             sectors_needed = 0
         else:
@@ -649,11 +649,11 @@ class DFSSide:
         entry = DFSEntry(
             name=name,
             directory=directory,
-            load_addr=load_addr,
-            exec_addr=exec_addr,
+            load_addr=spec.load_addr,
+            exec_addr=spec.exec_addr,
             length=len(data),
             start_sector=start_sector,
-            locked=locked,
+            locked=spec.locked,
         )
 
         # Write file data to the allocated sectors.
@@ -678,7 +678,7 @@ class DFSSide:
         self.writeCatalogue(new_cat)
         return entry
 
-    def deleteFile(self, name: str, directory: str) -> DFSEntry:
+    def deleteFile(self, path: str) -> None:
         """Remove a file from the catalogue.
 
         The catalogue entry is removed and the cycle number incremented.
@@ -689,15 +689,12 @@ class DFSSide:
         be reused until compact() is called.
 
         Args:
-            name:      DFS filename to delete.
-            directory: DFS directory character.
-
-        Returns:
-            The DFSEntry that was removed.
+            path: Full DFS path (e.g. '$.MYPROG').
 
         Raises:
             DFSError: If the file is not found.
         """
+        directory, name = splitDfsPath(path)
         cat = self.readCatalogue()
 
         found = None
@@ -721,7 +718,6 @@ class DFSSide:
         )
 
         self.writeCatalogue(new_cat)
-        return found
 
     def compact(self) -> int:
         """Defragment file storage by closing gaps between files.
@@ -850,6 +846,35 @@ class DFSImage:
         """Return the disc image as immutable bytes for writing to a file."""
         return bytes(self._data)
 
+    # -------------------------------------------------------------------
+    # Python data model
+    # -------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        """Show class name, disc format (SSD/DSD), and side count."""
+        fmt = "DSD" if self._is_dsd else "SSD"
+        return f"DFSImage({fmt}, {len(self._sides)} sides)"
+
+    def __iter__(self) -> Iterator[DFSSide]:
+        """Yield each side of the disc image."""
+        return iter(self._sides)
+
+    def __len__(self) -> int:
+        """Number of sides (1 for SSD, 2 for DSD)."""
+        return len(self._sides)
+
+    def __getitem__(self, index: int) -> DFSSide:
+        """Return the side at the given index."""
+        return self._sides[index]
+
+    def __enter__(self) -> "DFSImage":
+        """Enter a context manager block. Returns self."""
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Exit a context manager block. No-op for in-memory images."""
+        pass
+
 
 # -----------------------------------------------------------------------
 # Module-level functions
@@ -942,6 +967,29 @@ def createDiscImage(
 # Name validation
 # -----------------------------------------------------------------------
 
+def splitDfsPath(path: str) -> Tuple[str, str]:
+    """Split a full DFS path into (directory, name).
+
+    DFS paths have the form 'D.NAME' where D is a single directory
+    character and NAME is the 1-7 character filename.
+
+    Args:
+        path: Full DFS path (e.g. '$.MYPROG', 'T.DATA').
+
+    Returns:
+        Tuple of (directory, name).
+
+    Raises:
+        DFSError: If the path is not in 'D.NAME' format.
+    """
+    if len(path) < 3 or path[1] != '.':
+        raise DFSError(
+            f"Invalid DFS path '{path}' - expected format 'D.NAME'"
+        )
+
+    return path[0], path[2:]
+
+
 def validateDfsName(directory: str, name: str) -> None:
     """Validate a DFS directory character and filename.
 
@@ -1002,86 +1050,10 @@ def validateDfsName(directory: str, name: str) -> None:
 
 
 # -----------------------------------------------------------------------
-# Content detection
-# -----------------------------------------------------------------------
-
-def looksLikeTokenizedBasic(data: bytes) -> bool:
-    """True if data begins with the BBC BASIC line marker 0x0D.
-
-    Every valid tokenized BBC BASIC program starts with 0x0D (the line
-    start marker for the first line). This is a necessary-but-not-sufficient
-    check; combine with DFSEntry.isBasic for reliable BASIC detection.
-    """
-    return len(data) > 0 and data[0] == 0x0D
-
-
-# Bytes acceptable in a plain-text file: printable ASCII plus common
-# whitespace (tab, carriage return, line feed).
-_PLAIN_TEXT_BYTES = frozenset(range(0x20, 0x7F)) | {0x09, 0x0A, 0x0D}
-
-
-def looksLikePlainText(data: bytes) -> bool:
-    """True if every byte is printable ASCII or common whitespace.
-
-    Checks for printable ASCII (0x20-0x7E) plus tab (0x09), line feed
-    (0x0A), and carriage return (0x0D). An empty file is not plain text.
-    """
-    if not data:
-        return False
-    return all(b in _PLAIN_TEXT_BYTES for b in data)
-
-
-# -----------------------------------------------------------------------
-# Sorting
-# -----------------------------------------------------------------------
-
-def sortCatalogueEntries(
-    entries: Sequence[DFSEntry], sort_mode: str
-) -> List[DFSEntry]:
-    """Return catalogue entries in the requested display order.
-
-    Args:
-        entries:   Sequence of DFSEntry objects.
-        sort_mode: One of 'name', 'catalog', or 'size'.
-            name    -- alphabetical by filename (case-insensitive)
-            catalog -- original on-disc DFS catalogue order
-            size    -- ascending file length
-
-    Returns:
-        New list of DFSEntry in the requested order.
-    """
-    if sort_mode == "catalog":
-        return list(entries)
-
-    if sort_mode == "size":
-        return sorted(
-            entries,
-            key=lambda e: (e.length, e.name.upper(), e.directory.upper()),
-        )
-
-    # Default: alphabetical by bare filename, then directory.
-    return sorted(
-        entries,
-        key=lambda e: (e.name.upper(), e.directory.upper()),
-    )
-
-
-# -----------------------------------------------------------------------
 # Backward-compatibility aliases
 # -----------------------------------------------------------------------
 
 # The old API used standalone functions and dict-based entries. These
 # aliases ease the transition in callers that have not been updated yet.
 
-def isBasic(entry: DFSEntry) -> bool:
-    """Backward-compatible wrapper around DFSEntry.isBasic property."""
-    return entry.isBasic
 
-
-def looksLikeText(data: bytes) -> bool:
-    """Backward-compatible alias for looksLikeTokenizedBasic."""
-    return looksLikeTokenizedBasic(data)
-
-
-# DFSDisc is the old class name for DFSSide.
-DFSDisc = DFSSide

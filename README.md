@@ -209,14 +209,13 @@ spacing rules and anti-listing trap handling.
 from beebtools import openImage, detokenize, tokenize, prettyPrint
 
 # openImage auto-detects DFS (.ssd/.dsd) or ADFS (.adf/.adl)
-image = openImage("mydisc.dsd")
-for side in image.sides:
-    catalogue = side.readCatalogue()
-    for entry in catalogue.entries:
-        if entry.isBasic:
-            data = side.readFile(entry)
-            lines = prettyPrint(detokenize(data))
-            print("\n".join(lines))
+with openImage("mydisc.dsd") as image:
+    for side in image:
+        for entry in side.readCatalogue():
+            if entry.isBasic:
+                data = side.readFile(entry)
+                lines = prettyPrint(detokenize(data))
+                print("\n".join(lines))
 
 # Retokenize edited plain text back to binary
 edited_lines = ["   10PRINT\"HELLO\"", "   20END"]

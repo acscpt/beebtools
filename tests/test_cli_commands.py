@@ -15,7 +15,9 @@ from argparse import Namespace
 import pytest
 
 from beebtools.dfs import createDiscImage, openDiscImage, DFSError
+from beebtools.entry import DiscFile
 from beebtools.disc import extractAll, buildImage
+from beebtools.adfs import openAdfsImage
 from beebtools.inf import formatInf, parseInf
 from beebtools.cli import cmdCreate, cmdAdd, cmdDelete, cmdBuild
 
@@ -358,7 +360,7 @@ class TestCmdDelete:
         """Create a SSD with one file and return the image path."""
         image = createDiscImage(tracks=80, title="DELTEST")
         side = image.sides[0]
-        side.addFile("VICTIM", "$", b"\x01" * 100, load_addr=0x1900)
+        side.addFile(DiscFile("$.VICTIM", b"\x01" * 100, load_addr=0x1900))
         out = str(tmp_path / "disc.ssd")
         with open(out, "wb") as f:
             f.write(image.serialize())
@@ -413,8 +415,8 @@ class TestExtractInf:
         # Build a small image with one file.
         image = createDiscImage(tracks=80, title="INFTEST")
         side = image.sides[0]
-        side.addFile("LOADER", "$", b"\xFF" * 256, load_addr=0x1900,
-                     exec_addr=0x1900, locked=True)
+        side.addFile(DiscFile("$.LOADER", b"\xFF" * 256, load_addr=0x1900,
+                     exec_addr=0x1900, locked=True))
 
         img_path = str(tmp_path / "test.ssd")
         with open(img_path, "wb") as f:
@@ -441,7 +443,7 @@ class TestExtractInf:
         """Without write_inf, no .inf sidecars are written."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("DATA", "$", b"\x00" * 10)
+        side.addFile(DiscFile("$.DATA", b"\x00" * 10))
 
         img_path = str(tmp_path / "test.ssd")
         with open(img_path, "wb") as f:
@@ -467,8 +469,8 @@ class TestBuildImage:
         # Create an image with two files.
         original = createDiscImage(tracks=80, title="ROUNDTRP")
         side = original.sides[0]
-        side.addFile("PROG", "T", b"\x0D\x00\x0A\x05\x20\x0D\xFF", load_addr=0x0E00, exec_addr=0x8023)
-        side.addFile("DATA", "$", b"Hello\r", load_addr=0)
+        side.addFile(DiscFile("T.PROG", b"\x0D\x00\x0A\x05\x20\x0D\xFF", load_addr=0x0E00, exec_addr=0x8023))
+        side.addFile(DiscFile("$.DATA", b"Hello\r", load_addr=0))
 
         img_path = str(tmp_path / "original.ssd")
         with open(img_path, "wb") as f:
@@ -481,6 +483,7 @@ class TestBuildImage:
         # Build a new image from the extracted files.
         rebuilt_bytes = buildImage(
             source_dir=extract_dir,
+            output_path="rebuilt.ssd",
             tracks=80,
             title="REBUILT",
         )
@@ -525,7 +528,7 @@ class TestBuildImage:
         with open(os.path.join(side1_dir, "GAME.bin.inf"), "w") as f:
             f.write(formatInf("T", "GAME", 0x1900, 0x1900, 100) + "\n")
 
-        rebuilt_bytes = buildImage(src, tracks=80, is_dsd=True, title="DOUBLE")
+        rebuilt_bytes = buildImage(src, "rebuilt.dsd", tracks=80, title="DOUBLE")
 
         rebuilt_path = str(tmp_path / "rebuilt.dsd")
         with open(rebuilt_path, "wb") as f:
@@ -551,7 +554,7 @@ class TestBuildImage:
 
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            rebuilt_bytes = buildImage(src, tracks=80)
+            rebuilt_bytes = buildImage(src, "empty.ssd", tracks=80)
 
         # Should warn about missing .inf.
         assert "Warning" in err.getvalue()
@@ -612,7 +615,7 @@ from beebtools.adfs import (
     ADFS_M_SECTORS,
     ADFS_L_SECTORS,
 )
-from beebtools.disc import buildAdfsImage
+
 
 
 class TestCmdCreateAdfs:
@@ -905,7 +908,7 @@ class TestBuildAdfsImage:
         with open(os.path.join(d, "HELLO.txt.inf"), "w") as f:
             f.write(formatInf("$", "HELLO", 0, 0, 10) + "\n")
 
-        image_bytes = buildAdfsImage(source_dir=src, title="ROUNDTRIP")
+        image_bytes = buildImage(source_dir=src, output_path="built.adf", title="ROUNDTRIP")
 
         # Write and read back.
         out = str(tmp_path / "built.adf")
@@ -928,7 +931,7 @@ class TestBuildAdfsImage:
         with open(os.path.join(subdir, "ELITE.bin.inf"), "w") as f:
             f.write(formatInf("$", "GAMES.ELITE", 0x1000, 0x2000, 300) + "\n")
 
-        image_bytes = buildAdfsImage(source_dir=src, title="GAMES")
+        image_bytes = buildImage(source_dir=src, output_path="games.adf", title="GAMES")
 
         out = str(tmp_path / "games.adf")
         with open(out, "wb") as f:
@@ -946,7 +949,7 @@ class TestBuildAdfsImage:
         src = str(tmp_path / "src")
         os.makedirs(os.path.join(src, "$"))
 
-        image_bytes = buildAdfsImage(source_dir=src)
+        image_bytes = buildImage(source_dir=src, output_path="empty.adf")
 
         out = str(tmp_path / "empty.adf")
         with open(out, "wb") as f:
@@ -969,7 +972,7 @@ class TestBuildAdfsImage:
 
         buf = io.StringIO()
         with contextlib.redirect_stderr(buf):
-            image_bytes = buildAdfsImage(source_dir=src)
+            image_bytes = buildImage(source_dir=src, output_path="skip.adf")
 
         assert "Warning" in buf.getvalue()
         assert "skipping" in buf.getvalue()
@@ -1050,10 +1053,10 @@ class TestAdfsExtractRebuildRoundTrip:
         data_a = bytes(range(256)) * 2
         data_b = bytes(range(255, -1, -1)) * 3
 
-        side.addFile(path="$.FILEA", data=data_a,
-                     load_addr=0x1000, exec_addr=0x2000)
-        side.addFile(path="$.FILEB", data=data_b,
-                     load_addr=0x3000, exec_addr=0x4000)
+        side.addFile(DiscFile("$.FILEA", data_a,
+                     load_addr=0x1000, exec_addr=0x2000))
+        side.addFile(DiscFile("$.FILEB", data_b,
+                     load_addr=0x3000, exec_addr=0x4000))
 
         original_path = str(tmp_path / "original.adf")
         with open(original_path, "wb") as f:
@@ -1064,8 +1067,8 @@ class TestAdfsExtractRebuildRoundTrip:
         extractAll(original_path, extract_dir, write_inf=True)
 
         # Rebuild from extracted files.
-        rebuilt_bytes = buildAdfsImage(
-            source_dir=extract_dir, title="ROUNDTRIP")
+        rebuilt_bytes = buildImage(
+            source_dir=extract_dir, output_path="rebuilt.adf", title="ROUNDTRIP")
 
         rebuilt_path = str(tmp_path / "rebuilt.adf")
         with open(rebuilt_path, "wb") as f:

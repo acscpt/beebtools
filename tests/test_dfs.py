@@ -17,6 +17,7 @@ import glob
 import pytest
 
 from beebtools import (
+    DiscFile,
     openDiscImage, looksLikeTokenizedBasic, looksLikePlainText, detokenize,
     validateDfsName, DFSError,
 )
@@ -192,7 +193,7 @@ class TestLooksLikePlainText:
 
 from beebtools import (
     DFSEntry, DFSCatalogue, DFSImage, DFSSide, DFSError, DFSFormatError,
-    createDiscImage, BootOption,
+    DiscFile, createDiscImage, BootOption,
 )
 
 SECTOR_SIZE = 256
@@ -591,11 +592,11 @@ class TestSortCatalogueEntries:
         ]
 
     def testSortByName(self):
-        """Sorting by name should produce strict alphabetical ordering across entries from different directories."""
+        """Sorting by name should produce alphabetical ordering by full path (directory.name)."""
         from beebtools import sortCatalogueEntries
         result = sortCatalogueEntries(self._entries(), "name")
-        names = [e.name for e in result]
-        assert names == ["ALPHA", "MIDDLE", "ZEBRA"]
+        names = [e.fullName for e in result]
+        assert names == ["$.ALPHA", "$.ZEBRA", "T.MIDDLE"]
 
     def testSortByCatalog(self):
         """Sorting by catalogue position should preserve the original physical disc order of entries."""
@@ -872,7 +873,7 @@ class TestFreeSpace:
         """Adding one file should decrease free space by at least the number of bytes in the file."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("TEST", "$", b"\xAA" * 512)
+        side.addFile(DiscFile("$.TEST", b"\xAA" * 512))
 
         # 512 bytes = 2 sectors. File at sectors 798-799.
         # Free: sectors 2-797 = 796 sectors.
@@ -882,8 +883,8 @@ class TestFreeSpace:
         """Adding two files should decrease free space by the combined sector usage of both files."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("FILE1", "$", b"\xAA" * 256)
-        side.addFile("FILE2", "$", b"\xBB" * 256)
+        side.addFile(DiscFile("$.FILE1", b"\xAA" * 256))
+        side.addFile(DiscFile("$.FILE2", b"\xBB" * 256))
 
         # Two 1-sector files: 798+799 occupied. Free: 2-797 = 796 sectors.
         assert side.freeSpace() == 796 * SECTOR_SIZE
@@ -894,15 +895,15 @@ class TestFreeSpace:
         side = image.sides[0]
 
         # Add three files: A (1 sector), B (1 sector), C (1 sector).
-        side.addFile("AFILE", "$", b"\xAA" * 256)
-        side.addFile("BFILE", "$", b"\xBB" * 256)
-        side.addFile("CFILE", "$", b"\xCC" * 256)
+        side.addFile(DiscFile("$.AFILE", b"\xAA" * 256))
+        side.addFile(DiscFile("$.BFILE", b"\xBB" * 256))
+        side.addFile(DiscFile("$.CFILE", b"\xCC" * 256))
 
         # Free space before delete: 800 - 2 - 3 = 795 sectors.
         assert side.freeSpace() == 795 * SECTOR_SIZE
 
         # Delete middle file (BFILE).
-        side.deleteFile("BFILE", "$")
+        side.deleteFile("$.BFILE")
 
         # CFILE is still the lowest. Free space unchanged.
         assert side.freeSpace() == 795 * SECTOR_SIZE
@@ -911,11 +912,11 @@ class TestFreeSpace:
         """Deleting the file with the lowest start sector (occupying the end of used space in DFS) should increase free space."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("AFILE", "$", b"\xAA" * 256)
-        side.addFile("BFILE", "$", b"\xBB" * 256)
+        side.addFile(DiscFile("$.AFILE", b"\xAA" * 256))
+        side.addFile(DiscFile("$.BFILE", b"\xBB" * 256))
 
         # Delete the lowest file (BFILE, added second).
-        side.deleteFile("BFILE", "$")
+        side.deleteFile("$.BFILE")
 
         # Only AFILE remains (1 sector). Free: 800 - 2 - 1 = 797 sectors.
         assert side.freeSpace() == 797 * SECTOR_SIZE
@@ -932,7 +933,7 @@ class TestAddFile:
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
-        entry = side.addFile("HELLO", "$", b"\x0D" * 100, load_addr=0x0E00, exec_addr=0x802B)
+        entry = side.addFile(DiscFile("$.HELLO", b"\x0D" * 100, load_addr=0x0E00, exec_addr=0x802B))
 
         assert entry.name == "HELLO"
         assert entry.directory == "$"
@@ -945,7 +946,7 @@ class TestAddFile:
         """After adding a file, iterating the catalogue entries should yield the new file."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("PROG", "T", b"\xAA" * 50)
+        side.addFile(DiscFile("T.PROG", b"\xAA" * 50))
 
         cat = side.readCatalogue()
         assert len(cat.entries) == 1
@@ -957,7 +958,7 @@ class TestAddFile:
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         file_data = bytes(range(200))
-        side.addFile("DATA", "$", file_data)
+        side.addFile(DiscFile("$.DATA", file_data))
 
         cat = side.readCatalogue()
         read_back = side.readFile(cat.entries[0])
@@ -968,9 +969,9 @@ class TestAddFile:
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
-        side.addFile("FILE1", "$", b"\x01" * 100)
-        side.addFile("FILE2", "$", b"\x02" * 200)
-        side.addFile("FILE3", "T", b"\x03" * 300)
+        side.addFile(DiscFile("$.FILE1", b"\x01" * 100))
+        side.addFile(DiscFile("$.FILE2", b"\x02" * 200))
+        side.addFile(DiscFile("T.FILE3", b"\x03" * 300))
 
         cat = side.readCatalogue()
         assert len(cat.entries) == 3
@@ -989,9 +990,9 @@ class TestAddFile:
         data2 = b"\xBE\xEF" * 256
         data3 = b"\xCA\xFE" * 64
 
-        side.addFile("FILE1", "$", data1)
-        side.addFile("FILE2", "$", data2)
-        side.addFile("FILE3", "T", data3)
+        side.addFile(DiscFile("$.FILE1", data1))
+        side.addFile(DiscFile("$.FILE2", data2))
+        side.addFile(DiscFile("T.FILE3", data3))
 
         cat = side.readCatalogue()
         names = {e.name: e for e in cat.entries}
@@ -1004,7 +1005,7 @@ class TestAddFile:
         """A file added with the locked flag should report locked as True in the catalogue."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("SECRET", "$", b"\xFF" * 10, locked=True)
+        side.addFile(DiscFile("$.SECRET", b"\xFF" * 10, locked=True))
 
         cat = side.readCatalogue()
         assert cat.entries[0].locked is True
@@ -1013,7 +1014,7 @@ class TestAddFile:
         """A zero-length file should be representable as a catalogue entry with a zero length field."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        entry = side.addFile("EMPTY", "$", b"")
+        entry = side.addFile(DiscFile("$.EMPTY", b""))
 
         assert entry.length == 0
 
@@ -1029,7 +1030,7 @@ class TestAddFile:
         cat_before = side.readCatalogue()
         assert cat_before.cycle == 0
 
-        side.addFile("TEST", "$", b"\xAA")
+        side.addFile(DiscFile("$.TEST", b"\xAA"))
 
         cat_after = side.readCatalogue()
         assert cat_after.cycle == 1
@@ -1038,17 +1039,17 @@ class TestAddFile:
         """Adding a file whose name already exists in the same directory should raise an error."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("PROG", "$", b"\xAA" * 10)
+        side.addFile(DiscFile("$.PROG", b"\xAA" * 10))
 
         with pytest.raises(DFSError, match="already exists"):
-            side.addFile("PROG", "$", b"\xBB" * 10)
+            side.addFile(DiscFile("$.PROG", b"\xBB" * 10))
 
     def testSameNameDifferentDirAllowed(self):
         """The same filename under different directories (e.g. '$.FOO' and 'A.FOO') should coexist without error."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("PROG", "$", b"\xAA" * 10)
-        side.addFile("PROG", "T", b"\xBB" * 10)
+        side.addFile(DiscFile("$.PROG", b"\xAA" * 10))
+        side.addFile(DiscFile("T.PROG", b"\xBB" * 10))
 
         cat = side.readCatalogue()
         assert len(cat.entries) == 2
@@ -1061,13 +1062,13 @@ class TestAddFile:
         # Fill the catalogue to 31 files.
         for i in range(31):
             name = f"F{i:02d}"[:7]
-            side.addFile(name, "$", b"\xAA")
+            side.addFile(DiscFile(f"$.{name}", b"\xAA"))
 
         cat = side.readCatalogue()
         assert len(cat.entries) == 31
 
         with pytest.raises(DFSError, match="full"):
-            side.addFile("EXTRA", "$", b"\xBB")
+            side.addFile(DiscFile("$.EXTRA", b"\xBB"))
 
     def testDiscFullRejected(self):
         """Attempting to add a file larger than the available free sectors should raise an error."""
@@ -1076,11 +1077,11 @@ class TestAddFile:
 
         # 40-track disc: 400 sectors, 398 usable. Fill most of it.
         big_data = b"\xAA" * (398 * SECTOR_SIZE)
-        side.addFile("BIG", "$", big_data)
+        side.addFile(DiscFile("$.BIG", big_data))
 
         # Disc is now full.
         with pytest.raises(DFSError, match="free space"):
-            side.addFile("TINY", "$", b"\xBB")
+            side.addFile(DiscFile("$.TINY", b"\xBB"))
 
     def testInvalidNameRejected(self):
         """Adding a file with a name that fails DFS validation should raise ValueError."""
@@ -1088,7 +1089,7 @@ class TestAddFile:
         side = image.sides[0]
 
         with pytest.raises(DFSError):
-            side.addFile("TOOLONGNAME", "$", b"\xAA")
+            side.addFile(DiscFile("$.TOOLONGNAME", b"\xAA"))
 
     def testExactFitSucceeds(self):
         """A file whose size exactly matches the remaining free sectors should be accepted."""
@@ -1097,10 +1098,10 @@ class TestAddFile:
 
         # Fill disc leaving exactly 1 sector free.
         big_data = b"\xAA" * (397 * SECTOR_SIZE)
-        side.addFile("BIG", "$", big_data)
+        side.addFile(DiscFile("$.BIG", big_data))
 
         # Should succeed - exactly 1 sector (256 bytes) available.
-        side.addFile("TINY", "$", b"\xBB" * 256)
+        side.addFile(DiscFile("$.TINY", b"\xBB" * 256))
 
         assert side.freeSpace() == 0
 
@@ -1115,11 +1116,10 @@ class TestDeleteFile:
         """Deleting the only file on the disc should leave the catalogue completely empty."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("DOOMED", "$", b"\xAA" * 100)
+        side.addFile(DiscFile("$.DOOMED", b"\xAA" * 100))
 
-        removed = side.deleteFile("DOOMED", "$")
+        side.deleteFile("$.DOOMED")
 
-        assert removed.name == "DOOMED"
         cat = side.readCatalogue()
         assert len(cat.entries) == 0
 
@@ -1127,11 +1127,11 @@ class TestDeleteFile:
         """Deleting one file from a multi-entry catalogue should remove it while leaving all others intact."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("KEEP1", "$", b"\xAA" * 100)
-        side.addFile("REMOVE", "$", b"\xBB" * 100)
-        side.addFile("KEEP2", "T", b"\xCC" * 100)
+        side.addFile(DiscFile("$.KEEP1", b"\xAA" * 100))
+        side.addFile(DiscFile("$.REMOVE", b"\xBB" * 100))
+        side.addFile(DiscFile("T.KEEP2", b"\xCC" * 100))
 
-        side.deleteFile("REMOVE", "$")
+        side.deleteFile("$.REMOVE")
 
         cat = side.readCatalogue()
         names = [e.name for e in cat.entries]
@@ -1146,16 +1146,16 @@ class TestDeleteFile:
         side = image.sides[0]
 
         with pytest.raises(DFSError, match="not found"):
-            side.deleteFile("GHOST", "$")
+            side.deleteFile("$.GHOST")
 
     def testDeleteWrongDirRaisesError(self):
         """Specifying the wrong directory letter during deletion should not match any entry and should raise an error."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("PROG", "$", b"\xAA" * 10)
+        side.addFile(DiscFile("$.PROG", b"\xAA" * 10))
 
         with pytest.raises(DFSError, match="not found"):
-            side.deleteFile("PROG", "T")
+            side.deleteFile("T.PROG")
 
     def testDeletePreservesOtherFileData(self):
         """After deleting one file, the raw data of all remaining files should be unchanged."""
@@ -1163,10 +1163,10 @@ class TestDeleteFile:
         side = image.sides[0]
 
         data_keep = b"\xDE\xAD" * 128
-        side.addFile("KEEPER", "$", data_keep)
-        side.addFile("DOOMED", "$", b"\xFF" * 100)
+        side.addFile(DiscFile("$.KEEPER", data_keep))
+        side.addFile(DiscFile("$.DOOMED", b"\xFF" * 100))
 
-        side.deleteFile("DOOMED", "$")
+        side.deleteFile("$.DOOMED")
 
         cat = side.readCatalogue()
         assert len(cat.entries) == 1
@@ -1176,10 +1176,10 @@ class TestDeleteFile:
         """The catalogue cycle counter should increment after each deletion."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("TEST", "$", b"\xAA")
+        side.addFile(DiscFile("$.TEST", b"\xAA"))
 
         cycle_before = side.readCatalogue().cycle
-        side.deleteFile("TEST", "$")
+        side.deleteFile("$.TEST")
         cycle_after = side.readCatalogue().cycle
 
         assert cycle_after == DFSSide._bcdIncrement(cycle_before)
@@ -1191,15 +1191,15 @@ class TestDeleteFile:
 
         # Add and delete a file, then add a new one. The new file
         # should be able to use the freed space.
-        side.addFile("FIRST", "$", b"\xAA" * 256)
+        side.addFile(DiscFile("$.FIRST", b"\xAA" * 256))
         free_after_add = side.freeSpace()
 
-        side.deleteFile("FIRST", "$")
+        side.deleteFile("$.FIRST")
         free_after_del = side.freeSpace()
 
         assert free_after_del > free_after_add
 
-        side.addFile("SECOND", "$", b"\xBB" * 256)
+        side.addFile(DiscFile("$.SECOND", b"\xBB" * 256))
         assert side.freeSpace() == free_after_add
 
 
@@ -1220,8 +1220,8 @@ class TestCompact:
         """Compacting a disc that has no deleted-file gaps should not move any data or change file contents."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
-        side.addFile("FILE1", "$", b"\xAA" * 256)
-        side.addFile("FILE2", "$", b"\xBB" * 256)
+        side.addFile(DiscFile("$.FILE1", b"\xAA" * 256))
+        side.addFile(DiscFile("$.FILE2", b"\xBB" * 256))
 
         freed = side.compact()
         assert freed == 0
@@ -1232,12 +1232,12 @@ class TestCompact:
         side = image.sides[0]
 
         # Add three 1-sector files, delete the middle one.
-        side.addFile("TOP", "$", b"\x01" * 256)
-        side.addFile("MID", "$", b"\x02" * 256)
-        side.addFile("BOT", "$", b"\x03" * 256)
+        side.addFile(DiscFile("$.TOP", b"\x01" * 256))
+        side.addFile(DiscFile("$.MID", b"\x02" * 256))
+        side.addFile(DiscFile("$.BOT", b"\x03" * 256))
 
         free_before_del = side.freeSpace()
-        side.deleteFile("MID", "$")
+        side.deleteFile("$.MID")
 
         # Free space didn't change because BOT is still lowest.
         assert side.freeSpace() == free_before_del
@@ -1255,12 +1255,12 @@ class TestCompact:
         data_mid = b"\xBE\xEF" * 128
         data_bot = b"\xCA\xFE" * 128
 
-        side.addFile("TOP", "$", data_top)
-        side.addFile("MID", "$", data_mid)
-        side.addFile("BOT", "$", data_bot)
+        side.addFile(DiscFile("$.TOP", data_top))
+        side.addFile(DiscFile("$.MID", data_mid))
+        side.addFile(DiscFile("$.BOT", data_bot))
 
         # Delete MID, compact, and verify all remaining data intact.
-        side.deleteFile("MID", "$")
+        side.deleteFile("$.MID")
         side.compact()
 
         cat = side.readCatalogue()
@@ -1276,10 +1276,10 @@ class TestCompact:
 
         # Add five 1-sector files, delete two non-adjacent ones.
         for i in range(5):
-            side.addFile(f"F{i}", "$", b"\xAA" * 256)
+            side.addFile(DiscFile(f"$.F{i}", b"\xAA" * 256))
 
-        side.deleteFile("F1", "$")
-        side.deleteFile("F3", "$")
+        side.deleteFile("$.F1")
+        side.deleteFile("$.F3")
 
         freed = side.compact()
         assert freed == 2 * SECTOR_SIZE
@@ -1305,14 +1305,14 @@ class TestCompact:
 
         # Add a big file at the top, a small one in the middle,
         # then a medium one at the bottom. Delete the small one.
-        side.addFile("BIG", "$", b"\xAA" * (10 * SECTOR_SIZE))
-        side.addFile("SMALL", "$", b"\xBB" * (2 * SECTOR_SIZE))
-        side.addFile("MEDIUM", "$", b"\xCC" * (5 * SECTOR_SIZE))
+        side.addFile(DiscFile("$.BIG", b"\xAA" * (10 * SECTOR_SIZE)))
+        side.addFile(DiscFile("$.SMALL", b"\xBB" * (2 * SECTOR_SIZE)))
+        side.addFile(DiscFile("$.MEDIUM", b"\xCC" * (5 * SECTOR_SIZE)))
 
         data_big = side.readFile(side.readCatalogue().entries[0])
         data_med = b"\xCC" * (5 * SECTOR_SIZE)
 
-        side.deleteFile("SMALL", "$")
+        side.deleteFile("$.SMALL")
         freed = side.compact()
 
         assert freed == 2 * SECTOR_SIZE
@@ -1330,27 +1330,27 @@ class TestCompact:
 
         # Fill disc nearly completely with 3 files.
         # 40-track = 400 sectors, 398 usable.
-        side.addFile("A", "$", b"\x01" * (196 * SECTOR_SIZE))
-        side.addFile("B", "$", b"\x02" * (100 * SECTOR_SIZE))
-        side.addFile("C", "$", b"\x03" * (100 * SECTOR_SIZE))
+        side.addFile(DiscFile("$.A", b"\x01" * (196 * SECTOR_SIZE)))
+        side.addFile(DiscFile("$.B", b"\x02" * (100 * SECTOR_SIZE)))
+        side.addFile(DiscFile("$.C", b"\x03" * (100 * SECTOR_SIZE)))
 
         # Free: 398 - 196 - 100 - 100 = 2 sectors.
         assert side.freeSpace() == 2 * SECTOR_SIZE
 
         # Delete B (100 sectors), but C is below it so free space stays 2.
-        side.deleteFile("B", "$")
+        side.deleteFile("$.B")
         assert side.freeSpace() == 2 * SECTOR_SIZE
 
         # Can't add a 50-sector file yet.
         with pytest.raises(DFSError, match="free space"):
-            side.addFile("NEW", "$", b"\x04" * (50 * SECTOR_SIZE))
+            side.addFile(DiscFile("$.NEW", b"\x04" * (50 * SECTOR_SIZE)))
 
         # Compact reclaims the 100 sectors.
         freed = side.compact()
         assert freed == 100 * SECTOR_SIZE
 
         # Now the 50-sector file fits.
-        side.addFile("NEW", "$", b"\x04" * (50 * SECTOR_SIZE))
+        side.addFile(DiscFile("$.NEW", b"\x04" * (50 * SECTOR_SIZE)))
 
         cat = side.readCatalogue()
         assert len(cat.entries) == 3
@@ -1378,7 +1378,7 @@ class TestAddFileRoundTrip:
         }
 
         for (d, n), data in files.items():
-            side.addFile(n, d, data, load_addr=0x0E00, exec_addr=0x802B)
+            side.addFile(DiscFile(f"{d}.{n}", data, load_addr=0x0E00, exec_addr=0x802B))
 
         # Serialize to bytes and reopen as a new image.
         raw = image.serialize()
@@ -1405,8 +1405,8 @@ class TestAddFileRoundTrip:
         data0 = b"\xDE\xAD" * 100
         data1 = b"\xBE\xEF" * 200
 
-        side0.addFile("PROG", "$", data0)
-        side1.addFile("PROG", "$", data1)
+        side0.addFile(DiscFile("$.PROG", data0))
+        side1.addFile(DiscFile("$.PROG", data1))
 
         # Both sides have one file, data does not collide.
         assert side0.readFile(side0.readCatalogue().entries[0]) == data0

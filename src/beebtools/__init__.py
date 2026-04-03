@@ -20,13 +20,12 @@ operator spacing and handles copy-protection anti-listing traps.
 Usage as a library:
     from beebtools import openImage, detokenize, prettyPrint
 
-    image = openImage("mydisc.adf")
-    for side in image.sides:
-        catalogue = side.readCatalogue()
-        for entry in catalogue.entries:
-            data = side.readFile(entry)
-            lines = detokenize(data)
-            print("\\n".join(prettyPrint(lines)))
+    with openImage("mydisc.adf") as image:
+        for side in image:
+            for entry in side.readCatalogue():
+                data = side.readFile(entry)
+                lines = detokenize(data)
+                print("\\n".join(prettyPrint(lines)))
 
 Usage as a CLI tool:
     beebtools cat     <image>
@@ -53,6 +52,8 @@ Modules:
 from .detokenize import detokenize, decodeLineRef
 from .tokenize import tokenize, encodeLineRef
 from .pretty import prettyPrint
+from .boot import BootOption
+from .entry import DiscEntry, DiscCatalogue, DiscFile, DiscError, DiscFormatError, isBasicExecAddr
 from .dfs import (
     DFSEntry,
     DFSCatalogue,
@@ -60,17 +61,10 @@ from .dfs import (
     DFSSide,
     DFSError,
     DFSFormatError,
-    BootOption,
     openDiscImage,
     createDiscImage,
-    looksLikeTokenizedBasic,
-    looksLikePlainText,
-    sortCatalogueEntries,
     validateDfsName,
-    # Backward-compatibility aliases
-    isBasic,
-    looksLikeText,
-    DFSDisc,
+    splitDfsPath,
 )
 from .adfs import (
     ADFSEntry,
@@ -88,9 +82,13 @@ from .adfs import (
     ADFS_M_SECTORS,
     ADFS_L_SECTORS,
 )
-from .image import openImage
+from .image import openImage, createImage, DiscSide, DiscImage
 from .inf import InfData, parseInf, formatInf
-from .disc import search, extractAll, buildImage, buildAdfsImage
+from .disc import (
+    search, extractAll, buildImage,
+    looksLikeTokenizedBasic, looksLikePlainText,
+    sortCatalogueEntries,
+)
 from .cli import main
 
 __all__ = [
@@ -107,16 +105,17 @@ __all__ = [
     "DFSError",
     "DFSFormatError",
     "BootOption",
+    # Shared contracts (entry.py)
+    "DiscEntry",
+    "DiscCatalogue",
+    "DiscFile",
+    "DiscError",
+    "DiscFormatError",
+    "isBasicExecAddr",
     "openDiscImage",
     "createDiscImage",
-    "looksLikeTokenizedBasic",
-    "looksLikePlainText",
-    "sortCatalogueEntries",
     "validateDfsName",
-    # Backward-compatibility aliases
-    "isBasic",
-    "looksLikeText",
-    "DFSDisc",
+    "splitDfsPath",
     # .inf sidecar format
     "InfData",
     "parseInf",
@@ -138,11 +137,16 @@ __all__ = [
     "ADFS_L_SECTORS",
     # Image dispatcher
     "openImage",
-    # Orchestration
+    "createImage",
+    "DiscSide",
+    "DiscImage",
+    # Orchestration (disc.py)
     "search",
     "extractAll",
     "buildImage",
-    "buildAdfsImage",
+    "looksLikeTokenizedBasic",
+    "looksLikePlainText",
+    "sortCatalogueEntries",
     "main",
 ]
 
