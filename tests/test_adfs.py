@@ -1906,6 +1906,20 @@ class TestCatalogue:
         assert cat.disc_size == 640
         assert isinstance(cat.entries, tuple)
 
+    def testTracks40(self):
+        """An ADFS S image (640 sectors, 16 sectors/track) should report 40 tracks."""
+        image_data = _blankAdfs(total_sectors=640)
+        image = ADFSImage(image_data, is_adl=False)
+        cat = image.sides[0].readCatalogue()
+        assert cat.tracks == 40
+
+    def testTracks80(self):
+        """An ADFS M image (1280 sectors, 16 sectors/track) should report 80 tracks."""
+        image_data = _blankAdfs(total_sectors=1280)
+        image = ADFSImage(image_data, is_adl=False)
+        cat = image.sides[0].readCatalogue()
+        assert cat.tracks == 80
+
     def testCatalogueIsCached(self):
         """Calling catalogue on the same image twice should return the same object, avoiding redundant re-parsing."""
         image_data = _blankAdfs()
@@ -2367,6 +2381,18 @@ class TestCmdCatAdfs:
         image_data = _blankAdfs()
         output = self._runCat(tmp_path, image_data)
         assert "(empty)" in output
+
+    def testShowsTrackCount(self, tmp_path):
+        """An ADFS S image (640 sectors) should show '40 tracks' in the header."""
+        image_data = _blankAdfs(total_sectors=640)
+        output = self._runCat(tmp_path, image_data)
+        assert "40 tracks" in output
+
+    def testShowsTrackCount80(self, tmp_path):
+        """An ADFS M image (1280 sectors) should show '80 tracks' in the header."""
+        image_data = _blankAdfs(total_sectors=1280)
+        output = self._runCat(tmp_path, image_data)
+        assert "80 tracks" in output
 
 
 # -----------------------------------------------------------------------

@@ -112,6 +112,11 @@ class DFSCatalogue:
     disc_size: int
     entries: Tuple[DFSEntry, ...]
 
+    @property
+    def tracks(self) -> int:
+        """Number of tracks on this disc side (disc_size / 10)."""
+        return self.disc_size // SECTORS_PER_TRACK
+
 
 # -----------------------------------------------------------------------
 # DFSSide - sector I/O and catalogue parsing for one disc side

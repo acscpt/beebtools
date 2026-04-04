@@ -74,7 +74,9 @@ def cmdCat(args: Namespace) -> None:
             header += f": {catalogue.title}"
 
         boot_desc = catalogue.boot_option.name
-        header += f" ({len(catalogue.entries)} files, boot={boot_desc}) ---"
+        header += (f" ({len(catalogue.entries)} files,"
+                  f" {catalogue.tracks} tracks,"
+                  f" boot={boot_desc}) ---")
         print(_colour(header, _BOLD, use_colour))
         print()
 

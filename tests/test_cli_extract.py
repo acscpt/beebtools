@@ -11,6 +11,8 @@ be verified without touching the filesystem beyond the tmp_path fixture.
 
 import os
 import struct
+import io
+import contextlib
 import pytest
 
 from argparse import Namespace
@@ -43,7 +45,8 @@ def _makeSector0(filename: str, directory: str = "$") -> bytes:
 
 
 def _makeSector1(file_data_len: int, start_sector: int = 2,
-                  load_addr: int = 0, exec_addr: int = 0) -> bytes:
+                  load_addr: int = 0, exec_addr: int = 0,
+                  disc_size: int = 800) -> bytes:
     """Build DFS catalogue sector 1 for one file entry."""
     buf = bytearray(SECTOR_SIZE)
 
@@ -51,6 +54,11 @@ def _makeSector1(file_data_len: int, start_sector: int = 2,
     # Sector count (bytes 4-5): not used in our tests
     # File count: sector1[5] = number_of_entries * 8
     buf[5] = 1 * 8  # one file
+
+    # Disc size in sectors: byte 7 = low 8 bits, byte 6 bits 0-1 = high 2 bits.
+    # The boot option occupies bits 4-5 of byte 6.
+    buf[6] = (disc_size >> 8) & 0x03
+    buf[7] = disc_size & 0xFF
 
     # File entry at offset 8 in sector 1:
     # bytes 0-1: load_lo, bytes 2-3: exec_lo, bytes 4-5: length_lo
@@ -553,3 +561,54 @@ class TestCmdCatInspect:
         hybrid = basic + bytes(range(256)) * 4
         output = self._runCatBasic(tmp_path, hybrid, inspect=True)
         assert "BASIC+MC" in output
+
+
+# ---------------------------------------------------------------------------
+# cmdCat track display tests
+# ---------------------------------------------------------------------------
+
+class TestCmdCatTracks:
+
+    def testSsdShowsTrackCount(self, tmp_path):
+        """An 80-track SSD image should show '80 tracks' in the header."""
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(_makeSsdImage("README", b"Hello"))
+        args = Namespace(image=img_path, sort="name", inspect=False)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCat(args)
+        assert "80 tracks" in buf.getvalue()
+
+    def testDsdShowsTrackCountBothSides(self, tmp_path):
+        """A DSD image should show track count in the header for each side."""
+        img_path = str(tmp_path / "test.dsd")
+        with open(img_path, "wb") as f:
+            f.write(_makeDsdImage("FILE0", b"side0", "FILE1", b"side1"))
+        args = Namespace(image=img_path, sort="name", inspect=False)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCat(args)
+        output = buf.getvalue()
+
+        # Both sides should report 80 tracks.
+        assert output.count("80 tracks") == 2
+
+    def test40TrackSsdShowsTrackCount(self, tmp_path):
+        """A 40-track SSD image should show '40 tracks' in the header."""
+        # Build a 40-track image (400 sectors).
+        image = bytearray(40 * 10 * SECTOR_SIZE)
+        sec0 = _makeSector0("README")
+        sec1 = _makeSector1(5, start_sector=2, disc_size=400)
+        image[0:SECTOR_SIZE] = sec0
+        image[SECTOR_SIZE:2 * SECTOR_SIZE] = sec1
+        image[2 * SECTOR_SIZE:2 * SECTOR_SIZE + 5] = b"Hello"
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(bytes(image))
+        args = Namespace(image=img_path, sort="name", inspect=False)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCat(args)
+        assert "40 tracks" in buf.getvalue()

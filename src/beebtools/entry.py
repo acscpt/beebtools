@@ -69,6 +69,7 @@ class DiscCatalogue(Protocol):
     boot_option: BootOption
     disc_size: int
     entries: Tuple[DiscEntry, ...]
+    tracks: int
 
 
 # -----------------------------------------------------------------------
