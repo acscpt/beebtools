@@ -20,10 +20,10 @@ from beebtools.tokenize import encodeLineRef, _parseLine, _tokenizeContent
 # ---------------------------------------------------------------------------
 
 def makeLine(linenum, content_bytes):
-    """Build a single tokenized BASIC line record."""
+    """Build a single tokenized BASIC line record (Russell format)."""
     hi = (linenum >> 8) & 0xFF
     lo = linenum & 0xFF
-    linelen = 3 + 1 + len(content_bytes)
+    linelen = 4 + len(content_bytes)
     return bytes([0x0D, hi, lo, linelen]) + bytes(content_bytes)
 
 
@@ -252,7 +252,7 @@ def testGotoLineNumberEncoded():
     """GOTO followed by a digit sequence encodes the line number."""
     data = tokenize(["   10GOTO100"])
     # GOTO = 0xE5, then 0x8D + 3-byte encoded 100
-    content = data[4:-2]  # skip 0x0D hi lo len prefix and 0x0D 0xFF trailer
+    content = data[4:-2]  # skip 0x0D hi lo len prefix and 0x0D 0xFF end marker
     assert content[0] == 0xE5
     assert content[1] == 0x8D
 
@@ -284,7 +284,7 @@ def testGotoWithSpaceBeforeNumber():
 
 def testGotoMultipleLineNumbers():
     """ON GOTO with comma-separated line numbers encodes all of them."""
-    data = tokenize(["   10ONxGOTO100,200,300"])
+    data = tokenize(["   10ON x GOTO100,200,300"])
     content = data[4:-2]
 
     # Count 0x8D occurrences - should be 3.
@@ -602,3 +602,86 @@ def testTextStableFullProgram():
         "  210RETURN",
     ]
     assert detokenize(tokenize(text)) == text
+
+
+# ---------------------------------------------------------------------------
+# FN/PROC symbol table: two-pass tokenizer resolves identifier boundaries
+# ---------------------------------------------------------------------------
+
+def testFnProcSymbolTableThenAfterFn():
+    """FNld followed by THEN is correctly split when DEFFNld is defined."""
+    text = [
+        "   10IFNOTFNldTHEN=0",
+        "   20DEFFNld",
+        "   30=GET",
+    ]
+    data = tokenize(text)
+    # Detokenize line 10 and check THEN appears as a keyword.
+    lines = detokenize(data)
+    assert "THEN" in lines[0]
+    # The token stream for line 10 should contain THEN token (0x8C).
+    assert 0x8C in data
+
+
+def testFnProcSymbolTableElseAfterProc():
+    """PROCl followed by ELSE is correctly split when DEFPROCl exists."""
+    text = [
+        "   10IFA=1THENPROClELSEPROCm",
+        "   20DEFPROCl",
+        "   30ENDPROC",
+        "   40DEFPROCm",
+        "   50ENDPROC",
+    ]
+    data = tokenize(text)
+    lines = detokenize(data)
+    # Line 10 should have ELSE as a token, not eaten by PROCl's name.
+    assert "ELSE" in lines[0]
+    assert "PROCm" in lines[0]
+
+
+def testFnProcSymbolTableDivAfterFn():
+    """FNhd followed by DIV is correctly split when DEFFNhd exists."""
+    text = [
+        "   10X=FNhdDIV40",
+        "   20DEFFNhd=42",
+    ]
+    data = tokenize(text)
+    # DIV token (0x81) should be present.
+    assert 0x81 in data
+
+
+def testFnProcSymbolTableLongestMatch():
+    """When both FNh and FNhd exist, FNhdDIV matches the longer name."""
+    text = [
+        "   10X=FNhdDIV40",
+        "   20DEFFNh=1",
+        "   30DEFFNhd=2",
+    ]
+    data = tokenize(text)
+    # Should match FNhd (longer), leaving DIV to be tokenized.
+    assert 0x81 in data
+
+
+def testFnProcSymbolTableFallbackGreedy():
+    """Without a matching DEF, FN/PROC falls back to greedy consumption."""
+    text = [
+        "   10X=FNunknownTHEN",
+    ]
+    data = tokenize(text)
+    # No DEF for FNunknown, so greedy eats "unknownTHEN" as the name.
+    # THEN token (0x8C) should NOT be present.
+    assert 0x8C not in data
+
+
+def testFnProcSymbolTableRoundTrip():
+    """Program with FN/PROC boundary ambiguity round-trips correctly."""
+    # Build binary where FNld token is followed directly by THEN token.
+    ref100 = encodeLineRef(100)
+    original = makeProgram(
+        (10, [0xE7, 0xAC, 0xA4, ord('l'), ord('d'),
+              0x8C] + list(ref100)),   # IFNOTFNldTHEN100
+        (20, [0xDD, 0xA4, ord('l'), ord('d')]),  # DEFFNld
+        (30, [0x3D, 0xA5]),                       # =GET
+        (100, [0xE0]),                             # END
+    )
+    assert tokenize(detokenize(original)) == original

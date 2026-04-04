@@ -569,6 +569,111 @@ class TestBuildImage:
         cat = rebuilt.sides[0].readCatalogue()
         assert len(cat.entries) == 0
 
+    def testBuildRetokenizesBasicFiles(self, tmp_path) -> None:
+        """BASIC .bas files are retokenized to binary on build.
+
+        The extract step detokenizes BASIC programs into plain text,
+        which is larger than the tokenized binary. When building a new
+        image from those files, the build step must retokenize .bas
+        files so they fit on disc and are valid BBC BASIC programs.
+        """
+        # Build a tokenized BASIC program:
+        #   10 PRINT "HELLO"
+        # Token 0xF1 = PRINT, 0x22 = quote.
+        basic_bytes = bytes([
+            0x0D,                       # line start marker
+            0x00, 0x0A,                 # line number 10 (hi, lo)
+            0x0E,                       # length = 14 bytes (Russell format)
+            0x20,                       # space after line number
+            0xF1,                       # PRINT token
+            0x20,                       # space
+            0x22,                       # open quote
+            0x48, 0x45, 0x4C, 0x4C, 0x4F,  # HELLO
+            0x22,                       # close quote
+            0x0D, 0xFF,                 # end-of-program marker
+        ])
+
+        # Create a disc image with this BASIC file.
+        original = createDiscImage(tracks=80, title="RETOKEN")
+        side = original.sides[0]
+        side.addFile(DiscFile("$.HELLO", basic_bytes, load_addr=0x0E00, exec_addr=0x8023))
+
+        img_path = str(tmp_path / "original.ssd")
+        with open(img_path, "wb") as f:
+            f.write(original.serialize())
+
+        # Extract with .inf sidecars (BASIC is detokenized to .bas text).
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        # Verify the extracted file is plain text (.bas), not binary.
+        bas_path = os.path.join(extract_dir, "$", "HELLO.bas")
+        assert os.path.isfile(bas_path)
+        with open(bas_path, "r") as f:
+            text = f.read()
+        assert "PRINT" in text
+        assert "HELLO" in text
+
+        # Rebuild a new image from the extracted directory.
+        rebuilt_bytes = buildImage(
+            source_dir=extract_dir,
+            output_path="rebuilt.ssd",
+            tracks=80,
+            title="REBUILT",
+        )
+
+        rebuilt_path = str(tmp_path / "rebuilt.ssd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        # Reopen and verify the file is present and is valid tokenized BASIC.
+        rebuilt = openDiscImage(rebuilt_path)
+        cat = rebuilt.sides[0].readCatalogue()
+        entry = next(e for e in cat.entries if e.fullName == "$.HELLO")
+
+        # Addresses should survive the round-trip.
+        assert entry.load_addr == 0x0E00
+        assert entry.exec_addr == 0x8023
+
+        # The rebuilt data should be tokenized binary, not plain text.
+        rebuilt_data = rebuilt.sides[0].readFile(entry)
+        assert rebuilt_data[0] == 0x0D, "Should start with BASIC line marker"
+        assert rebuilt_data[-2:] == b"\x0D\xFF", "Should end with end-of-program"
+
+        # The tokenized binary should be the same size as the original
+        # (or very close - the tokenizer produces identical output for
+        # the same program).
+        assert len(rebuilt_data) == len(basic_bytes)
+
+    def testBuildRetokenizePreservesNonBasicFiles(self, tmp_path) -> None:
+        """Binary files with .bas-like names but non-BASIC exec addresses
+        are NOT retokenized - they pass through as raw bytes."""
+        src = str(tmp_path / "src")
+        d = os.path.join(src, "$")
+        os.makedirs(d)
+
+        # A binary file that happens to have a .bas extension but a
+        # non-BASIC exec address (0x1900 is not a BASIC entry point).
+        raw_data = b"\xAA\xBB\xCC\xDD"
+        with open(os.path.join(d, "NOTBAS.bas"), "wb") as f:
+            f.write(raw_data)
+        with open(os.path.join(d, "NOTBAS.bas.inf"), "w") as f:
+            f.write(formatInf("$", "NOTBAS", 0x1900, 0x1900, len(raw_data)) + "\n")
+
+        rebuilt_bytes = buildImage(src, "test.ssd", tracks=80)
+
+        rebuilt_path = str(tmp_path / "test.ssd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        entry = next(e for e in rebuilt.sides[0].readCatalogue().entries
+                      if e.fullName == "$.NOTBAS")
+
+        # Data should be the raw bytes, untouched.
+        data = rebuilt.sides[0].readFile(entry)
+        assert data == raw_data
+
 
 # =======================================================================
 # cmdBuild

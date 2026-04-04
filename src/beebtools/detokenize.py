@@ -146,6 +146,13 @@ def _decodeLineContent(content: bytes) -> str:
     while i < len(content):
         b = content[i]
 
+        # Line terminator - always ends the content regardless of context.
+        # In Acorn/Wilson format the content slice includes a trailing 0x0D;
+        # in Russell format it does not. Either way, 0x0D cannot appear as
+        # actual program text on the BBC Micro.
+        if b == 0x0D:
+            break
+
         # Inside a quoted string - emit raw bytes verbatim, handle close quote.
         if in_string:
             if b == 0x22:
@@ -192,10 +199,6 @@ def _decodeLineContent(content: bytes) -> str:
                 parts.append(f"[&{b:02X}]")
             i += 1
             continue
-
-        # End-of-line marker embedded in content.
-        if b == 0x0D:
-            break
 
         # Plain ASCII character.
         parts.append(chr(b))

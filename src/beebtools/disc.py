@@ -24,11 +24,12 @@ import re
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from .boot import BootOption
-from .entry import DiscEntry, DiscFile
+from .entry import DiscEntry, DiscFile, isBasicExecAddr
 from .image import DiscSide, createImage, openImage
 from .detokenize import basicProgramSize, detokenize
 from .inf import formatInf, parseInf
 from .pretty import prettyPrint
+from .tokenize import tokenize
 
 
 # Characters that are illegal in Windows filenames, used when building
@@ -540,6 +541,16 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
         # Read the data file.
         with open(path, "rb") as f:
             data = f.read()
+
+        # Retokenize .bas files back to BBC BASIC binary format.
+        # The extract step detokenizes BASIC programs into plain text,
+        # which is larger than the tokenized form. Re-tokenizing here
+        # restores the compact binary representation so the rebuilt
+        # disc image does not overflow.
+        if name.endswith(".bas") and isBasicExecAddr(inf.exec_addr):
+            text = data.decode("ascii", errors="replace")
+            lines = text.splitlines()
+            data = tokenize(lines)
 
         # Add to disc using the path from the .inf sidecar.
         side.addFile(DiscFile(

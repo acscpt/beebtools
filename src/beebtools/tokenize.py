@@ -9,7 +9,7 @@ detokenize.py.
 """
 
 import re
-from typing import List, Tuple
+from typing import Dict, FrozenSet, List, Set, Tuple
 
 from .tokens import TOKENS, LINE_LITERAL_TOKENS
 
@@ -199,10 +199,87 @@ def _parseLine(line: str) -> Tuple[int, str]:
 
 
 # -----------------------------------------------------------------------
+# FN/PROC symbol table (pass 1)
+# -----------------------------------------------------------------------
+
+# Matches DEFFNname or DEFPROCname at any position in a line. The name
+# is the run of alphanumeric and underscore characters after FN/PROC.
+_DEF_FN_PROC_RE = re.compile(r'DEF\s*(FN|PROC)([A-Za-z_]\w*)')
+
+
+def _collectFnProcNames(lines: List[str]) -> Dict[str, FrozenSet[str]]:
+    """Scan all lines for DEFFN/DEFPROC declarations and collect names.
+
+    Returns a dict mapping the prefix ('FN' or 'PROC') to a frozenset
+    of declared names for that prefix. Used in pass 2 to determine
+    where a FN/PROC identifier ends so that the keyword after it can
+    be tokenized correctly.
+    """
+    names: Dict[str, Set[str]] = {'FN': set(), 'PROC': set()}
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Extract content after line number.
+        m = _LINE_RE.match(stripped)
+        if not m:
+            continue
+        content = m.group(2)
+
+        # Find all DEF FN/PROC declarations in this line.
+        for match in _DEF_FN_PROC_RE.finditer(content):
+            prefix = match.group(1)   # 'FN' or 'PROC'
+            name = match.group(2)     # identifier name
+            names[prefix].add(name)
+
+    return {k: frozenset(v) for k, v in names.items()}
+
+
+def _matchFnProcName(
+    text: str, pos: int, length: int,
+    known_names: FrozenSet[str]
+) -> int:
+    """Determine how many characters of the FN/PROC identifier to consume.
+
+    Tries to find the longest known name from the symbol table that
+    matches at position pos. If no known name matches, falls back to
+    greedy consumption of all alphanumeric/underscore characters (the
+    standard ROM behaviour).
+
+    Returns the number of identifier characters to consume.
+    """
+    # Collect the full greedy identifier span.
+    end = pos
+    while end < length and (text[end].isalnum() or text[end] == '_'):
+        end += 1
+    greedy_len = end - pos
+
+    if not known_names or greedy_len == 0:
+        return greedy_len
+
+    # Try longest-match against known names. We check from longest to
+    # shortest so the first hit is the best match.
+    candidate = text[pos:end]
+    best = 0
+    for name in known_names:
+        nlen = len(name)
+        if nlen > greedy_len:
+            continue
+        if nlen > best and candidate[:nlen] == name:
+            best = nlen
+
+    # If a known name matched, use that length. Otherwise fall back
+    # to greedy (the name may be defined in another file via CHAIN).
+    return best if best > 0 else greedy_len
+
+
+# -----------------------------------------------------------------------
 # Content tokenizer
 # -----------------------------------------------------------------------
 
-def _startsWithKeyword(upper_text: str, pos: int, length: int) -> bool:
+def _startsWithKeyword(text: str, pos: int, length: int) -> bool:
     """Check whether the text at pos begins with a known keyword.
 
     Used by the conditional-flag logic to allow adjacent tokens (e.g.
@@ -213,12 +290,12 @@ def _startsWithKeyword(upper_text: str, pos: int, length: int) -> bool:
         kw_len = len(kw)
         if pos + kw_len > length:
             continue
-        if upper_text[pos:pos + kw_len] == kw:
+        if text[pos:pos + kw_len] == kw:
             return True
     return False
 
 
-def _tokenizeContent(text: str) -> bytes:
+def _tokenizeContent(text: str, fn_proc_names: Dict[str, FrozenSet[str]] = None) -> bytes:
     """Tokenize the content portion of one BASIC line.
 
     This processes the text left to right, matching keywords, encoding
@@ -227,6 +304,7 @@ def _tokenizeContent(text: str) -> bytes:
 
     Args:
         text: Line content (everything after the line number).
+        fn_proc_names: Symbol table mapping 'FN'/'PROC' to known names.
 
     Returns:
         Tokenized content bytes.
@@ -238,6 +316,10 @@ def _tokenizeContent(text: str) -> bytes:
     linenum_mode = False   # encoding line numbers after L-flag keyword
     in_string = False
     literal_rest = False   # after REM or DATA - rest of line is literal
+    in_variable = False    # inside a variable/identifier name
+
+    if fn_proc_names is None:
+        fn_proc_names = {}
 
     upper = text.upper()
 
@@ -256,12 +338,14 @@ def _tokenizeContent(text: str) -> bytes:
             result.append(ord(ch))
             if ch == '"':
                 in_string = False
+                in_variable = False
             i += 1
             continue
 
         # Open quote - enter string mode.
         if ch == '"':
             in_string = True
+            in_variable = False
             result.append(0x22)
             i += 1
             linenum_mode = False
@@ -272,6 +356,7 @@ def _tokenizeContent(text: str) -> bytes:
             result.append(ord(':'))
             at_start = True
             linenum_mode = False
+            in_variable = False
             i += 1
             continue
 
@@ -286,6 +371,7 @@ def _tokenizeContent(text: str) -> bytes:
         # the hex literal, e.g. &DEF should not tokenize DEF).
         if ch == '&':
             result.append(ord('&'))
+            in_variable = False
             i += 1
             while i < length and upper[i] in '0123456789ABCDEF':
                 result.append(ord(text[i]))
@@ -319,6 +405,18 @@ def _tokenizeContent(text: str) -> bytes:
             linenum_mode = False
             # Fall through to normal processing for this character.
 
+        # The BBC BASIC ROM only attempts keyword matching when not
+        # inside a variable name. Letters and underscores enter variable
+        # mode; anything else (digits, operators, tokens) exits it.
+        # This prevents embedded keywords like ON in NOON, TO in BOTTOM
+        # from being tokenized, while still allowing 1TO10 (digit before
+        # keyword) and PRINTTAB( (token before keyword).
+        if in_variable and (ch.isalpha() or ch == '_'):
+            at_start = False
+            result.append(ord(ch))
+            i += 1
+            continue
+
         # Try to match a keyword at the current position.
         matched = False
 
@@ -328,8 +426,12 @@ def _tokenizeContent(text: str) -> bytes:
             if i + kw_len > length:
                 continue
 
-            # Case-insensitive comparison on the keyword portion.
-            if upper[i:i + kw_len] != kw:
+            # Case-sensitive comparison: keywords match only UPPERCASE.
+            # The BBC BASIC ROM uppercases keyboard input before
+            # tokenizing, so all keywords in tokenized programs are
+            # uppercase. Lowercase text (variable names, assembler
+            # labels) must not be matched.
+            if text[i:i + kw_len] != kw:
                 continue
 
             token = _KEYWORD_TO_TOKEN[kw]
@@ -342,8 +444,8 @@ def _tokenizeContent(text: str) -> bytes:
             # "CLSPRINT" with no separator).
             if token in _CONDITIONAL:
                 next_pos = i + kw_len
-                if next_pos < length and (upper[next_pos].isalnum() or upper[next_pos] == '_'):
-                    if not _startsWithKeyword(upper, next_pos, length):
+                if next_pos < length and (text[next_pos].isalnum() or text[next_pos] == '_'):
+                    if not _startsWithKeyword(text, next_pos, length):
                         continue
 
             # Pseudo-variable: use statement form (+0x40) at start of
@@ -360,8 +462,16 @@ def _tokenizeContent(text: str) -> bytes:
                 # REM and DATA - rest of line is literal.
                 literal_rest = True
             elif token in _FN_PROC:
-                # Skip the identifier name after FN or PROC.
-                while i < length and (text[i].isalnum() or text[i] == '_'):
+                # FN/PROC flag: the identifier name immediately after
+                # the token must not be tokenized. Use the symbol table
+                # to determine exactly where the name ends so that any
+                # keyword following it (e.g. THEN after FNld) is still
+                # tokenized correctly. Falls back to greedy consumption
+                # when the name is not in the symbol table.
+                prefix = 'FN' if token == 0xA4 else 'PROC'
+                known = fn_proc_names.get(prefix, frozenset())
+                name_len = _matchFnProcName(text, i, length, known)
+                for _ in range(name_len):
                     result.append(ord(text[i]))
                     i += 1
             else:
@@ -373,14 +483,20 @@ def _tokenizeContent(text: str) -> bytes:
                     at_start = False
 
             matched = True
+            in_variable = False
             break
 
         if matched:
             continue
 
         # No keyword matched - emit the character as a literal byte.
+        # Letters and underscores enter variable-name mode; everything
+        # else exits it.
         if ch.isalpha() or ch == '_':
             at_start = False
+            in_variable = True
+        else:
+            in_variable = False
 
         result.append(ord(ch))
         i += 1
@@ -412,20 +528,26 @@ def tokenize(lines: List[str]) -> bytes:
     """
     result = bytearray()
 
+    # Pass 1: collect DEF FN/PROC names so pass 2 can determine where
+    # each FN/PROC identifier ends in ambiguous cases like FNldTHEN.
+    fn_proc_names = _collectFnProcNames(lines)
+
+    # Pass 2: tokenize each line using the symbol table.
     for line in lines:
         stripped = line.strip()
         if not stripped:
             continue
 
         linenum, content_text = _parseLine(line)
-        content = _tokenizeContent(content_text)
+        content = _tokenizeContent(content_text, fn_proc_names)
 
         hi = (linenum >> 8) & 0xFF
         lo = linenum & 0xFF
 
-        # Length byte counts from the hi byte to the start of the next
-        # record's 0x0D.  That is: hi + lo + length_byte + content = 3 + 1 + len(content).
-        linelen = 3 + 1 + len(content)
+        # Length byte counts from the leading 0x0D through the content:
+        # leading_0x0D + hi + lo + len_byte + content = 4 + len(content).
+        # This is the Russell format used by BBC BASIC II on the 6502.
+        linelen = 4 + len(content)
 
         result.append(0x0D)
         result.append(hi)

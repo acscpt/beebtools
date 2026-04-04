@@ -18,6 +18,10 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Build from extracted content fails.** Rebuilding a disc image from
+  extracted files failed because BASIC files were not correctly retokenized
+  before being written back to the disc.
+
 - **Fixed garbled file and disc names on some disc images.** BBC Micro ASCII
   is 7-bit; bit 7 is repurposed by some filing systems and copy-protection
   schemes. A `"bbc"` text codec is now registered on `import beebtools`,
