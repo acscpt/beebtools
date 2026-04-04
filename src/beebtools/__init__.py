@@ -93,6 +93,7 @@ from .disc import (
     search, extractAll, buildImage,
     looksLikeTokenizedBasic, looksLikePlainText,
     sortCatalogueEntries,
+    escapeNonAscii, unescapeNonAscii,
 )
 from .cli import main
 

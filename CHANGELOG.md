@@ -16,7 +16,26 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   
 - New property on `DFSCatalogue` and `ADFSCatalogue`: returns the number of tracks on the disc, calculated from the total sector count.
 
+- `cat --inspect` now content-inspects files without a BASIC exec address,
+  detecting `BASIC?` (content-detected BASIC with non-standard exec),
+  `BASIC+MC` (BASIC with appended machine code), and `TEXT` labels. Each
+  label has a distinct colour.
+
+- `extract -t/--text` option controls how non-ASCII bytes in BASIC strings
+  (e.g. teletext control codes) are written: `ascii` (lossy, default), `utf8`
+  (lossless), or `escape` (`\xHH` notation, lossless). The `build` command
+  auto-detects all three formats when retokenizing.
+
 ### Fixed
+
+- **`looksLikeTokenizedBasic` false positives.** Plain-text files starting
+  with CR (0x0D) were misidentified as BASIC. Detection now walks the
+  tokenized line structure and requires the 0x0D 0xFF end-of-program marker.
+
+- **Teletext control codes lost during BASIC extraction.** Non-ASCII bytes
+  (e.g. colour codes in `PRINT` strings) were silently replaced with `?`
+  by the ASCII file writer. Use `--text utf8` or `--text escape`
+  to preserve them.
 
 - **Build from extracted content fails.** Rebuilding a disc image from
   extracted files failed because BASIC files were not correctly retokenized

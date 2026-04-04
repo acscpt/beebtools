@@ -1996,7 +1996,7 @@ class TestFileExtraction:
         basic_data = bytes([
             0x0D,        # line start
             0x00, 0x0A,  # line number 10 (high, low)
-            0x07,        # line length
+            0x05,        # line length (4 + 1 content byte)
             0xF1,        # PRINT token
             0x0D,        # next line start (end program)
             0xFF,        # end marker
@@ -2364,7 +2364,7 @@ class TestCmdCatAdfs:
         """A file identified as BASIC should be labelled 'BASIC' in the cmdCat output."""
         # BASIC file exec address triggers "BASIC" label.
         basic_data = bytes([
-            0x0D, 0x00, 0x0A, 0x07, 0xF1, 0x0D, 0xFF,
+            0x0D, 0x00, 0x0A, 0x05, 0xF1, 0x0D, 0xFF,
         ])
         image_data = _adfsWithFiles([{
             "name": "MYPROG",
@@ -2452,7 +2452,7 @@ class TestCmdExtractAdfs:
     def testExtractBasicDetokenizes(self, tmp_path):
         """Extracting a BASIC file without --raw should produce readable detokenized plain text, not binary."""
         basic_data = bytes([
-            0x0D, 0x00, 0x0A, 0x07, 0xF1, 0x0D, 0xFF,
+            0x0D, 0x00, 0x0A, 0x05, 0xF1, 0x0D, 0xFF,
         ])
         image_data = _adfsWithFiles([{
             "name": "MYPROG",
@@ -2603,7 +2603,7 @@ class TestSearchAdfs:
         """Disc search should skip directory entries and only inspect regular files."""
         # Create an image with a directory entry and a BASIC file.
         basic_data = bytes([
-            0x0D, 0x00, 0x0A, 0x0A, 0xF1, 0x22, 0x48, 0x49, 0x22, 0x0D, 0xFF,
+            0x0D, 0x00, 0x0A, 0x09, 0xF1, 0x22, 0x48, 0x49, 0x22, 0x0D, 0xFF,
         ])
         subdir_entry = _makeDirectoryEntry(
             name="SUBDIR",

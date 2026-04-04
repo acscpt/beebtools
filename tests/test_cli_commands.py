@@ -583,7 +583,7 @@ class TestBuildImage:
         basic_bytes = bytes([
             0x0D,                       # line start marker
             0x00, 0x0A,                 # line number 10 (hi, lo)
-            0x0E,                       # length = 14 bytes (Russell format)
+            0x0E,                       # length (4 + 10 content bytes)
             0x20,                       # space after line number
             0xF1,                       # PRINT token
             0x20,                       # space

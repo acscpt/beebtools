@@ -85,6 +85,10 @@ though in this case.
 - Retokenize plain-text BASIC back to binary - enabling a full
   detokenize-edit-retokenize workflow
 
+- Text mode control for BASIC extraction: lossless UTF-8, escaped `\xHH`
+  notation, or default ASCII - preserves teletext control codes and other
+  non-ASCII bytes embedded in `PRINT` strings
+
 - Pretty-printer: add operator spacing to make terse BASIC readable
   - Anti-listing trap detection: neutralise copy-protection `*|` traps
 
@@ -146,6 +150,9 @@ beebtools extract mydisc.dsd -a --pretty -d output/
 
 # Extract everything with .inf sidecars preserving file metadata
 beebtools extract mydisc.dsd -a --inf -d output/
+
+# Preserve teletext control codes in BASIC strings (lossless UTF-8)
+beebtools extract mydisc.dsd T.LOTTERY -o lottery.bas -t utf8
 
 # List an ADFS disc catalogue
 beebtools cat game.adf

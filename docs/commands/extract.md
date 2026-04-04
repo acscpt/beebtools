@@ -3,7 +3,7 @@
 ## Single file
 
 ```bash
-beebtools extract <image> <filename> [-o FILE] [--pretty]
+beebtools extract <image> <filename> [-o FILE] [--pretty] [-t MODE]
 ```
 
 Works with both DFS (`.ssd`/`.dsd`) and ADFS (`.adf`/`.adl`) disc images.
@@ -34,12 +34,42 @@ $.LOADER  load=0x001900  exec=0x001900  length=512 bytes
 
 When `-o` is omitted, raw bytes go directly to stdout for piping.
 
+## Text modes
+
+BBC BASIC programs can contain non-ASCII bytes - most commonly teletext
+control codes (0x80-0x9F) embedded in `PRINT` strings for colour and
+graphics effects. By default these are replaced with `?` when extracting
+to plain text, which is lossy. The `-t`/`--text` option controls how
+these bytes are handled.
+
+| Mode | Encoding | Lossless | Description |
+| --- | --- | --- | --- |
+| `ascii` | ASCII | No | Non-ASCII bytes replaced with `?` (default) |
+| `utf8` | UTF-8 | Yes | Raw bytes preserved as UTF-8 |
+| `escape` | ASCII | Yes | Non-ASCII bytes written as `\xHH` notation |
+
+The `escape` mode is useful when you need the file to remain plain ASCII
+but want a lossless round-trip. The `build` command auto-detects escaped
+files and reverses the encoding when retokenizing, so all three modes
+round-trip correctly through extract/build.
+
+```bash
+# Default (lossy) - teletext codes become '?'
+beebtools extract mydisc.dsd T.LOTTERY -o lottery.bas
+
+# UTF-8 (lossless) - raw bytes preserved
+beebtools extract mydisc.dsd T.LOTTERY -o lottery.bas -t utf8
+
+# Escaped (lossless, plain ASCII) - \x81, \x83 etc.
+beebtools extract mydisc.dsd T.LOTTERY -o lottery.bas -t escape
+```
+
 ## Bulk extract
 
 Extract all files from a disc image by specifying the option `-a`.
 
 ```bash
-beebtools extract <image> -a [-d DIR] [--pretty] [--inf]
+beebtools extract <image> -a [-d DIR] [--pretty] [--inf] [-t MODE]
 ```
 
 Extracts every file from the disc.
@@ -141,3 +171,7 @@ Ambiguous filename 'LOADER' - specify with full path.
 - `--pretty` - add operator spacing to BASIC output
 
 - `--inf` - write `.inf` sidecar files with bulk extraction
+
+- `-t` / `--text` - text encoding for BASIC `.bas` files: `ascii` (lossy,
+  default), `utf8` (lossless), `escape` (`\xHH` notation, lossless).
+  See [Text modes](#text-modes) above

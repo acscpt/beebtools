@@ -158,13 +158,23 @@ def resolveOutputPath(
 # -----------------------------------------------------------------------
 
 def looksLikeTokenizedBasic(data: bytes) -> bool:
-    """True if data begins with the BBC BASIC line marker 0x0D.
+    """True if data contains a structurally valid Wilson/Acorn BASIC program.
 
-    Every valid tokenized BBC BASIC program starts with 0x0D (the line
-    start marker for the first line). This is a necessary-but-not-sufficient
-    check; combine with DiscEntry.isBasic for reliable BASIC detection.
+    Walks the tokenized line structure looking for the 0x0D 0xFF
+    end-of-program marker that every valid BBC BASIC program contains.
+
+    A first-byte-only check is not sufficient because plain-text files
+    beginning with CR (0x0D) would false-positive.
+
+    See https://www.bbcbasic.net/wiki/doku.php?id=format for the
+    canonical format-detection algorithm.
     """
-    return len(data) > 0 and data[0] == 0x0D
+    if len(data) < 2 or data[0] != 0x0D:
+        return False
+
+    # Walk the line structure and check for the 0xFF end marker.
+    prog_size = basicProgramSize(data)
+    return prog_size >= 2 and data[prog_size - 1] == 0xFF
 
 
 # Bytes acceptable in a plain-text file: printable ASCII plus common
@@ -184,6 +194,94 @@ def looksLikePlainText(data: bytes) -> bool:
 
 
 
+
+
+# -----------------------------------------------------------------------
+# Text-mode helpers for BASIC extraction/build round-tripping
+# -----------------------------------------------------------------------
+
+# Regex matching a \xHH escape sequence (two uppercase hex digits).
+_ESCAPE_RE = re.compile(r"\\x([0-9A-F]{2})")
+
+
+def escapeNonAscii(line: str) -> str:
+    """Replace non-printable-ASCII characters with \\xHH escapes.
+
+    Characters outside the printable ASCII range 0x20-0x7E (e.g. BBC Micro
+    teletext control codes embedded in PRINT strings) are replaced with a
+    two-digit hex escape.  A literal backslash followed by 'x' is escaped
+    as \\x5Cx to avoid ambiguity on the reverse trip.
+
+    This is the forward half of a lossless round-trip.  Use unescapeNonAscii()
+    to reverse.
+    """
+    out: list[str] = []
+
+    for ch in line:
+        code = ord(ch)
+        if code == 0x5C:
+            # Escape a literal backslash only when it would be ambiguous
+            # (i.e. followed by 'x' and two hex digits).  For simplicity
+            # we always escape backslash so the reverse is unambiguous.
+            out.append("\\x5C")
+        elif 0x20 <= code <= 0x7E:
+            out.append(ch)
+        else:
+            out.append(f"\\x{code:02X}")
+
+    return "".join(out)
+
+
+def unescapeNonAscii(line: str) -> str:
+    """Reverse escapeNonAscii - convert \\xHH sequences back to characters."""
+    return _ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), line)
+
+
+def _writeBasicText(
+    path: str,
+    lines: list[str],
+    text_mode: str,
+) -> None:
+    """Write detokenized BASIC lines to a text file.
+
+    text_mode controls how non-ASCII bytes (e.g. teletext control codes)
+    are represented:
+        'ascii'  -- replace with '?' (lossy, maximum compatibility)
+        'utf8'   -- write as UTF-8 (lossless, modern editors)
+        'escape' -- \\xHH notation (lossless, plain ASCII, round-trips)
+    """
+    if text_mode == "utf8":
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    elif text_mode == "escape":
+        escaped = [escapeNonAscii(line) for line in lines]
+        with open(path, "w", encoding="ascii") as f:
+            f.write("\n".join(escaped) + "\n")
+    else:
+        # Default: ASCII with replacement.
+        with open(path, "w", encoding="ascii", errors="replace") as f:
+            f.write("\n".join(lines) + "\n")
+
+
+def _readBasicText(data: bytes) -> list[str]:
+    """Read a .bas file's bytes and return lines, unescaping if needed.
+
+    Detects escape mode by looking for \\xHH sequences.  Otherwise tries
+    UTF-8, falling back to ASCII with replacement.
+    """
+    # Try UTF-8 first (covers both utf8 and escape modes).
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = data.decode("ascii", errors="replace")
+
+    lines = text.splitlines()
+
+    # If any line contains \xHH escapes, unescape them all.
+    if any(_ESCAPE_RE.search(line) for line in lines):
+        lines = [unescapeNonAscii(line) for line in lines]
+
+    return lines
 
 
 # -----------------------------------------------------------------------
@@ -302,6 +400,7 @@ def extractAll(
     out_dir: str,
     pretty: bool = False,
     write_inf: bool = False,
+    text_mode: str = "ascii",
 ) -> List[Dict[str, Union[str, int]]]:
     """Extract every file from a disc image into a directory.
 
@@ -324,6 +423,10 @@ def extractAll(
         out_dir:    Directory to write extracted files into. Created if absent.
         pretty:     Apply pretty-printer spacing to BASIC output when True.
         write_inf:  Write .inf sidecar files alongside extracted files.
+        text_mode:  How non-ASCII bytes in BASIC strings are written:
+                    'ascii'  -- replace with '?' (lossy, default)
+                    'utf8'   -- write as UTF-8 (lossless)
+                    'escape' -- \\xHH notation (lossless, plain ASCII)
 
     Returns:
         List of result dicts, one per extracted file. Each dict has:
@@ -379,8 +482,7 @@ def extractAll(
                     text_lines = detokenize(data)
                     if pretty:
                         text_lines = prettyPrint(text_lines)
-                    with open(out_path, "w", encoding="ascii", errors="replace") as f:
-                        f.write("\n".join(text_lines) + "\n")
+                    _writeBasicText(out_path, text_lines, text_mode)
                     results.append({"type": "BASIC", "path": out_path})
 
             elif looksLikePlainText(data):
@@ -548,8 +650,7 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
         # restores the compact binary representation so the rebuilt
         # disc image does not overflow.
         if name.endswith(".bas") and isBasicExecAddr(inf.exec_addr):
-            text = data.decode("ascii", errors="replace")
-            lines = text.splitlines()
+            lines = _readBasicText(data)
             data = tokenize(lines)
 
         # Add to disc using the path from the .inf sidecar.

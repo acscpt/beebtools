@@ -582,9 +582,18 @@ class TestCatalogueMetadata:
 class TestLooksLikeTokenizedBasic:
     """Unit tests for looksLikeTokenizedBasic()."""
 
-    def testStartsWith0x0d(self):
-        """A byte sequence beginning with 0x0D satisfies the tokenized BASIC header check."""
-        assert looksLikeTokenizedBasic(b"\x0D\x00\x0A\x05\xF1")
+    def testMinimalProgram(self):
+        """An empty program (just 0x0D 0xFF end marker) is valid tokenized BASIC."""
+        assert looksLikeTokenizedBasic(b"\x0D\xFF")
+
+    def testOneLine(self):
+        """A single-line program with a valid end marker should be recognised."""
+        # 10 PRINT: 0x0D hi=00 lo=0A len=05 PRINT_token=F1, then end marker 0x0D 0xFF
+        assert looksLikeTokenizedBasic(b"\x0D\x00\x0A\x05\xF1\x0D\xFF")
+
+    def testNoEndMarker(self):
+        """Data starting with 0x0D but without a 0xFF end marker should not match."""
+        assert not looksLikeTokenizedBasic(b"\x0D\x00\x0A\x05\xF1")
 
     def testDoesNotStartWith0x0d(self):
         """A byte sequence that does not start with 0x0D should not be identified as tokenized BASIC."""
@@ -595,8 +604,13 @@ class TestLooksLikeTokenizedBasic:
         assert not looksLikeTokenizedBasic(b"")
 
     def testSingleByte0x0d(self):
-        """A single 0x0D byte should satisfy the minimal BASIC header check."""
-        assert looksLikeTokenizedBasic(b"\x0D")
+        """A single 0x0D byte without a following 0xFF is not a valid program."""
+        assert not looksLikeTokenizedBasic(b"\x0D")
+
+    def testTextStartingWithCr(self):
+        """A plain-text file starting with CR (0x0D) should not false-positive."""
+        # This is the pattern that caused false positives for Early4 and Merge.
+        assert not looksLikeTokenizedBasic(b"\x0D" + b" " * 31)
 
 
 class TestSortCatalogueEntries:

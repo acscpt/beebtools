@@ -24,6 +24,7 @@ from .disc import (
     openImage, createImage,
     search, extractAll, buildImage,
     looksLikeTokenizedBasic, looksLikePlainText, sortCatalogueEntries,
+    escapeNonAscii, _writeBasicText,
 )
 
 
@@ -32,9 +33,11 @@ from .disc import (
 # ---------------------------------------------------------------------------
 
 _BOLD    = "\x1b[1m"
-_CYAN    = "\x1b[36m"
-_YELLOW  = "\x1b[33m"
-_RED     = "\x1b[31m"
+_CYAN    = "\x1b[96m"
+_GREEN   = "\x1b[92m"
+_YELLOW  = "\x1b[93m"
+_MAGENTA = "\x1b[95m"
+_RED     = "\x1b[91m"
 _GREY    = "\x1b[90m"
 _RESET   = "\x1b[0m"
 
@@ -89,7 +92,7 @@ def cmdCat(args: Namespace) -> None:
             max_name = max(len(e.fullName) for e in orderedEntries)
             col_width = max(12, max_name + 2)
 
-            print(f"  {'Name':<{col_width}s} {'Load':>8s} {'Exec':>8s} {'Length':>8s}  {'Type'}")
+            print(f"    {'Name':<{col_width}s} {'Load':>8s} {'Exec':>8s} {'Length':>8s}  {'Type'}")
 
             for e in orderedEntries:
                 is_dir = e.isDirectory
@@ -103,15 +106,29 @@ def cmdCat(args: Namespace) -> None:
                         if looksLikeTokenizedBasic(file_data):
                             prog_size = basicProgramSize(file_data)
                             if prog_size < len(file_data) - 16:
-                                ftype = _colour("BASIC+MC", _YELLOW, use_colour)
+                                ftype = _colour("BASIC+MC", _MAGENTA, use_colour)
                             else:
                                 ftype = _colour("BASIC", _CYAN, use_colour)
                         else:
                             ftype = _colour("BASIC", _CYAN, use_colour)
                     else:
                         ftype = _colour("BASIC", _CYAN, use_colour)
-                elif args.inspect and looksLikePlainText(disc.readFile(e)):
-                    ftype = _colour("TEXT", _YELLOW, use_colour)
+                elif args.inspect:
+                    # Content-inspect files without a BASIC exec address.
+                    # Some BASIC files (e.g. DATA fragments) are saved with
+                    # non-standard exec addresses; some BASIC+MC hybrids
+                    # (e.g. SnowMen) use one to prevent accidental *RUN.
+                    file_data = disc.readFile(e)
+                    if looksLikeTokenizedBasic(file_data):
+                        prog_size = basicProgramSize(file_data)
+                        if prog_size < len(file_data) - 16:
+                            ftype = _colour("BASIC+MC", _MAGENTA, use_colour)
+                        else:
+                            ftype = _colour("BASIC?", _GREEN, use_colour)
+                    elif looksLikePlainText(file_data):
+                        ftype = _colour("TEXT", _YELLOW, use_colour)
+                    else:
+                        ftype = ""
                 else:
                     ftype = ""
 
@@ -121,7 +138,7 @@ def cmdCat(args: Namespace) -> None:
                 exec_  = _colour(f"{e.exec_addr:08X}",   _GREY, use_colour)
                 length = _colour(f"{e.length:08X}", _GREY, use_colour)
                 print(
-                    f"  {lock}{e.fullName:<{col_width - 1}s} "
+                    f"  {lock} {e.fullName:<{col_width - 1}s} "
                     f"{load} "
                     f"{exec_} "
                     f"{length}  "
@@ -176,6 +193,9 @@ def cmdExtract(args: Namespace) -> None:
     Args:
         args: Parsed argparse namespace for the 'extract' subcommand.
     """
+    # Default text_mode for callers that build a Namespace directly.
+    text_mode = getattr(args, "text_mode", "ascii")
+
     # --all routes to the bulk extractor.
     if args.all:
         if args.output:
@@ -186,7 +206,8 @@ def cmdExtract(args: Namespace) -> None:
         # Resolve output directory - default to the image filename stem.
         out_dir = args.dir or os.path.splitext(os.path.basename(args.image))[0]
 
-        results = extractAll(args.image, out_dir, pretty=args.pretty, write_inf=args.inf)
+        results = extractAll(args.image, out_dir, pretty=args.pretty,
+                              write_inf=args.inf, text_mode=text_mode)
         for result in results:
             if result["type"] == "BASIC":
                 print(f"  BASIC     {result['path']}")
@@ -282,13 +303,15 @@ def cmdExtract(args: Namespace) -> None:
             text_lines = detokenize(data)
             if args.pretty:
                 text_lines = prettyPrint(text_lines)
-            output = "\n".join(text_lines) + "\n"
 
             if args.output:
-                with open(args.output, "w", encoding="ascii", errors="replace") as f:
-                    f.write(output)
+                _writeBasicText(args.output, text_lines, text_mode)
                 print(f"Extracted to {args.output}", file=sys.stderr)
             else:
+                # Stdout: apply escape mode if requested, otherwise raw.
+                if text_mode == "escape":
+                    text_lines = [escapeNonAscii(l) for l in text_lines]
+                output = "\n".join(text_lines) + "\n"
                 sys.stdout.write(output)
 
     else:
@@ -553,6 +576,13 @@ def main() -> None:
                            help="Add operator spacing to BASIC output")
     p_extract.add_argument("--inf", action="store_true",
                            help="Write .inf sidecar files with -a/--all")
+    p_extract.add_argument("-t", "--text", choices=["ascii", "utf8", "escape"],
+                           default="ascii", dest="text_mode",
+                           help="Text encoding for BASIC .bas files: "
+                                "ascii (lossy, default), utf8 "
+                                "(lossless), escape (\\xHH notation, lossless). "
+                                "Controls how non-ASCII bytes such as teletext "
+                                "control codes in PRINT strings are written")
 
     p_search = sub.add_parser("search", help="Search BASIC source for a text pattern")
     p_search.add_argument("image", help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
