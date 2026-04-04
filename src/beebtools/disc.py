@@ -186,7 +186,7 @@ _ESCAPE_RE = re.compile(r"\\x([0-9A-F]{2})")
 
 def writeBasicText(
     path: str,
-    lines: list[str],
+    lines: List[str],
     text_mode: str,
 ) -> None:
     """Write detokenized BASIC lines to a text file.
@@ -210,7 +210,7 @@ def writeBasicText(
             f.write("\n".join(lines) + "\n")
 
 
-def readBasicText(data: bytes) -> list[str]:
+def readBasicText(data: bytes) -> List[str]:
     """Read a .bas file's bytes and return lines, unescaping if needed.
 
     Detects escape mode by looking for \\xHH sequences.  Otherwise tries

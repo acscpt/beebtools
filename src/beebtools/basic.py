@@ -871,7 +871,7 @@ def escapeNonAscii(line: str) -> str:
     This is the forward half of a lossless round-trip.  Use unescapeNonAscii()
     to reverse.
     """
-    out: list[str] = []
+    out: List[str] = []
 
     for ch in line:
         code = ord(ch)
