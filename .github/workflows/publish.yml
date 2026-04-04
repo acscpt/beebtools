@@ -57,3 +57,36 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  # Create a GitHub Release with the matching CHANGELOG section as release notes
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Extract changelog section for this version
+        run: |
+          # Strip the leading 'v' from the tag name (e.g. v0.6.0 -> 0.6.0)
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          # Extract the section between the matching '## [X.Y.Z]' header and
+          # the next '## [' version header, then write it to a temp file.
+          awk "/^## \[${VERSION}\]/{found=1; next} found && /^## \[/{exit} found{print}" \
+            CHANGELOG.md > /tmp/release_notes.md
+
+          # Fail the step if no notes were found for this version
+          if [ ! -s /tmp/release_notes.md ]; then
+            echo "No changelog section found for version ${VERSION}"
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: /tmp/release_notes.md
