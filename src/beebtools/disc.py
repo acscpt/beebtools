@@ -8,28 +8,30 @@ disc-wide operations. All operations work through Protocols defined in
 image.py, so the same code handles both DFS and ADFS formats.
 
 Layer responsibilities:
-    boot       -- BootOption enum (Layer 0)
-    entry      -- DiscEntry Protocol and DiscFile transport (Layer 0)
-    image      -- DiscSide/DiscImage Protocols plus openImage/createImage (Layer 3)
-    detokenize -- tokenized binary to plain-text transform (Layer 2)
-    pretty     -- text post-processing (Layer 2)
-    disc       -- cross-layer orchestration (this module, Layer 4)
-    cli        -- argument parsing, output formatting (Layer 5)
+    boot   -- BootOption enum (Layer 0)
+    entry  -- DiscEntry Protocol and DiscFile transport (Layer 0)
+    basic  -- BASIC facade: tokenize, detokenize, classify, escape (Layer 2b)
+    image  -- DiscSide/DiscImage Protocols plus openImage/createImage (Layer 3)
+    disc   -- cross-layer orchestration (this module, Layer 4)
+    cli    -- argument parsing, output formatting (Layer 5)
 
 All operations that span more than one lower layer belong here.
 """
 
 import os
 import re
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from .boot import BootOption
-from .entry import DiscEntry, DiscFile, isBasicExecAddr
-from .image import DiscSide, createImage, openImage
-from .detokenize import basicProgramSize, detokenize
+from .entry import DiscEntry, DiscFile, DiscError, isBasicExecAddr
+from .basic import (
+    basicProgramSize, classifyFileType, detokenize, tokenize,
+    escapeNonAscii, unescapeNonAscii,
+    looksLikeTokenizedBasic, looksLikePlainText, prettyPrint,
+)
+from .image import DiscImage, DiscSide, createImage, openImage
 from .inf import formatInf, parseInf
-from .pretty import prettyPrint
-from .tokenize import tokenize
 
 
 # Characters that are illegal in Windows filenames, used when building
@@ -154,46 +156,24 @@ def resolveOutputPath(
 
 
 # -----------------------------------------------------------------------
-# Content detection (format-agnostic, moved from dfs.py)
+# Path qualification
 # -----------------------------------------------------------------------
 
-def looksLikeTokenizedBasic(data: bytes) -> bool:
-    """True if data contains a structurally valid Wilson/Acorn BASIC program.
+def qualifyDiscPath(path: str) -> str:
+    """Normalise a user-supplied path to a fully-qualified disc path.
 
-    Walks the tokenized line structure looking for the 0x0D 0xFF
-    end-of-program marker that every valid BBC BASIC program contains.
+    DFS: 'MYPROG' -> '$.MYPROG', 'T.MYPROG' passes through.
+    ADFS: '$.DIR.FILE' passes through, 'DIR.FILE' -> '$.DIR.FILE'.
 
-    A first-byte-only check is not sufficient because plain-text files
-    beginning with CR (0x0D) would false-positive.
+    Args:
+        path: User-supplied disc filename.
 
-    See https://www.bbcbasic.net/wiki/doku.php?id=format for the
-    canonical format-detection algorithm.
+    Returns:
+        Fully-qualified disc path with directory prefix.
     """
-    if len(data) < 2 or data[0] != 0x0D:
-        return False
-
-    # Walk the line structure and check for the 0xFF end marker.
-    prog_size = basicProgramSize(data)
-    return prog_size >= 2 and data[prog_size - 1] == 0xFF
-
-
-# Bytes acceptable in a plain-text file: printable ASCII plus common
-# whitespace (tab, carriage return, line feed).
-_PLAIN_TEXT_BYTES = frozenset(range(0x20, 0x7F)) | {0x09, 0x0A, 0x0D}
-
-
-def looksLikePlainText(data: bytes) -> bool:
-    """True if every byte is printable ASCII or common whitespace.
-
-    Checks for printable ASCII (0x20-0x7E) plus tab (0x09), line feed
-    (0x0A), and carriage return (0x0D). An empty file is not plain text.
-    """
-    if not data:
-        return False
-    return all(b in _PLAIN_TEXT_BYTES for b in data)
-
-
-
+    if len(path) >= 3 and path[1] == ".":
+        return path
+    return f"$.{path}"
 
 
 # -----------------------------------------------------------------------
@@ -204,40 +184,7 @@ def looksLikePlainText(data: bytes) -> bool:
 _ESCAPE_RE = re.compile(r"\\x([0-9A-F]{2})")
 
 
-def escapeNonAscii(line: str) -> str:
-    """Replace non-printable-ASCII characters with \\xHH escapes.
-
-    Characters outside the printable ASCII range 0x20-0x7E (e.g. BBC Micro
-    teletext control codes embedded in PRINT strings) are replaced with a
-    two-digit hex escape.  A literal backslash followed by 'x' is escaped
-    as \\x5Cx to avoid ambiguity on the reverse trip.
-
-    This is the forward half of a lossless round-trip.  Use unescapeNonAscii()
-    to reverse.
-    """
-    out: list[str] = []
-
-    for ch in line:
-        code = ord(ch)
-        if code == 0x5C:
-            # Escape a literal backslash only when it would be ambiguous
-            # (i.e. followed by 'x' and two hex digits).  For simplicity
-            # we always escape backslash so the reverse is unambiguous.
-            out.append("\\x5C")
-        elif 0x20 <= code <= 0x7E:
-            out.append(ch)
-        else:
-            out.append(f"\\x{code:02X}")
-
-    return "".join(out)
-
-
-def unescapeNonAscii(line: str) -> str:
-    """Reverse escapeNonAscii - convert \\xHH sequences back to characters."""
-    return _ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), line)
-
-
-def _writeBasicText(
+def writeBasicText(
     path: str,
     lines: list[str],
     text_mode: str,
@@ -263,7 +210,7 @@ def _writeBasicText(
             f.write("\n".join(lines) + "\n")
 
 
-def _readBasicText(data: bytes) -> list[str]:
+def readBasicText(data: bytes) -> list[str]:
     """Read a .bas file's bytes and return lines, unescaping if needed.
 
     Detects escape mode by looking for \\xHH sequences.  Otherwise tries
@@ -285,7 +232,179 @@ def _readBasicText(data: bytes) -> list[str]:
 
 
 # -----------------------------------------------------------------------
-# Sorting (format-agnostic, moved from dfs.py, retyped to DiscEntry)
+# Single-file extraction
+# -----------------------------------------------------------------------
+
+@dataclass
+class ExtractedFile:
+    """A file extracted from a disc image with post-processing applied.
+
+    This is the read-path counterpart to DiscFile (the write-path
+    transport).  DiscFile carries raw content going in; ExtractedFile
+    carries classified, potentially detokenized content coming out.
+
+    See architecture.md 'File Data Types' for why DiscEntry, DiscFile,
+    and ExtractedFile are separate types.
+
+    Attributes:
+        file_type:  Classification string ("BASIC", "BASIC+MC", "binary").
+        data:       Raw file bytes (always populated).
+        lines:      Detokenized BASIC lines (None for non-BASIC files).
+        entry:      The matched catalogue entry.
+        side:       Disc side number the file was found on.
+        basic_size: Size of the BASIC program portion (BASIC+MC only).
+    """
+    file_type: str
+    data: bytes
+    lines: Optional[List[str]]
+    entry: DiscEntry
+    side: int
+    basic_size: Optional[int] = None
+
+
+def extractFile(
+    image_path: str,
+    filename: str,
+    pretty: bool = False,
+    text_mode: str = "ascii",
+) -> ExtractedFile:
+    """Extract a single file from a disc image by name.
+
+    Handles file lookup across sides, ambiguity resolution, BASIC
+    detection, hybrid (BASIC+MC) detection, detokenization, and
+    pretty-printing. Returns a structured result - does not write
+    to the filesystem or stdout.
+
+    Args:
+        image_path: Path to a disc image (.ssd, .dsd, .adf, or .adl).
+        filename:   File to extract (e.g. 'T.MYPROG', '$.GAMES.ELITE',
+                    or bare 'MYPROG').
+        pretty:     Apply pretty-printer spacing to BASIC output.
+        text_mode:  Encoding for BASIC text ('ascii', 'utf8', 'escape').
+
+    Returns:
+        ExtractedFile with the file data and metadata.
+
+    Raises:
+        DiscError: If file not found or filename is ambiguous.
+    """
+    image = openImage(image_path)
+    target = filename
+    found = None
+
+    # Try exact fullName match (handles "T.MYPROG" and "$.GAMES.ELITE").
+    if "." in target:
+        for disc in image.sides:
+            catalogue = disc.readCatalogue()
+            for e in catalogue.entries:
+                if e.fullName.upper() == target.upper():
+                    found = (disc, e)
+                    break
+            if found:
+                break
+
+    if not found:
+        # Bare name search across all sides and directories.
+        matches = []
+
+        for disc in image.sides:
+            catalogue = disc.readCatalogue()
+            for e in catalogue.entries:
+                if e.name.upper() == target.upper():
+                    matches.append((disc, e))
+
+        if len(matches) == 1:
+            found = matches[0]
+        elif len(matches) > 1:
+            locations = ", ".join(
+                f"Side {d.side}: {e.fullName}" for d, e in matches
+            )
+            raise DiscError(
+                f"Ambiguous filename '{target}' - specify with full path. "
+                f"Found: {locations}"
+            )
+
+    if not found:
+        raise DiscError(f"File not found: {target}")
+
+    disc, entry = found
+    data = disc.readFile(entry)
+
+    # Classify the file content.
+    file_type = classifyFileType(entry, data)
+
+    if file_type == "BASIC":
+        # Pure BASIC - detokenize and optionally pretty-print.
+        text_lines = detokenize(data)
+        if pretty:
+            text_lines = prettyPrint(text_lines)
+        return ExtractedFile(
+            file_type="BASIC", data=data, lines=text_lines,
+            entry=entry, side=disc.side,
+        )
+
+    if file_type == "BASIC+MC":
+        # Hybrid file - return raw binary to preserve machine code.
+        prog_size = basicProgramSize(data)
+        return ExtractedFile(
+            file_type="BASIC+MC", data=data, lines=None,
+            entry=entry, side=disc.side, basic_size=prog_size,
+        )
+
+    # Binary or text - return raw data.
+    return ExtractedFile(
+        file_type=file_type, data=data, lines=None,
+        entry=entry, side=disc.side,
+    )
+
+
+# -----------------------------------------------------------------------
+# Add file to disc image
+# -----------------------------------------------------------------------
+
+def addFileTo(
+    image: DiscImage,
+    side_index: int,
+    spec: DiscFile,
+    retokenize: bool = False,
+) -> DiscEntry:
+    """Add a file to a disc image with optional retokenization.
+
+    When retokenize is True and the file data is plain-text BASIC (not
+    already tokenized), it is tokenized before adding to the disc.
+
+    Args:
+        image:       Open disc image.
+        side_index:  Disc side number (0 or 1).
+        spec:        DiscFile with path, data, addresses, and lock flag.
+        retokenize:  If True, tokenize plain-text BASIC data.
+
+    Returns:
+        The new catalogue entry added to the disc.
+
+    Raises:
+        DiscError: If the file cannot be added.
+    """
+    data = spec.data
+
+    # Retokenize plain-text BASIC if requested.
+    if retokenize and not looksLikeTokenizedBasic(data) and looksLikePlainText(data):
+        text = data.decode("ascii", errors="replace")
+        text_lines = text.splitlines()
+        data = tokenize(text_lines)
+        # Rebuild spec with tokenized data.
+        spec = DiscFile(
+            path=spec.path, data=data,
+            load_addr=spec.load_addr, exec_addr=spec.exec_addr,
+            locked=spec.locked,
+        )
+
+    side = image.sides[side_index]
+    return side.addFile(spec)
+
+
+# -----------------------------------------------------------------------
+# Sorting (format-agnostic)
 # -----------------------------------------------------------------------
 
 def sortCatalogueEntries(
@@ -376,11 +495,11 @@ def search(
             if not looksLikeTokenizedBasic(data):
                 continue
 
-            lines = detokenize(data)
+            text_lines = detokenize(data)
             if pretty:
-                lines = prettyPrint(lines)
+                text_lines = prettyPrint(text_lines)
 
-            for line in lines:
+            for line in text_lines:
                 # Lines are formatted as a 5-char right-justified number + content.
                 # Search the content part only, not the leading line number.
                 content = line[5:]
@@ -482,7 +601,7 @@ def extractAll(
                     text_lines = detokenize(data)
                     if pretty:
                         text_lines = prettyPrint(text_lines)
-                    _writeBasicText(out_path, text_lines, text_mode)
+                    writeBasicText(out_path, text_lines, text_mode)
                     results.append({"type": "BASIC", "path": out_path})
 
             elif looksLikePlainText(data):
@@ -650,7 +769,7 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
         # restores the compact binary representation so the rebuilt
         # disc image does not overflow.
         if name.endswith(".bas") and isBasicExecAddr(inf.exec_addr):
-            lines = _readBasicText(data)
+            lines = readBasicText(data)
             data = tokenize(lines)
 
         # Add to disc using the path from the .inf sidecar.

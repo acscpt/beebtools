@@ -1,18 +1,232 @@
 # SPDX-FileCopyrightText: 2026 Heisenberg (acscpt)
 # SPDX-License-Identifier: MIT
 
-"""BBC BASIC II tokenizer.
+"""BBC BASIC II facade module.
 
-Converts LIST-style plain text back into the tokenized binary format
-understood by the BBC Micro BASIC ROM. This is the inverse of
-detokenize.py.
+Unified API for all BBC BASIC program handling: tokenization,
+detokenization, content classification, and text escaping. Higher
+layers (disc.py, cli.py) import from this module rather than reaching
+into the individual sub-modules.
+
+This module contains the core tokenizer and detokenizer (merged from
+the former detokenize.py and tokenize.py), plus content-inspection
+utilities that answer questions about BASIC program data.
+
+The pretty-printer (pretty.py) is a separate optional display transform;
+its prettyPrint function is re-exported here for convenience so callers
+have a single import point for all BASIC operations.
 """
 
 import re
 from typing import Dict, FrozenSet, List, Set, Tuple
 
 from .tokens import TOKENS, LINE_LITERAL_TOKENS
+from .entry import DiscEntry
+from .pretty import prettyPrint  # noqa: F401 - re-export
 
+
+# =====================================================================
+# Detokenizer
+# =====================================================================
+
+def decodeLineRef(b0: int, b1: int, b2: int) -> int:
+    """Decode a BBC BASIC inline line-number reference.
+
+    The encoding XORs the top two bits of each byte of the 16-bit line number
+    into a single control byte, with the sentinel value 0x54.
+
+    Args:
+        b0: Control byte encoding the high bits.
+        b1: Encoded low byte payload.
+        b2: Encoded high byte payload.
+
+    Returns:
+        Decoded BBC BASIC line number as an integer.
+    """
+    x = b0 ^ 0x54
+    lo = (b1 & 0x3F) | ((x & 0x30) << 2)
+    hi = (b2 & 0x3F) | ((x & 0x0C) << 4)
+    return hi * 256 + lo
+
+
+def basicProgramSize(data: bytes) -> int:
+    """Return the number of bytes occupied by the BASIC program in data.
+
+    Walks the tokenized line structure and returns the offset just past
+    the 0x0D 0xFF end-of-program marker. If the file is entirely BASIC
+    this equals len(data) (or close to it, with a few padding bytes).
+    If there is appended machine code the return value will be much
+    smaller than len(data).
+
+    Returns 0 if data does not start with a valid BASIC line marker.
+    """
+    pos = 0
+
+    while pos < len(data):
+        if data[pos] != 0x0D:
+            break
+
+        pos += 1
+        if pos >= len(data):
+            break
+
+        hi = data[pos]
+        if hi == 0xFF:
+            # End-of-program marker.  Program occupies bytes 0..pos inclusive.
+            return pos + 1
+
+        if pos + 2 >= len(data):
+            break
+
+        linelen = data[pos + 2]
+
+        # A valid record is at least 4 bytes (hi, lo, len, trailing 0x0D).
+        if linelen < 4:
+            break
+
+        pos = pos - 1 + linelen
+
+    # Fell off the end without hitting 0xFF - return current position.
+    return pos
+
+
+def detokenize(data: bytes) -> List[str]:
+    """Convert a tokenized BBC BASIC program to LIST-style text lines.
+
+    Each line in the returned list corresponds to one BASIC program line and
+    is formatted as a right-justified 5-character line number followed by the
+    decoded statement text.
+
+    Args:
+        data: Raw bytes of a tokenized BBC BASIC II program.
+
+    Returns:
+        List of strings, one per program line.
+    """
+    lines = []
+    pos = 0
+
+    # Walk the tokenized program line-by-line.  Each record starts with 0x0D,
+    # followed by high/low line number bytes, a length byte, and the content.
+    while pos < len(data):
+        if data[pos] != 0x0D:
+            break
+
+        pos += 1
+        if pos >= len(data):
+            break
+
+        hi = data[pos]
+        if hi == 0xFF:
+            # End-of-program marker.
+            break
+
+        # Guard against a truncated record at the end of the file.
+        if pos + 2 >= len(data):
+            break
+
+        lo = data[pos + 1]
+        linenum = hi * 256 + lo
+        linelen = data[pos + 2]
+
+        # A valid record is at least 4 bytes (hi, lo, len, trailing 0x0D).
+        # A zero or tiny length means we have hit trailing machine code
+        # or corrupt data appended after the BASIC program - stop parsing.
+        if linelen < 4:
+            break
+
+        # Content runs from the byte after the header to the end of the record.
+        # The length byte counts from the hi byte to where the next 0x0D starts.
+        content = data[pos + 3 : pos - 1 + linelen]
+        pos = pos - 1 + linelen
+
+        text = _decodeLineContent(content)
+        lines.append(f"{linenum:>5d}{text}")
+
+    return lines
+
+
+def _decodeLineContent(content: bytes) -> str:
+    """Decode token bytes for one BASIC line into LIST text.
+
+    Args:
+        content: Tokenized bytes for one line body (no line header, no trailing 0x0D).
+
+    Returns:
+        Decoded line text string.
+    """
+    parts = []
+    i = 0
+    in_string = False
+    literal_rest = False
+
+    while i < len(content):
+        b = content[i]
+
+        # Line terminator - always ends the content regardless of context.
+        # In Acorn/Wilson format the content slice includes a trailing 0x0D;
+        # in Russell format it does not. Either way, 0x0D cannot appear as
+        # actual program text on the BBC Micro.
+        if b == 0x0D:
+            break
+
+        # Inside a quoted string - emit raw bytes verbatim, handle close quote.
+        if in_string:
+            if b == 0x22:
+                in_string = False
+                parts.append('"')
+            else:
+                parts.append(chr(b))
+            i += 1
+            continue
+
+        # After DATA or REM the rest of the line is literal - no token expansion.
+        if literal_rest:
+            parts.append(chr(b))
+            i += 1
+            continue
+
+        # Opening quote - switch to string mode.
+        if b == 0x22:
+            in_string = True
+            parts.append('"')
+            i += 1
+            continue
+
+        # Inline encoded line number (GOTO/GOSUB target).
+        if b == 0x8D:
+            if i + 3 < len(content):
+                target = decodeLineRef(content[i + 1], content[i + 2],
+                                       content[i + 3])
+                parts.append(str(target))
+                i += 4
+            else:
+                parts.append("?")
+                i += 1
+            continue
+
+        # Token byte - look it up and emit the keyword.
+        if b >= 0x80:
+            keyword = TOKENS.get(b)
+            if keyword is not None:
+                parts.append(keyword)
+                if b in LINE_LITERAL_TOKENS:
+                    literal_rest = True
+            else:
+                parts.append(f"[&{b:02X}]")
+            i += 1
+            continue
+
+        # Plain ASCII character.
+        parts.append(chr(b))
+        i += 1
+
+    return "".join(parts)
+
+
+# =====================================================================
+# Tokenizer
+# =====================================================================
 
 # -----------------------------------------------------------------------
 # Reverse mapping: keyword string -> token byte
@@ -26,7 +240,7 @@ from .tokens import TOKENS, LINE_LITERAL_TOKENS
 _PSEUDO_VAR_STATEMENT_TOKENS = {0xCF, 0xD0, 0xD1, 0xD2, 0xD3}
 _PSEUDO_VAR_BASE = {0x8F, 0x90, 0x91, 0x92, 0x93}
 
-_KEYWORD_TO_TOKEN = {}
+_KEYWORD_TO_TOKEN: Dict[str, int] = {}
 for _tok, _kw in TOKENS.items():
     if _tok in _PSEUDO_VAR_STATEMENT_TOKENS:
         continue  # handled by the +0x40 pseudo-variable logic
@@ -504,10 +718,6 @@ def _tokenizeContent(text: str, fn_proc_names: Dict[str, FrozenSet[str]] = None)
     return bytes(result)
 
 
-# -----------------------------------------------------------------------
-# Public API
-# -----------------------------------------------------------------------
-
 def tokenize(lines: List[str]) -> bytes:
     """Convert LIST-style text lines to tokenized BBC BASIC II binary.
 
@@ -560,3 +770,122 @@ def tokenize(lines: List[str]) -> bytes:
     result.append(0xFF)
 
     return bytes(result)
+
+
+# =====================================================================
+# Content classification
+# =====================================================================
+
+def looksLikeTokenizedBasic(data: bytes) -> bool:
+    """True if data contains a structurally valid Wilson/Acorn BASIC program.
+
+    Walks the tokenized line structure looking for the 0x0D 0xFF
+    end-of-program marker that every valid BBC BASIC program contains.
+
+    A first-byte-only check is not sufficient because plain-text files
+    beginning with CR (0x0D) would false-positive.
+
+    See https://www.bbcbasic.net/wiki/doku.php?id=format for the
+    canonical format-detection algorithm.
+    """
+    if len(data) < 2 or data[0] != 0x0D:
+        return False
+
+    # Walk the line structure and check for the 0xFF end marker.
+    prog_size = basicProgramSize(data)
+    return prog_size >= 2 and data[prog_size - 1] == 0xFF
+
+
+# Bytes acceptable in a plain-text file: printable ASCII plus common
+# whitespace (tab, carriage return, line feed).
+_PLAIN_TEXT_BYTES = frozenset(range(0x20, 0x7F)) | {0x09, 0x0A, 0x0D}
+
+
+def looksLikePlainText(data: bytes) -> bool:
+    """True if every byte is printable ASCII or common whitespace.
+
+    Checks for printable ASCII (0x20-0x7E) plus tab (0x09), line feed
+    (0x0A), and carriage return (0x0D). An empty file is not plain text.
+    """
+    if not data:
+        return False
+    return all(b in _PLAIN_TEXT_BYTES for b in data)
+
+
+def classifyFileType(entry: DiscEntry, data: bytes) -> str:
+    """Classify a disc file by inspecting its metadata and content.
+
+    Returns one of:
+        "BASIC"    - pure tokenized BASIC program
+        "BASIC+MC" - BASIC program with appended machine code
+        "BASIC?"   - has BASIC exec address but data is not tokenized
+        "TEXT"     - plain ASCII text file
+        "binary"   - everything else
+
+    Args:
+        entry: Catalogue entry with metadata (isBasic, isDirectory, etc.).
+        data:  Raw file content bytes.
+
+    Returns:
+        Classification string.
+    """
+    # Check for tokenized BASIC (by exec address or content).
+    if entry.isBasic:
+        if looksLikeTokenizedBasic(data):
+            prog_size = basicProgramSize(data)
+            if prog_size < len(data) - 16:
+                return "BASIC+MC"
+            return "BASIC"
+        return "BASIC?"
+
+    # Content-based detection for files without a BASIC exec address.
+    if looksLikeTokenizedBasic(data):
+        prog_size = basicProgramSize(data)
+        if prog_size < len(data) - 16:
+            return "BASIC+MC"
+        return "BASIC?"
+
+    # Plain text detection.
+    if looksLikePlainText(data):
+        return "TEXT"
+
+    return "binary"
+
+
+# =====================================================================
+# Text escaping for non-ASCII round-tripping
+# =====================================================================
+
+# Regex matching a \xHH escape sequence (two uppercase hex digits).
+_ESCAPE_RE = re.compile(r"\\x([0-9A-F]{2})")
+
+
+def escapeNonAscii(line: str) -> str:
+    """Replace non-printable-ASCII characters with \\xHH escapes.
+
+    Characters outside the printable ASCII range 0x20-0x7E (e.g. BBC Micro
+    teletext control codes embedded in PRINT strings) are replaced with a
+    two-digit hex escape.  A literal backslash followed by 'x' is escaped
+    as \\x5Cx to avoid ambiguity on the reverse trip.
+
+    This is the forward half of a lossless round-trip.  Use unescapeNonAscii()
+    to reverse.
+    """
+    out: list[str] = []
+
+    for ch in line:
+        code = ord(ch)
+        if code == 0x5C:
+            # Always escape backslash so the reverse is unambiguous.
+            out.append("\\x5C")
+        elif 0x20 <= code <= 0x7E:
+            out.append(ch)
+        else:
+            out.append(f"\\x{code:02X}")
+
+    return "".join(out)
+
+
+def unescapeNonAscii(line: str) -> str:
+    """Reverse escapeNonAscii - convert \\xHH sequences back to characters."""
+    return _ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), line)

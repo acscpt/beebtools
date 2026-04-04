@@ -39,8 +39,7 @@ Usage as a CLI tool:
 
 Modules:
     tokens        -- BBC BASIC II token table and constants
-    detokenize    -- tokenized binary to LIST-style text
-    tokenize      -- LIST-style text to tokenized binary
+    basic         -- BASIC facade: tokenize, detokenize, classify, escape
     pretty        -- operator spacing and anti-listing trap handling
     dfs           -- DFS disc image reader and writer (.ssd and .dsd)
     adfs          -- ADFS disc image reader and writer (.adf and .adl)
@@ -49,9 +48,13 @@ Modules:
     cli           -- command-line interface
 """
 
-from .detokenize import basicProgramSize, detokenize, decodeLineRef
-from .tokenize import tokenize, encodeLineRef
-from .pretty import prettyPrint
+from .basic import (
+    basicProgramSize, detokenize, decodeLineRef,
+    tokenize, encodeLineRef,
+    prettyPrint,
+    looksLikeTokenizedBasic, looksLikePlainText, classifyFileType,
+    escapeNonAscii, unescapeNonAscii,
+)
 from .boot import BootOption
 from .entry import DiscEntry, DiscCatalogue, DiscFile, DiscError, DiscFormatError, isBasicExecAddr
 from .codec import registerCodec
@@ -91,9 +94,9 @@ from .image import openImage, createImage, DiscSide, DiscImage
 from .inf import InfData, parseInf, formatInf
 from .disc import (
     search, extractAll, buildImage,
-    looksLikeTokenizedBasic, looksLikePlainText,
     sortCatalogueEntries,
-    escapeNonAscii, unescapeNonAscii,
+    extractFile, ExtractedFile, addFileTo, qualifyDiscPath,
+    writeBasicText, readBasicText,
 )
 from .cli import main
 
@@ -151,9 +154,19 @@ __all__ = [
     "search",
     "extractAll",
     "buildImage",
+    "sortCatalogueEntries",
+    "extractFile",
+    "ExtractedFile",
+    "addFileTo",
+    "qualifyDiscPath",
+    "writeBasicText",
+    "readBasicText",
+    # BASIC facade (basic.py)
     "looksLikeTokenizedBasic",
     "looksLikePlainText",
-    "sortCatalogueEntries",
+    "classifyFileType",
+    "escapeNonAscii",
+    "unescapeNonAscii",
     "main",
 ]
 

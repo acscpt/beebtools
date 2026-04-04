@@ -98,6 +98,98 @@ hits = search("mydisc.ssd", r"PROC\w+", filename="T.MYPROG",
               ignore_case=True, use_regex=True)
 ```
 
+## Extracting a single file
+
+`extractFile()` handles file lookup across disc sides, ambiguity
+resolution, BASIC/hybrid detection, and detokenization in a single call.
+It returns an `ExtractedFile` with the classified data.
+
+```python
+from beebtools import extractFile
+
+result = extractFile("mydisc.ssd", "T.MYPROG", pretty=True)
+
+if result.file_type == "BASIC" and result.lines is not None:
+    # Pure BASIC - result.lines contains detokenized text
+    print("\n".join(result.lines))
+
+elif result.file_type == "BASIC+MC":
+    # Hybrid - BASIC with appended machine code
+    print(f"BASIC portion: {result.basic_size} bytes")
+    print(f"Total size: {len(result.data)} bytes")
+
+else:
+    # Binary file - result.data contains raw bytes
+    print(f"{result.entry.fullName}  {len(result.data)} bytes")
+```
+
+The `file_type` field is one of `"BASIC"`, `"BASIC+MC"`, `"BASIC?"`,
+`"TEXT"`, or `"binary"`. The `entry` field carries the original catalogue
+metadata (`load_addr`, `exec_addr`, `fullName`, etc.).
+
+## Classifying file contents
+
+`classifyFileType()` inspects a file's metadata and raw content to
+determine its type. This is the same logic used by `beebtools cat -i`.
+
+```python
+from beebtools import openImage, classifyFileType
+
+image = openImage("mydisc.ssd")
+for side in image.sides:
+    catalogue = side.readCatalogue()
+    for entry in catalogue.entries:
+        data = side.readFile(entry)
+        file_type = classifyFileType(entry, data)
+        print(f"{entry.fullName:12s}  {file_type}")
+```
+
+## Adding files with retokenization
+
+`addFileTo()` wraps `side.addFile()` with optional retokenization - if
+the source file is plain-text BASIC (e.g. a `.bas` file saved from an
+editor), it is tokenized before being written to the disc image.
+
+```python
+from beebtools import openImage, addFileTo, DiscFile
+
+image = openImage("mydisc.ssd")
+
+# Add a plain-text BASIC file - it will be tokenized automatically
+with open("game.bas", "rb") as f:
+    data = f.read()
+
+entry = addFileTo(
+    image, side_index=0,
+    spec=DiscFile(path="$.GAME", data=data,
+                  load_addr=0x1900, exec_addr=0x8023),
+    retokenize=True,
+)
+print(f"Added {entry.fullName} ({entry.length} bytes)")
+
+with open("mydisc.ssd", "wb") as f:
+    f.write(image.serialize())
+```
+
+## Non-ASCII round-tripping
+
+BBC BASIC programs often contain non-ASCII bytes (teletext control codes,
+graphics characters) embedded in PRINT strings. `escapeNonAscii()` and
+`unescapeNonAscii()` convert these to `\xHH` notation for lossless
+storage in plain ASCII text files.
+
+```python
+from beebtools import escapeNonAscii, unescapeNonAscii
+
+line = 'PRINT "\x85Hello"'
+escaped = escapeNonAscii(line)     # 'PRINT "\\x85Hello"'
+restored = unescapeNonAscii(escaped)  # 'PRINT "\x85Hello"'
+assert restored == line
+```
+
+The `writeBasicText()` and `readBasicText()` helpers use this internally
+when `text_mode="escape"` is specified.
+
 ## Creating and building disc images
 
 Create blank disc images programmatically, add files one at a time, or

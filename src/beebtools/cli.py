@@ -14,17 +14,15 @@ import sys
 from argparse import Namespace
 from typing import Optional
 
-from .detokenize import basicProgramSize, detokenize
-from .tokenize import tokenize
-from .pretty import prettyPrint
 from .boot import BootOption
 from .entry import DiscError, DiscFile
 from .inf import parseInf
 from .disc import (
     openImage, createImage,
     search, extractAll, buildImage,
-    looksLikeTokenizedBasic, looksLikePlainText, sortCatalogueEntries,
-    escapeNonAscii, _writeBasicText,
+    sortCatalogueEntries, classifyFileType,
+    extractFile, addFileTo, qualifyDiscPath,
+    writeBasicText, escapeNonAscii,
 )
 
 
@@ -99,36 +97,25 @@ def cmdCat(args: Namespace) -> None:
 
                 if is_dir:
                     ftype = _colour("DIR", _CYAN, use_colour)
-                elif e.isBasic:
-                    if args.inspect:
-                        # Read the file to detect BASIC+machine-code hybrids.
-                        file_data = disc.readFile(e)
-                        if looksLikeTokenizedBasic(file_data):
-                            prog_size = basicProgramSize(file_data)
-                            if prog_size < len(file_data) - 16:
-                                ftype = _colour("BASIC+MC", _MAGENTA, use_colour)
-                            else:
-                                ftype = _colour("BASIC", _CYAN, use_colour)
-                        else:
-                            ftype = _colour("BASIC", _CYAN, use_colour)
-                    else:
-                        ftype = _colour("BASIC", _CYAN, use_colour)
                 elif args.inspect:
-                    # Content-inspect files without a BASIC exec address.
-                    # Some BASIC files (e.g. DATA fragments) are saved with
-                    # non-standard exec addresses; some BASIC+MC hybrids
-                    # (e.g. SnowMen) use one to prevent accidental *RUN.
+                    # Content-inspect the file to classify its type.
                     file_data = disc.readFile(e)
-                    if looksLikeTokenizedBasic(file_data):
-                        prog_size = basicProgramSize(file_data)
-                        if prog_size < len(file_data) - 16:
-                            ftype = _colour("BASIC+MC", _MAGENTA, use_colour)
-                        else:
-                            ftype = _colour("BASIC?", _GREEN, use_colour)
-                    elif looksLikePlainText(file_data):
-                        ftype = _colour("TEXT", _YELLOW, use_colour)
+                    tag = classifyFileType(e, file_data)
+
+                    _TAG_COLOURS = {
+                        "BASIC":    (_CYAN,    "BASIC"),
+                        "BASIC+MC": (_MAGENTA, "BASIC+MC"),
+                        "BASIC?":   (_GREEN,   "BASIC?"),
+                        "TEXT":     (_YELLOW,  "TEXT"),
+                    }
+                    if tag in _TAG_COLOURS:
+                        colour, label = _TAG_COLOURS[tag]
+                        ftype = _colour(label, colour, use_colour)
                     else:
                         ftype = ""
+                elif e.isBasic:
+                    # Metadata-only mode: trust the exec address.
+                    ftype = _colour("BASIC", _CYAN, use_colour)
                 else:
                     ftype = ""
 
@@ -234,91 +221,51 @@ def cmdExtract(args: Namespace) -> None:
         print("Error: filename required unless -a/--all is specified.", file=sys.stderr)
         sys.exit(1)
 
-    sides = openImage(args.image)
-    target = args.filename
-    found = None
-
-    # Try exact fullName match (handles "T.MYPROG" and "$.GAMES.ELITE").
-    if "." in target:
-        for disc in sides.sides:
-            catalogue = disc.readCatalogue()
-            for e in catalogue.entries:
-                if e.fullName.upper() == target.upper():
-                    found = (disc, e)
-                    break
-            if found:
-                break
-
-    if not found:
-        # Bare name search across all sides and directories.
-        matches = []
-
-        for disc in sides.sides:
-            catalogue = disc.readCatalogue()
-            for e in catalogue.entries:
-                if e.name.upper() == target.upper():
-                    matches.append((disc, e))
-
-        if len(matches) == 1:
-            found = matches[0]
-        elif len(matches) > 1:
-            print(
-                f"Ambiguous filename '{target}' - specify with full path.",
-                file=sys.stderr,
-            )
-            for disc, entry in matches:
-                print(f"  Side {disc.side}: {entry.fullName}",
-                      file=sys.stderr)
-            sys.exit(1)
-
-    if not found:
-        print(f"File not found: {target}", file=sys.stderr)
+    try:
+        result = extractFile(args.image, args.filename,
+                             pretty=args.pretty, text_mode=text_mode)
+    except DiscError as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    disc, entry = found
-    data = disc.readFile(entry)
-
-    if entry.isBasic and looksLikeTokenizedBasic(data):
-        # Check for BASIC + appended machine code hybrid.
-        prog_size = basicProgramSize(data)
-        has_trailing_binary = prog_size < len(data) - 16
-
-        if has_trailing_binary:
-            # Hybrid file - warn and treat as binary to preserve machine code.
-            print(
-                f"BASIC+MC  {entry.fullName}  "
-                f"BASIC={prog_size}b + {len(data) - prog_size}b machine code  "
-                f"(extracting as binary to preserve machine code)",
-                file=sys.stderr,
-            )
-
-            if args.output:
-                with open(args.output, "wb") as f:
-                    f.write(data)
-                print(f"Extracted to {args.output}", file=sys.stderr)
-            else:
-                sys.stdout.buffer.write(data)
+    if result.file_type == "BASIC" and result.lines is not None:
+        # Pure BASIC - emit as LIST-style text.
+        if args.output:
+            writeBasicText(args.output, result.lines, text_mode)
+            print(f"Extracted to {args.output}", file=sys.stderr)
         else:
-            # Pure BASIC - detokenize and emit as LIST-style text.
-            text_lines = detokenize(data)
-            if args.pretty:
-                text_lines = prettyPrint(text_lines)
-
-            if args.output:
-                _writeBasicText(args.output, text_lines, text_mode)
-                print(f"Extracted to {args.output}", file=sys.stderr)
+            # Stdout: apply escape mode if requested, otherwise raw.
+            if text_mode == "escape":
+                out_lines = [escapeNonAscii(l) for l in result.lines]
             else:
-                # Stdout: apply escape mode if requested, otherwise raw.
-                if text_mode == "escape":
-                    text_lines = [escapeNonAscii(l) for l in text_lines]
-                output = "\n".join(text_lines) + "\n"
-                sys.stdout.write(output)
+                out_lines = result.lines
+            output = "\n".join(out_lines) + "\n"
+            sys.stdout.write(output)
+
+    elif result.file_type == "BASIC+MC":
+        # Hybrid file - warn and treat as binary to preserve machine code.
+        entry = result.entry
+        mc_size = len(result.data) - (result.basic_size or 0)
+        print(
+            f"BASIC+MC  {entry.fullName}  "
+            f"BASIC={result.basic_size}b + {mc_size}b machine code  "
+            f"(extracting as binary to preserve machine code)",
+            file=sys.stderr,
+        )
+
+        if args.output:
+            with open(args.output, "wb") as f:
+                f.write(result.data)
+            print(f"Extracted to {args.output}", file=sys.stderr)
+        else:
+            sys.stdout.buffer.write(result.data)
 
     else:
         # Binary file.
+        entry = result.entry
         if args.output:
             with open(args.output, "wb") as f:
-                f.write(data)
+                f.write(result.data)
             print(f"Extracted to {args.output}")
             print(
                 f"{entry.fullName}  "
@@ -328,7 +275,7 @@ def cmdExtract(args: Namespace) -> None:
             )
         else:
             # Raw bytes to stdout for piping to a disassembler.
-            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.write(result.data)
 
 
 def cmdCreate(args: Namespace) -> None:
@@ -369,7 +316,6 @@ def cmdAdd(args: Namespace) -> None:
         args: Parsed argparse namespace for the 'add' subcommand.
     """
     image = openImage(args.image)
-    side = image.sides[args.side]
 
     if args.inf:
         # Warn if --basic was also specified - .inf overrides everything.
@@ -402,13 +348,8 @@ def cmdAdd(args: Namespace) -> None:
                   file=sys.stderr)
             sys.exit(1)
 
-        # Ensure path is fully qualified.
-        # DFS names like 'T.MYPROG' or bare 'MYPROG' -> '$.MYPROG'
-        # ADFS names like '$.DIR.FILE' pass through unchanged.
-        if len(file_name) >= 3 and file_name[1] == ".":
-            disc_path = file_name
-        else:
-            disc_path = f"$.{file_name}"
+        # Normalise the path to a fully-qualified disc path.
+        disc_path = qualifyDiscPath(file_name)
 
         # Apply BASIC defaults first, then let explicit flags override.
         if args.basic:
@@ -439,31 +380,31 @@ def cmdAdd(args: Namespace) -> None:
     with open(args.file, "rb") as f:
         data = f.read()
 
-    # When --basic is set and the file is plain text (not already
-    # tokenized binary), retokenize it so the BBC Micro can RUN it.
-    if args.basic and not looksLikeTokenizedBasic(data) and looksLikePlainText(data):
-        text = data.decode("ascii", errors="replace")
-        text_lines = text.splitlines()
-        data = tokenize(text_lines)
-        print(f"Tokenized {args.file} ({len(data)} bytes)", file=sys.stderr)
+    original_size = len(data)
 
     try:
-        entry = side.addFile(DiscFile(
-            path=disc_path,
-            data=data,
-            load_addr=load_addr,
-            exec_addr=exec_addr,
-            locked=locked,
-        ))
+        entry = addFileTo(
+            image, args.side,
+            DiscFile(
+                path=disc_path, data=data,
+                load_addr=load_addr, exec_addr=exec_addr,
+                locked=locked,
+            ),
+            retokenize=args.basic,
+        )
     except DiscError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+    # Report tokenization if the stored size differs from the original.
+    if args.basic and entry.length != original_size:
+        print(f"Tokenized {args.file} ({entry.length} bytes)", file=sys.stderr)
 
     # Write the modified image back to the file.
     with open(args.image, "wb") as f:
         f.write(image.serialize())
 
-    print(f"Added {disc_path} ({len(data)} bytes) to {args.image}")
+    print(f"Added {disc_path} ({entry.length} bytes) to {args.image}")
 
 
 def cmdDelete(args: Namespace) -> None:
@@ -477,13 +418,7 @@ def cmdDelete(args: Namespace) -> None:
 
     path = args.filename
 
-    # Ensure path is fully qualified with a directory prefix.
-    # DFS: 'MYPROG' -> '$.MYPROG', 'T.MYPROG' passes through.
-    # ADFS: '$.DIR.FILE' passes through, 'DIR.FILE' -> '$.DIR.FILE'.
-    if len(path) >= 3 and path[1] == ".":
-        disc_path = path
-    else:
-        disc_path = f"$.{path}"
+    disc_path = qualifyDiscPath(path)
 
     try:
         side.deleteFile(disc_path)

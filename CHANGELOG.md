@@ -26,6 +26,26 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (lossless), or `escape` (`\xHH` notation, lossless). The `build` command
   auto-detects all three formats when retokenizing.
 
+- `extractFile()` function for single-file extraction with automatic lookup,
+  BASIC detection, and detokenization. Returns an `ExtractedFile` dataclass.
+
+- `addFileTo()` function wraps `side.addFile()` with optional retokenization
+  of plain-text BASIC files.
+
+- `classifyFileType()` inspects a file's metadata and content to return a
+  classification string (`"BASIC"`, `"BASIC+MC"`, `"BASIC?"`, `"TEXT"`,
+  or `"binary"`).
+
+- `qualifyDiscPath()` normalises user-supplied filenames to fully-qualified
+  disc paths (e.g. `"MYPROG"` becomes `"$.MYPROG"`).
+
+### Changed
+
+- Merged `detokenize.py` and `tokenize.py` into `basic.py`. All BASIC
+  program operations (tokenize, detokenize, classify, escape) are now in a
+  single module. The public API is unchanged - import from `beebtools`
+  as before.
+
 ### Fixed
 
 - **`looksLikeTokenizedBasic` false positives.** Plain-text files starting

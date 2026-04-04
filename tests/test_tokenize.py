@@ -12,7 +12,7 @@ binary for a range of BASIC constructs.
 import pytest
 
 from beebtools import detokenize, tokenize
-from beebtools.tokenize import encodeLineRef, _parseLine, _tokenizeContent
+from beebtools.basic import encodeLineRef, _parseLine, _tokenizeContent
 
 
 # ---------------------------------------------------------------------------
