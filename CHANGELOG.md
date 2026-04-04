@@ -14,6 +14,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Fixed garbled file and disc names on some disc images.** BBC Micro ASCII
+  is 7-bit; bit 7 is repurposed by some filing systems and copy-protection
+  schemes. A `"bbc"` text codec is now registered on `import beebtools`,
+  masking bit 7 correctly. The codec is available globally in Python via
+  `bytes.decode("bbc")`.
+
 - **Detokenizer hang** on files containing a BASIC program with appended
   machine code. A zero-length line record in the binary tail caused an
   infinite loop in `detokenize()`. Files containing a BASIC loader with appended 
