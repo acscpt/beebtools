@@ -42,7 +42,8 @@ def _makeSector0(filename: str, directory: str = "$") -> bytes:
     return bytes(buf)
 
 
-def _makeSector1(file_data_len: int, start_sector: int = 2) -> bytes:
+def _makeSector1(file_data_len: int, start_sector: int = 2,
+                  load_addr: int = 0, exec_addr: int = 0) -> bytes:
     """Build DFS catalogue sector 1 for one file entry."""
     buf = bytearray(SECTOR_SIZE)
 
@@ -55,13 +56,20 @@ def _makeSector1(file_data_len: int, start_sector: int = 2) -> bytes:
     # bytes 0-1: load_lo, bytes 2-3: exec_lo, bytes 4-5: length_lo
     # byte 6: extra bits, byte 7: start_sector
     length_lo = file_data_len & 0xFFFF
-    buf[8] = 0x00          # load lo
-    buf[9] = 0x00          # load hi
-    buf[10] = 0x00         # exec lo
-    buf[11] = 0x00         # exec hi
+    buf[8] = load_addr & 0xFF
+    buf[9] = (load_addr >> 8) & 0xFF
+    buf[10] = exec_addr & 0xFF
+    buf[11] = (exec_addr >> 8) & 0xFF
     buf[12] = length_lo & 0xFF
     buf[13] = (length_lo >> 8) & 0xFF
-    buf[14] = 0x00         # extra bits (high bits all zero)
+
+    # Extra bits: bits 3-2 = exec high, bits 5-4 = length high,
+    #             bits 7-6 = load high, bits 1-0 = start sector high
+    exec_hi = (exec_addr >> 16) & 0x03
+    load_hi = (load_addr >> 16) & 0x03
+    length_hi = (file_data_len >> 16) & 0x03
+    start_hi = (start_sector >> 8) & 0x03
+    buf[14] = (start_hi | (exec_hi << 2) | (length_hi << 4) | (load_hi << 6))
     buf[15] = start_sector & 0xFF
 
     return bytes(buf)
@@ -73,6 +81,24 @@ def _makeSsdImage(filename: str, file_data: bytes, directory: str = "$") -> byte
 
     sec0 = _makeSector0(filename, directory)
     sec1 = _makeSector1(len(file_data), start_sector=2)
+
+    image[0:SECTOR_SIZE] = sec0
+    image[SECTOR_SIZE:2 * SECTOR_SIZE] = sec1
+
+    # File data starts at sector 2
+    start = 2 * SECTOR_SIZE
+    image[start:start + len(file_data)] = file_data
+
+    return bytes(image)
+
+
+def _makeSsdImageBasic(filename: str, file_data: bytes, directory: str = "$") -> bytes:
+    """Build a minimal .ssd disc image with one BASIC file (exec = 0x8023)."""
+    image = bytearray(80 * 10 * SECTOR_SIZE)  # 80 tracks, 10 sectors
+
+    sec0 = _makeSector0(filename, directory)
+    sec1 = _makeSector1(len(file_data), start_sector=2,
+                        load_addr=0x0E00, exec_addr=0x8023)
 
     image[0:SECTOR_SIZE] = sec0
     image[SECTOR_SIZE:2 * SECTOR_SIZE] = sec1
@@ -119,6 +145,39 @@ def _makeDsdImage(
     image[sectorOffset(0, 1, 1):sectorOffset(0, 1, 1) + SECTOR_SIZE] = s1_sec1
 
     # Side 1 file data at logical sector 2 -> track 0, side 1, sector 2
+    off = sectorOffset(0, 1, 2)
+    image[off:off + len(data1)] = data1
+
+    return bytes(image)
+
+
+def _makeDsdImageBasic(
+    filename0: str,
+    data0: bytes,
+    filename1: str,
+    data1: bytes,
+) -> bytes:
+    """Build a .dsd image where both files have BASIC exec address 0x8023."""
+    image = bytearray(80 * 20 * SECTOR_SIZE)
+
+    def sectorOffset(track: int, side: int, sector: int) -> int:
+        return (track * 20 + side * 10 + sector) * SECTOR_SIZE
+
+    # Side 0 catalogue with BASIC exec address.
+    s0_sec0 = _makeSector0(filename0)
+    s0_sec1 = _makeSector1(len(data0), start_sector=2,
+                           load_addr=0x0E00, exec_addr=0x8023)
+    image[sectorOffset(0, 0, 0):sectorOffset(0, 0, 0) + SECTOR_SIZE] = s0_sec0
+    image[sectorOffset(0, 0, 1):sectorOffset(0, 0, 1) + SECTOR_SIZE] = s0_sec1
+    off = sectorOffset(0, 0, 2)
+    image[off:off + len(data0)] = data0
+
+    # Side 1 catalogue with BASIC exec address.
+    s1_sec0 = _makeSector0(filename1)
+    s1_sec1 = _makeSector1(len(data1), start_sector=2,
+                           load_addr=0x0E00, exec_addr=0x8023)
+    image[sectorOffset(0, 1, 0):sectorOffset(0, 1, 0) + SECTOR_SIZE] = s1_sec0
+    image[sectorOffset(0, 1, 1):sectorOffset(0, 1, 1) + SECTOR_SIZE] = s1_sec1
     off = sectorOffset(0, 1, 2)
     image[off:off + len(data1)] = data1
 
@@ -294,6 +353,130 @@ class TestExtractAllDoubleSideSubdir:
 
 
 # ---------------------------------------------------------------------------
+# extractAll: BASIC with trailing machine code
+# ---------------------------------------------------------------------------
+
+def _makeBasicLine(linenum: int, content: bytes) -> bytes:
+    """Build one tokenized BASIC line record."""
+    hi = (linenum >> 8) & 0xFF
+    lo = linenum & 0xFF
+    linelen = 3 + 1 + len(content)
+    return bytes([0x0D, hi, lo, linelen]) + content
+
+
+def _makeBasicProgram(*lines) -> bytes:
+    """Build tokenized BASIC from (linenum, content) tuples + end marker."""
+    data = bytearray()
+    for linenum, content in lines:
+        data += _makeBasicLine(linenum, content)
+    data += bytes([0x0D, 0xFF])
+    return bytes(data)
+
+
+class TestExtractAllBasicHybrid:
+
+    def testPureBasicExtractedAsBas(self, tmp_path):
+        """A file containing only tokenized BASIC should be detokenized and saved as .bas."""
+        basic = _makeBasicProgram((10, bytes([0xF1])))  # 10 PRINT
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(_makeSsdImageBasic("MYPROG", basic))
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, pretty=False)
+
+        assert os.path.isfile(os.path.join(out_dir, "$", "MYPROG.bas"))
+        assert not os.path.isfile(os.path.join(out_dir, "$", "MYPROG.bin"))
+
+    def testBasicWithTrailingMachineCodeExtractedAsBin(self, tmp_path):
+        """A BASIC loader with appended machine code should be saved as .bin to preserve the binary data."""
+        basic = _makeBasicProgram((10, bytes([0xF1])))  # 10 PRINT
+        machine_code = bytes(range(256)) * 4  # 1024 bytes of binary
+        hybrid = basic + machine_code
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(_makeSsdImageBasic("PINBALL", hybrid))
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, pretty=False)
+
+        # Must be saved as binary to preserve the machine code.
+        assert os.path.isfile(os.path.join(out_dir, "$", "PINBALL.bin"))
+        assert not os.path.isfile(os.path.join(out_dir, "$", "PINBALL.bas"))
+
+        # Binary content must be identical to the original.
+        with open(os.path.join(out_dir, "$", "PINBALL.bin"), "rb") as f:
+            assert f.read() == hybrid
+
+    def testHybridResultTypeIsBasicMC(self, tmp_path):
+        """The extractAll result dict for a hybrid file should have type 'BASIC+MC' and include basic_size."""
+        basic = _makeBasicProgram((10, bytes([0xF1])))
+        machine_code = bytes(range(256)) * 4
+        hybrid = basic + machine_code
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(_makeSsdImageBasic("LOADER", hybrid))
+
+        out_dir = str(tmp_path / "out")
+        results = extractAll(img_path, out_dir, pretty=False)
+
+        assert len(results) == 1
+        assert results[0]["type"] == "BASIC+MC"
+        assert "basic_size" in results[0]
+        assert results[0]["basic_size"] == len(basic)
+
+    def testDsdHybridExtractedAsBin(self, tmp_path):
+        """A BASIC+machine-code hybrid on a double-sided DSD should be saved as .bin on both sides."""
+        basic = _makeBasicProgram((10, bytes([0xF1])))  # 10 PRINT
+        machine_code = bytes(range(256)) * 4
+        hybrid = basic + machine_code
+
+        img_path = str(tmp_path / "test.dsd")
+        with open(img_path, "wb") as f:
+            f.write(_makeDsdImageBasic("GAME0", hybrid, "GAME1", hybrid))
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, pretty=False)
+
+        # Both sides should get .bin files.
+        assert os.path.isfile(os.path.join(out_dir, "side0", "$", "GAME0.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "side1", "$", "GAME1.bin"))
+        assert not os.path.isfile(os.path.join(out_dir, "side0", "$", "GAME0.bas"))
+        assert not os.path.isfile(os.path.join(out_dir, "side1", "$", "GAME1.bas"))
+
+    def testAdfsHybridExtractedAsBin(self, tmp_path):
+        """A BASIC+machine-code hybrid in an ADFS image should be saved as .bin."""
+        from beebtools.adfs import createAdfsImage, ADFS_S_SECTORS
+        from beebtools.entry import DiscFile
+
+        basic = _makeBasicProgram((10, bytes([0xF1])))
+        machine_code = bytes(range(256)) * 4
+        hybrid = basic + machine_code
+
+        # Create an ADFS-S image with one BASIC hybrid file.
+        image = createAdfsImage(total_sectors=ADFS_S_SECTORS, title="TEST")
+        side = image.sides[0]
+        side.addFile(DiscFile("$.HYBRID", hybrid, 0x0E00, 0x8023))
+
+        img_path = str(tmp_path / "test.adf")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, pretty=False)
+
+        # Should be saved as .bin, not .bas.
+        assert os.path.isfile(os.path.join(out_dir, "$", "HYBRID.bin"))
+        assert not os.path.isfile(os.path.join(out_dir, "$", "HYBRID.bas"))
+
+        # Binary content must be identical.
+        with open(os.path.join(out_dir, "$", "HYBRID.bin"), "rb") as f:
+            assert f.read() == hybrid
+
+
+# ---------------------------------------------------------------------------
 # cmdCat --inspect tests
 # ---------------------------------------------------------------------------
 
@@ -336,3 +519,37 @@ class TestCmdCatInspect:
         output = self._runCat(tmp_path, b"\xDE\xAD\xBE\xEF" * 4, inspect=True)
         assert "BASIC" not in output
         assert "TEXT" not in output
+
+    def _runCatBasic(self, tmp_path, file_data: bytes, inspect: bool) -> str:
+        """Build an SSD with one BASIC file (exec=0x8023) and run cmdCat."""
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(_makeSsdImageBasic("PROG", file_data))
+        args = Namespace(image=img_path, sort="name", inspect=inspect)
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCat(args)
+        return buf.getvalue()
+
+    def testPureBasicShowsBasicType(self, tmp_path):
+        """A pure BASIC file should show 'BASIC' in the type column."""
+        basic = _makeBasicProgram((10, bytes([0xF1])))
+        output = self._runCatBasic(tmp_path, basic, inspect=False)
+        assert "BASIC" in output
+        assert "BASIC+MC" not in output
+
+    def testHybridShowsBasicWithoutInspect(self, tmp_path):
+        """Without --inspect, a hybrid BASIC+MC file shows plain 'BASIC' since content is not read."""
+        basic = _makeBasicProgram((10, bytes([0xF1])))
+        hybrid = basic + bytes(range(256)) * 4
+        output = self._runCatBasic(tmp_path, hybrid, inspect=False)
+        assert "BASIC" in output
+        assert "BASIC+MC" not in output
+
+    def testHybridShowsBasicMCWithInspect(self, tmp_path):
+        """With --inspect, a hybrid BASIC+MC file should be labelled 'BASIC+MC' in the type column."""
+        basic = _makeBasicProgram((10, bytes([0xF1])))
+        hybrid = basic + bytes(range(256)) * 4
+        output = self._runCatBasic(tmp_path, hybrid, inspect=True)
+        assert "BASIC+MC" in output

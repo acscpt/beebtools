@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 from .boot import BootOption
 from .entry import DiscEntry, DiscFile
 from .image import DiscSide, createImage, openImage
-from .detokenize import detokenize
+from .detokenize import basicProgramSize, detokenize
 from .inf import formatInf, parseInf
 from .pretty import prettyPrint
 
@@ -351,14 +351,36 @@ def extractAll(
             data = side.readFile(entry)
 
             if entry.isBasic and looksLikeTokenizedBasic(data):
-                # Detokenize BASIC and write as plain text.
-                out_path = stem + ".bas"
-                text_lines = detokenize(data)
-                if pretty:
-                    text_lines = prettyPrint(text_lines)
-                with open(out_path, "w", encoding="ascii", errors="replace") as f:
-                    f.write("\n".join(text_lines) + "\n")
-                results.append({"type": "BASIC", "path": out_path})
+                # Check whether the BASIC program occupies the whole file,
+                # or whether there is appended machine code after it.
+                # Files with trailing binary data (e.g. BASIC loader +
+                # 6502 game engine) must be kept as binary to preserve
+                # the machine code.
+                prog_size = basicProgramSize(data)
+                has_trailing_binary = prog_size < len(data) - 16
+
+                if has_trailing_binary:
+                    # BASIC + machine code hybrid - save as binary.
+                    out_path = stem + ".bin"
+                    with open(out_path, "wb") as f:
+                        f.write(data)
+                    results.append({
+                        "type": "BASIC+MC",
+                        "path": out_path,
+                        "load": entry.load_addr,
+                        "exec": entry.exec_addr,
+                        "length": entry.length,
+                        "basic_size": prog_size,
+                    })
+                else:
+                    # Pure BASIC - detokenize and write as plain text.
+                    out_path = stem + ".bas"
+                    text_lines = detokenize(data)
+                    if pretty:
+                        text_lines = prettyPrint(text_lines)
+                    with open(out_path, "w", encoding="ascii", errors="replace") as f:
+                        f.write("\n".join(text_lines) + "\n")
+                    results.append({"type": "BASIC", "path": out_path})
 
             elif looksLikePlainText(data):
                 # Plain ASCII text file - save as .txt.

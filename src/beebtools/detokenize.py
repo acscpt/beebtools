@@ -32,6 +32,47 @@ def decodeLineRef(b0: int, b1: int, b2: int) -> int:
     return hi * 256 + lo
 
 
+def basicProgramSize(data: bytes) -> int:
+    """Return the number of bytes occupied by the BASIC program in data.
+
+    Walks the tokenized line structure and returns the offset just past
+    the 0x0D 0xFF end-of-program marker. If the file is entirely BASIC
+    this equals len(data) (or close to it, with a few padding bytes).
+    If there is appended machine code the return value will be much
+    smaller than len(data).
+
+    Returns 0 if data does not start with a valid BASIC line marker.
+    """
+    pos = 0
+
+    while pos < len(data):
+        if data[pos] != 0x0D:
+            break
+
+        pos += 1
+        if pos >= len(data):
+            break
+
+        hi = data[pos]
+        if hi == 0xFF:
+            # End-of-program marker.  Program occupies bytes 0..pos inclusive.
+            return pos + 1
+
+        if pos + 2 >= len(data):
+            break
+
+        linelen = data[pos + 2]
+
+        # A valid record is at least 4 bytes (hi, lo, len, trailing 0x0D).
+        if linelen < 4:
+            break
+
+        pos = pos - 1 + linelen
+
+    # Fell off the end without hitting 0xFF - return current position.
+    return pos
+
+
 def detokenize(data: bytes) -> List[str]:
     """Convert a tokenized BBC BASIC program to LIST-style text lines.
 
@@ -70,6 +111,12 @@ def detokenize(data: bytes) -> List[str]:
         lo = data[pos + 1]
         linenum = hi * 256 + lo
         linelen = data[pos + 2]
+
+        # A valid record is at least 4 bytes (hi, lo, len, trailing 0x0D).
+        # A zero or tiny length means we have hit trailing machine code
+        # or corrupt data appended after the BASIC program - stop parsing.
+        if linelen < 4:
+            break
 
         # Content runs from the byte after the header to the end of the record.
         # The length byte counts from the hi byte to where the next 0x0D starts.

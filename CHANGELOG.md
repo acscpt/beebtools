@@ -5,6 +5,23 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `basicProgramSize(data)`: returns the byte length of the BASIC program
+  portion of a tokenized file, excluding any appended machine code.
+
+### Fixed
+
+- **Detokenizer hang** on files containing a BASIC program with appended
+  machine code. A zero-length line record in the binary tail caused an
+  infinite loop in `detokenize()`. Files containing a BASIC loader with appended 
+  6502 machine code are now saved as `.bin` (preserving the binary payload) and
+  show `BASIC+MC` when cataloguing a disk.
+
+---
+
 ## [0.5.0] - 2026-04-03
 
 Internal refactor to enforce strict module layering and eliminate code that

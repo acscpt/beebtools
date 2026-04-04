@@ -14,7 +14,7 @@ import sys
 from argparse import Namespace
 from typing import Optional
 
-from .detokenize import detokenize
+from .detokenize import basicProgramSize, detokenize
 from .tokenize import tokenize
 from .pretty import prettyPrint
 from .boot import BootOption
@@ -95,7 +95,19 @@ def cmdCat(args: Namespace) -> None:
                 if is_dir:
                     ftype = _colour("DIR", _CYAN, use_colour)
                 elif e.isBasic:
-                    ftype = _colour("BASIC", _CYAN, use_colour)
+                    if args.inspect:
+                        # Read the file to detect BASIC+machine-code hybrids.
+                        file_data = disc.readFile(e)
+                        if looksLikeTokenizedBasic(file_data):
+                            prog_size = basicProgramSize(file_data)
+                            if prog_size < len(file_data) - 16:
+                                ftype = _colour("BASIC+MC", _YELLOW, use_colour)
+                            else:
+                                ftype = _colour("BASIC", _CYAN, use_colour)
+                        else:
+                            ftype = _colour("BASIC", _CYAN, use_colour)
+                    else:
+                        ftype = _colour("BASIC", _CYAN, use_colour)
                 elif args.inspect and looksLikePlainText(disc.readFile(e)):
                     ftype = _colour("TEXT", _YELLOW, use_colour)
                 else:
@@ -175,12 +187,20 @@ def cmdExtract(args: Namespace) -> None:
         results = extractAll(args.image, out_dir, pretty=args.pretty, write_inf=args.inf)
         for result in results:
             if result["type"] == "BASIC":
-                print(f"  BASIC   {result['path']}")
+                print(f"  BASIC     {result['path']}")
             elif result["type"] == "text":
-                print(f"  text    {result['path']}")
+                print(f"  text      {result['path']}")
+            elif result["type"] == "BASIC+MC":
+                print(
+                    f"  BASIC+MC  {result['path']}  "
+                    f"load=0x{result['load']:06X}  "
+                    f"exec=0x{result['exec']:06X}  "
+                    f"length={result['length']} bytes  "
+                    f"(BASIC={result['basic_size']}b + machine code)"
+                )
             else:
                 print(
-                    f"  binary  {result['path']}  "
+                    f"  binary    {result['path']}  "
                     f"load=0x{result['load']:06X}  "
                     f"exec=0x{result['exec']:06X}  "
                     f"length={result['length']} bytes"
@@ -236,18 +256,38 @@ def cmdExtract(args: Namespace) -> None:
     data = disc.readFile(entry)
 
     if entry.isBasic and looksLikeTokenizedBasic(data):
-        # Detokenize and emit as LIST-style text.
-        text_lines = detokenize(data)
-        if args.pretty:
-            text_lines = prettyPrint(text_lines)
-        output = "\n".join(text_lines) + "\n"
+        # Check for BASIC + appended machine code hybrid.
+        prog_size = basicProgramSize(data)
+        has_trailing_binary = prog_size < len(data) - 16
 
-        if args.output:
-            with open(args.output, "w", encoding="ascii", errors="replace") as f:
-                f.write(output)
-            print(f"Extracted to {args.output}", file=sys.stderr)
+        if has_trailing_binary:
+            # Hybrid file - warn and treat as binary to preserve machine code.
+            print(
+                f"BASIC+MC  {entry.fullName}  "
+                f"BASIC={prog_size}b + {len(data) - prog_size}b machine code  "
+                f"(extracting as binary to preserve machine code)",
+                file=sys.stderr,
+            )
+
+            if args.output:
+                with open(args.output, "wb") as f:
+                    f.write(data)
+                print(f"Extracted to {args.output}", file=sys.stderr)
+            else:
+                sys.stdout.buffer.write(data)
         else:
-            sys.stdout.write(output)
+            # Pure BASIC - detokenize and emit as LIST-style text.
+            text_lines = detokenize(data)
+            if args.pretty:
+                text_lines = prettyPrint(text_lines)
+            output = "\n".join(text_lines) + "\n"
+
+            if args.output:
+                with open(args.output, "w", encoding="ascii", errors="replace") as f:
+                    f.write(output)
+                print(f"Extracted to {args.output}", file=sys.stderr)
+            else:
+                sys.stdout.write(output)
 
     else:
         # Binary file.

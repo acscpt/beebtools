@@ -15,7 +15,7 @@ The end-of-program marker is: 0x0D 0xFF
 
 import pytest
 
-from beebtools import detokenize, decodeLineRef
+from beebtools import basicProgramSize, detokenize, decodeLineRef
 
 
 # ---------------------------------------------------------------------------
@@ -199,3 +199,47 @@ def testProgramWithSpacesPreserved():
     data = makeProgram((10, [ord(' '), 0xF1, ord(' ')]))
     lines = detokenize(data)
     assert lines[0] == "   10 PRINT "
+
+
+# ---------------------------------------------------------------------------
+# basicProgramSize tests
+# ---------------------------------------------------------------------------
+
+def testProgramSizeEmptyProgram():
+    """An empty program (just the end marker) is 2 bytes: 0x0D 0xFF."""
+    data = bytes([0x0D, 0xFF])
+    assert basicProgramSize(data) == 2
+
+
+def testProgramSizeSingleLine():
+    """Program size includes the line record and end marker."""
+    data = makeProgram((10, [0xF1]))  # PRINT
+    # 1 line: 0x0D + hi + lo + len + content (1) = 5 bytes
+    # end marker: 0x0D + 0xFF = 2 bytes
+    # total: 7
+    assert basicProgramSize(data) == 7
+
+
+def testProgramSizeWithTrailingBinary():
+    """Program size excludes appended machine code."""
+    prog = makeProgram((10, [0xF1]))
+    machine_code = bytes(range(256)) * 10  # 2560 bytes of binary
+    data = prog + machine_code
+    # basicProgramSize should return only the program portion.
+    assert basicProgramSize(data) == len(prog)
+
+
+def testProgramSizeNonBasicData():
+    """Data that doesn't start with 0x0D returns 0."""
+    data = bytes([0x00, 0x01, 0x02])
+    assert basicProgramSize(data) == 0
+
+
+def testProgramSizeMultipleLines():
+    """Multi-line program size is measured correctly."""
+    data = makeProgram(
+        (10, [0xF1]),            # PRINT
+        (20, [0xE5]),            # END
+        (30, [0xF4, ord('X')]),  # REM X
+    )
+    assert basicProgramSize(data) == len(data)

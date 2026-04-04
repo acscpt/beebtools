@@ -49,7 +49,7 @@ Modules:
     cli           -- command-line interface
 """
 
-from .detokenize import detokenize, decodeLineRef
+from .detokenize import basicProgramSize, detokenize, decodeLineRef
 from .tokenize import tokenize, encodeLineRef
 from .pretty import prettyPrint
 from .boot import BootOption
