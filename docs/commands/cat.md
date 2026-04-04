@@ -5,9 +5,10 @@ beebtools cat <image> [--sort name|catalog|size] [--inspect]
 ```
 
 Lists all files on all sides of the disc with load address, exec address,
-length, and file type. Works with both DFS (`.ssd`/`.dsd`) and ADFS
-(`.adf`/`.adl`) disc images. BASIC is identified from the exec address
-without reading file data.
+length, and file type. The header line shows the number of files, total
+tracks, and boot option for each side. Works with both DFS (`.ssd`/`.dsd`)
+and ADFS (`.adf`/`.adl`) disc images. BASIC is identified from the exec
+address without reading file data.
 
 Add `--inspect` (`-i`) to also read each file's bytes and label plain ASCII
 text files as `TEXT` in the type column.
@@ -15,7 +16,7 @@ text files as `TEXT` in the type column.
 ### DFS example
 
 ```text
---- Side 0: BBC_MUSIC_2 (28 files, boot=OFF) ---
+--- Side 0: BBC_MUSIC_2 (28 files, 80 tracks, boot=OFF) ---
 
   Name          Load     Exec   Length  Type
    $.!BOOT  00000000 00000000 00000018  TEXT
@@ -31,7 +32,7 @@ entries are labelled as `DIR`. The name column adjusts its width
 automatically for long path names.
 
 ```text
---- Side 0: GameDisc (12 files, boot=EXEC) ---
+--- Side 0: GameDisc (12 files, 80 tracks, boot=EXEC) ---
 
   Name                  Load     Exec   Length  Type
    $.!BOOT          00000000 00000000 00000020

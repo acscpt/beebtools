@@ -527,6 +527,24 @@ class TestCatalogueMetadata:
         cat = image.sides[0].readCatalogue()
         assert cat.disc_size == 800
 
+    def testTracks80(self):
+        """An 80-track disc (800 sectors) should report 80 tracks."""
+        data = _blankSsd()
+        data[SECTOR_SIZE + 6] = 0x03  # high 2 bits of 800
+        data[SECTOR_SIZE + 7] = 0x20  # low 8 bits of 800
+        image = DFSImage(data, is_dsd=False)
+        cat = image.sides[0].readCatalogue()
+        assert cat.tracks == 80
+
+    def testTracks40(self):
+        """A 40-track disc (400 sectors) should report 40 tracks."""
+        data = _blankSsd()
+        data[SECTOR_SIZE + 6] = 0x01  # high 2 bits of 400
+        data[SECTOR_SIZE + 7] = 0x90  # low 8 bits of 400
+        image = DFSImage(data, is_dsd=False)
+        cat = image.sides[0].readCatalogue()
+        assert cat.tracks == 40
+
     def testBootOptionEnum(self):
         """All four BootOption values (NONE, LOAD, RUN, EXEC) should be settable and readable without error."""
         assert BootOption(0).name == "OFF"

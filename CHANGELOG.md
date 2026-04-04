@@ -12,6 +12,10 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `basicProgramSize(data)`: returns the byte length of the BASIC program
   portion of a tokenized file, excluding any appended machine code.
 
+- The `cat` command now shows the track count in the header line for each side.
+  
+- New property on `DFSCatalogue` and `ADFSCatalogue`: returns the number of tracks on the disc, calculated from the total sector count.
+
 ### Fixed
 
 - **Fixed garbled file and disc names on some disc images.** BBC Micro ASCII

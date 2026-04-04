@@ -171,6 +171,11 @@ class ADFSCatalogue:
     disc_size: int
     entries: Tuple[ADFSEntry, ...]
 
+    @property
+    def tracks(self) -> int:
+        """Number of tracks on this disc (disc_size / 16)."""
+        return self.disc_size // ADFS_SECTORS_PER_TRACK
+
 
 # -----------------------------------------------------------------------
 # Helper functions
