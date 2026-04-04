@@ -23,7 +23,8 @@ def prettyPrint(lines: List[str]) -> List[str]:
     - Padding around colon statement separators ( : )
     - A trailing space after each comma
     - Star commands (*COMMAND) passed through verbatim - no spacing added
-    - *| anti-listing traps converted to REM *| (control characters stripped)
+    - *| anti-listing traps preserved as *| (control characters kept intact
+      for the text-encoding layer to handle via the chosen text mode)
 
     Args:
         lines: List of detokenized BASIC line strings.
@@ -43,13 +44,15 @@ def prettyPrint(lines: List[str]) -> List[str]:
         num_part = m.group(1)
         code = m.group(2)
 
-        # Convert *| MOS comment syntax to REM, stripping any control characters
-        # (e.g. VDU 21 bytes inserted as an anti-listing trap).
+        # Anti-listing trap: keep *| as a MOS comment (not REM) so the
+        # tokenizer reproduces the original star-command bytes.  Control
+        # characters (e.g. VDU 21) are preserved; the text-encoding layer
+        # handles display via the chosen text mode (ascii/utf8/escape).
+        # Skip _prettyCode since the tail is literal, not BASIC syntax.
         stripped = code.lstrip()
         if stripped.startswith('*|'):
-            rest = stripped[2:]
-            rest = ''.join(c for c in rest if ord(c) >= 32)
-            code = ' REM *|' + rest
+            result.append(num_part + ' ' + stripped)
+            continue
 
         # Ensure exactly one space between line number and first token.
         if code and not code[0].isspace():

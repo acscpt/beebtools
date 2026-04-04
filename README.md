@@ -59,16 +59,17 @@ For BASIC files, `beebtools` does two things in sequence when extracting:
    pretty-printer adds spaces around operators and punctuation while leaving
    string literals, `REM` tails, and `DATA` tails completely untouched.
 
-   `beebtools` also handles anti-listing traps, a simply constructed statement
-   that was embedded within a BASIC program.  A line starting with `*|` followed
-   by `VDU 21` (disable output) bytes.  A simple and effective  copy-protection trick.
-   The pretty-printer converts `*|` statements to `REM *|` and strips the
-   control characters so the program is readable.
+   `beebtools` also handles anti-listing traps, a common copy-protection trick
+   where a line starting with `*|` is followed by `VDU 21` (disable output) bytes.
+   The pretty-printer preserves `*|` as-is and keeps the control characters
+   intact. The text-encoding layer then handles display: escape mode (`-t escape`)
+   renders them as readable `\xHH` notation that round-trips losslessly back
+   to the original binary when retokenized.
 
 When creating images, `beebtools` performs the reverse - plain-text BASIC (as produced
 by step 1 or 2) is retokenized back to the binary format the BBC Micro
-expects.  The anti-listing trick is not reversed and re-injected into the program
-though in this case.
+expects. When extracted with escape mode, anti-listing traps are preserved
+and faithfully reproduced in the rebuilt image.
 
 ## Features
 
@@ -90,7 +91,7 @@ though in this case.
   non-ASCII bytes embedded in `PRINT` strings
 
 - Pretty-printer: add operator spacing to make terse BASIC readable
-  - Anti-listing trap detection: neutralise copy-protection `*|` traps
+  - Anti-listing trap preservation: `*|` traps kept intact for lossless round-tripping
 
 - Star command awareness: `*SCUMPI` is passed through verbatim, no false spacing
 

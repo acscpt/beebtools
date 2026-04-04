@@ -46,7 +46,16 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   single module. The public API is unchanged - import from `beebtools`
   as before.
 
+- Pretty-printer now preserves `*|` anti-listing traps as MOS comments
+  instead of converting them to `REM *|`. Control characters (e.g. VDU 21)
+  are kept intact for the text-encoding layer to handle. Combined with
+  `-t escape`, this enables a lossless round-trip of anti-listing traps.
+
 ### Fixed
+
+- **Tokenizer line-length overflow.** Lines whose tokenized content exceeds
+  the 255-byte BBC BASIC limit now raise `ValueError` instead of silently
+  producing a corrupt program.
 
 - **`looksLikeTokenizedBasic` false positives.** Plain-text files starting
   with CR (0x0D) were misidentified as BASIC. Detection now walks the

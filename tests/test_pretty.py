@@ -11,7 +11,7 @@ and returns the same lines with operator spacing normalised.
 
 import pytest
 
-from beebtools import prettyPrint
+from beebtools import prettyPrint, tokenize, detokenize
 
 
 # ---------------------------------------------------------------------------
@@ -238,30 +238,53 @@ def testStarMidExpressionIsMultiply():
 # Anti-listing trap (*| conversion)
 # ---------------------------------------------------------------------------
 
-def testAntiListingTrapConvertedToRem():
-    """*| at the start of statement should be converted to REM *|."""
+def testAntiListingTrapPreserved():
+    """*| at the start of statement is kept as *| (not converted to REM)."""
     result = prettyPrint(["   10*|"])
-    assert result[0] == "   10 REM *|"
+    assert result[0] == "   10 *|"
 
 
 def testAntiListingTrapTextPreserved():
     """Any printable text after *| should be preserved."""
     result = prettyPrint(["   10*|Hello"])
-    assert result[0] == "   10 REM *|Hello"
+    assert result[0] == "   10 *|Hello"
 
 
-def testAntiListingTrapControlCharsStripped():
-    """Control characters in the *| tail (e.g. VDU 21) should be stripped."""
+def testAntiListingTrapControlCharsPreserved():
+    """Control characters in the *| tail (e.g. VDU 21) are kept intact."""
     # VDU 21 (chr 21) was commonly inserted to blank the screen on LIST.
+    # The text-encoding layer handles display; pretty-printer preserves them.
     result = prettyPrint(["   10*|\x15\x15visible"])
-    assert result[0] == "   10 REM *|visible"
+    assert result[0] == "   10 *|\x15\x15visible"
 
 
-def testAntiListingTrapAllControlCharsStripped():
-    """Any byte with ord < 32 in the trap tail is removed."""
+def testAntiListingTrapAllControlCharsPreserved():
+    """All bytes in the trap tail are preserved for the encoding layer."""
     tail = "".join(chr(c) for c in range(1, 32))
     result = prettyPrint([f"   10*|{tail}text"])
-    assert result[0] == "   10 REM *|text"
+    assert result[0] == f"   10 *|{tail}text"
+
+
+def testAntiListingTrapRoundTrip():
+    """Anti-listing trap survives detokenize -> prettyPrint -> tokenize."""
+    # Build a tokenized program with a *| trap containing VDU 21 bytes.
+    # Star commands are literal ASCII in the tokenized form: the * byte
+    # followed by the rest of the line as raw characters.
+    # Include a leading space before *| since the pretty-printer normalises
+    # spacing between the line number and the first token.
+    trap_line = b' *|\x15\x15visible'
+    line_content = trap_line
+    line_len = 4 + len(line_content)  # 0x0D + hi + lo + len + content
+    original = bytes([
+        0x0D, 0x00, 0x0A, line_len,
+    ]) + line_content + bytes([0x0D, 0xFF])
+
+    # Round-trip through pretty-print.
+    lines = detokenize(original)
+    pretty_lines = prettyPrint(lines)
+    result = tokenize(pretty_lines)
+
+    assert result == original
 
 
 # ---------------------------------------------------------------------------

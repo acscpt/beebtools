@@ -85,6 +85,16 @@ def testParseLineInvalid():
         _parseLine("PRINT")
 
 
+def testLineTooLongRaises():
+    """A line whose tokenized content exceeds 255 bytes raises ValueError."""
+    # REM tokenizes to 1 byte (0xF4), rest is literal.  We need content
+    # that makes 4 + len(content) > 255, i.e. content > 251 bytes.
+    # 1 (REM token) + 251 (x's) = 252 content bytes -> linelen = 256.
+    long_line = "   10REM" + "x" * 251
+    with pytest.raises(ValueError, match="max 255"):
+        tokenize([long_line])
+
+
 # ---------------------------------------------------------------------------
 # Basic keyword tokenization
 # ---------------------------------------------------------------------------

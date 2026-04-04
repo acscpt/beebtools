@@ -759,6 +759,13 @@ def tokenize(lines: List[str]) -> bytes:
         # This is the Russell format used by BBC BASIC II on the 6502.
         linelen = 4 + len(content)
 
+        # The length byte is a single unsigned byte (max 255).  If the
+        # tokenized content exceeds that limit the program would be corrupt.
+        if linelen > 255:
+            raise ValueError(
+                f"Line {linenum} tokenizes to {linelen} bytes "
+                f"(max 255)")
+
         result.append(0x0D)
         result.append(hi)
         result.append(lo)
