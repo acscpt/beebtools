@@ -244,7 +244,7 @@ class TestSanitizeDfsFilename:
         assert sanitizeDfsFilename("A\x01B") == "AB"
 
     def testAllWindowsIllegalCharsEncoded(self):
-        """All characters illegal under Windows (< > : " / \ | ? *) should each be encoded or dropped."""
+        """All characters illegal under Windows (< > : " / \\ | ? *) should each be encoded or dropped."""
         illegal = '\\/:*?"<>|'
         for ch in illegal:
             result = sanitizeDfsFilename(f"A{ch}B")

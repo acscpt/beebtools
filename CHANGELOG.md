@@ -12,6 +12,15 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `basicProgramSize(data)`: returns the byte length of the BASIC program
   portion of a tokenized file, excluding any appended machine code.
 
+- `compactLine(line)`: strips cosmetic whitespace added by `prettyPrint`,
+  preserving spaces that prevent keyword or identifier merging. Useful for
+  reducing line length before retokenizing.
+
+- `tokenize()` now accepts an optional `on_overflow` callback. When a
+  tokenized line exceeds the 255-byte BBC BASIC limit, the callback receives
+  the line text and error message and may return a replacement line to retry
+  instead of raising `ValueError` immediately.
+
 - The `cat` command now shows the track count in the header line for each side.
   
 - New property on `DFSCatalogue` and `ADFSCatalogue`: returns the number of tracks on the disc, calculated from the total sector count.
@@ -40,6 +49,10 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   disc paths (e.g. `"MYPROG"` becomes `"$.MYPROG"`).
 
 ### Changed
+
+- `buildImage` now auto-compacts any pretty-printed line that would overflow
+  the 255-byte tokenized line limit. A warning is printed to stderr for each
+  compacted line so the user is aware the source was modified.
 
 - Merged `detokenize.py` and `tokenize.py` into `basic.py`. All BASIC
   program operations (tokenize, detokenize, classify, escape) are now in a

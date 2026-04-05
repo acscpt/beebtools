@@ -49,7 +49,7 @@ Modules:
 """
 
 from .basic import (
-    basicProgramSize, detokenize, decodeLineRef,
+    basicProgramSize, compactLine, detokenize, decodeLineRef,
     tokenize, encodeLineRef,
     prettyPrint,
     looksLikeTokenizedBasic, looksLikePlainText, classifyFileType,
@@ -105,6 +105,7 @@ __all__ = [
     "decodeLineRef",
     "tokenize",
     "encodeLineRef",
+    "compactLine",
     "prettyPrint",
     # New DFS types
     "DFSEntry",
