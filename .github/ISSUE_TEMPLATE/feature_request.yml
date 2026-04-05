@@ -1,0 +1,61 @@
+name: Feature request
+description: Suggest a new feature or an improvement to existing behaviour.
+labels: ["enhancement"]
+
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One sentence describing what you want beebtools to do.
+      placeholder: "e.g. Support Watford DFS extended catalogues (62-file discs)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Use case and motivation
+      description: >
+        Why is this useful? What are you trying to do that beebtools cannot
+        do today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed behaviour
+      description: >
+        How should the feature work? Include example commands, expected output,
+        or API changes if you have a specific idea in mind. Leave blank if
+        you just want the capability and are happy to leave the design open.
+    validations:
+      required: false
+
+  - type: textarea
+    id: disc_image
+    attributes:
+      label: Disc image or format details
+      description: >
+        If the request is format-specific, give the format name and a public
+        download link for a sample image if you have one (e.g. stairwaytohell.com,
+        archive.org, bbcmicro.co.uk). This lets us test against a real example.
+      placeholder: |
+        Format: Watford DFS .ssd, 62-file extended catalogue
+        Sample: https://stairwaytohell.com/...
+    validations:
+      required: false
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: >
+        Relevant links - format specs, BeebWiki articles, BBC Micro documentation,
+        or prior art in other tools.
+      placeholder: |
+        - https://beebwiki.mdfs.net/Acorn_DFS_disc_format
+        - https://beebwiki.mdfs.net/Watford_DFS
+    validations:
+      required: false

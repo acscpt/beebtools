@@ -1,0 +1,92 @@
+name: Bug report
+description: Report unexpected behaviour or an error in beebtools.
+labels: ["bug"]
+
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One sentence describing what goes wrong.
+      placeholder: "e.g. detokenize() hangs on files with appended machine code"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact command or code that triggers the problem.
+      placeholder: |
+        beebtools extract mydisc.ssd T.MYPROG --pretty
+
+        or
+
+        from beebtools import openImage, detokenize
+        with openImage("mydisc.ssd") as img:
+            ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What actually happened? Include any error message or traceback in full.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: beebtools_version
+    attributes:
+      label: beebtools version
+      placeholder: "e.g. 0.5.1  (run: beebtools --version)"
+    validations:
+      required: true
+
+  - type: input
+    id: python_version
+    attributes:
+      label: Python version and OS
+      placeholder: "e.g. Python 3.10.12, Ubuntu 22.04"
+    validations:
+      required: true
+
+  - type: textarea
+    id: disc_image
+    attributes:
+      label: Disc image details
+      description: >
+        If the problem is image-specific, give the format, filename, and a
+        public download link if one exists (e.g. stairwaytohell.com, archive.org,
+        bbcmicro.co.uk). If you cannot share the image, describe its contents
+        as much as possible (DFS/ADFS, single/double-sided, track count, file
+        that causes the problem).
+      placeholder: |
+        Format: DFS .ssd, 80-track single-sided
+        File on disc: T.MYPROG
+        Source: https://stairwaytohell.com/...
+    validations:
+      required: false
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: >
+        Relevant links - format specs, BeebWiki articles, BBC Micro documentation,
+        or anything else that helps explain the expected behaviour.
+      placeholder: |
+        - https://beebwiki.mdfs.net/Acorn_DFS_disc_format
+        - https://beebwiki.mdfs.net/BBC_BASIC_tokens
+    validations:
+      required: false
