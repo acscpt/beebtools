@@ -1,9 +1,11 @@
 # beebtools
 
 [![PyPI](https://img.shields.io/pypi/v/beebtools.svg)](https://pypi.org/project/beebtools/)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/beebtools?period=total&units=INTERNATIONAL_SYSTEM&left_color=GRAY&right_color=RED&left_text=downloads)](https://pepy.tech/projects/beebtools)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Tests](https://github.com/acscpt/beebtools/actions/workflows/tests.yml/badge.svg)](https://github.com/acscpt/beebtools/actions/workflows/tests.yml)
+[![codecov](https://codecov.io/gh/acscpt/beebtools/branch/main/graph/badge.svg)](https://codecov.io/gh/acscpt/beebtools)
 
 A Python tool for working with BBC Micro DFS and ADFS disc images.
 
@@ -42,6 +44,13 @@ saving them: keywords like `PRINT`, `GOTO`, and `FOR` are replaced with single
 bytes in the range 0x80-0xFF, `GOTO` and `GOSUB` targets are encoded as compact
 3-byte line-number references, and the whole thing is written as a sequence of
 binary line records with no human-readable structure.
+
+**BASIC version note:** `beebtools` supports BBC BASIC II, the version shipped
+with the BBC Model B and the most common version found on preserved disc images.
+BBC BASIC IV (BBC Master) uses a different token table for keywords added in
+that version (`WHILE`, `CASE`, `LIBRARY`, etc.). Those tokens will detokenize
+incorrectly with the current release. BASIC II programs on Master discs are
+unaffected.
 
 Binary files (machine code, data, sound samples) are stored as raw bytes and
 extracted as-is.
@@ -243,6 +252,9 @@ See [docs/library.md](https://github.com/acscpt/beebtools/blob/main/docs/library
 
 DFS: both 40-track and 80-track images are supported. Watford DFS extended
 catalogues (62-file discs) are not supported.
+
+BASIC: BBC BASIC II only. BBC BASIC IV (BBC Master) programs that use BASIC IV
+keywords will not detokenize correctly.
 
 ADFS: old-map (small directory, "Hugo" format) images are supported for both
 reading and writing. New-map large-directory formats (ADFS-D/E/F/G) are not

@@ -25,7 +25,7 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Run tests with coverage
-        run: pytest tests/ -v --cov --cov-report=term --report
+        run: pytest tests/ -v --cov --cov-report=term --cov-report=xml --report
 
       - name: Upload test report
         if: always()
@@ -33,3 +33,11 @@ jobs:
         with:
           name: test-report-py${{ matrix.python-version }}
           path: tests/TEST_REPORT.md
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.12'
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          fail_ci_if_error: false
