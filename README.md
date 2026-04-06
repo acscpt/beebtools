@@ -146,6 +146,7 @@ own detailed reference page.
 | [`boot`](https://github.com/acscpt/beebtools/blob/main/docs/commands/boot.md) | Read or set the disc boot option |
 | [`disc`](https://github.com/acscpt/beebtools/blob/main/docs/commands/disc.md) | Print disc summary or set disc properties |
 | [`attrib`](https://github.com/acscpt/beebtools/blob/main/docs/commands/attrib.md) | Read or set file attributes |
+| [`rename`](https://github.com/acscpt/beebtools/blob/main/docs/commands/rename.md) | Rename a file on a disc image |
 
 ## Usage
 
@@ -227,6 +228,12 @@ beebtools attrib mydisc.ssd T.MYPROG --locked
 
 # Change load and exec addresses
 beebtools attrib mydisc.ssd T.MYPROG --load 1900 --exec 8023
+
+# Rename a file
+beebtools rename mydisc.ssd T.MYPROG T.NEWNAME
+
+# Move to a different DFS directory prefix
+beebtools rename mydisc.ssd $.MYPROG T.MYPROG
 ```
 
 ## Pretty-printer

@@ -94,6 +94,13 @@ class DiscSide(Protocol):
         """Replace a catalogue entry with an updated version."""
         ...
 
+    def renameFile(self, old_path: str, new_path: str) -> None:
+        """Rename a file in the catalogue.
+
+        Both paths must be fully qualified. The file data is not moved.
+        """
+        ...
+
     def mkdir(self, path: str) -> None:
         """Create a subdirectory at the given path.
 

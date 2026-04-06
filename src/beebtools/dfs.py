@@ -772,6 +772,53 @@ class DFSSide:
 
         self.writeCatalogue(new_cat)
 
+    def renameFile(self, old_path: str, new_path: str) -> None:
+        """Rename a file in the catalogue.
+
+        Changes the entry's name and/or directory prefix. The file data
+        is not moved - only the catalogue entry is updated.
+
+        Args:
+            old_path: Current full DFS path (e.g. '$.MYPROG').
+            new_path: New full DFS path (e.g. 'T.NEWNAME').
+
+        Raises:
+            DFSError: If the source is not found, or the destination
+                      name already exists.
+        """
+        old_dir, old_name = splitDfsPath(old_path)
+        new_dir, new_name = splitDfsPath(new_path)
+
+        # Validate the new name against DFS naming rules.
+        validateDfsName(new_dir, new_name)
+
+        cat = self.readCatalogue()
+
+        # Find the source entry.
+        source = None
+
+        for e in cat.entries:
+            if e.name == old_name and e.directory == old_dir:
+                source = e
+                break
+
+        if source is None:
+            raise DFSError(f"File {old_dir}.{old_name} not found")
+
+        # Check that the destination name is not already taken.
+        for e in cat.entries:
+            if e.name == new_name and e.directory == new_dir:
+                if e is not source:
+                    raise DFSError(
+                        f"File {new_dir}.{new_name} already exists"
+                    )
+
+        # Build the renamed entry and update the catalogue.
+        renamed = replace(
+            source, name=new_name, directory=new_dir,
+        )
+        self.updateEntry(old_path, renamed)
+
     def compact(self) -> int:
         """Defragment file storage by closing gaps between files.
 

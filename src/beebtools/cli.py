@@ -25,6 +25,7 @@ from .disc import (
     writeBasicText, escapeNonAscii,
     getTitle, setTitle, getBoot, setBoot, discInfo,
     getFileAttribs, setFileAttribs,
+    renameFile,
 )
 
 
@@ -612,6 +613,22 @@ def cmdAttrib(args: Namespace) -> None:
         print(f"Locked: {lock_display}")
 
 
+# ---------------------------------------------------------------------------
+# rename command
+# ---------------------------------------------------------------------------
+
+def cmdRename(args: Namespace) -> None:
+    """Rename a file on a disc image.
+
+    Args:
+        args: Parsed argparse namespace for the 'rename' subcommand.
+    """
+    renameFile(
+        args.image, args.old_name, args.new_name, side=args.side,
+    )
+    print(f"Renamed {args.old_name} -> {args.new_name}")
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -798,6 +815,15 @@ def main() -> None:
                           choices=[0, 1],
                           help="Disc side for DFS (default: 0; ignored for ADFS)")
 
+    p_rename = sub.add_parser("rename", help="Rename a file on a disc image")
+    p_rename.add_argument("image",
+                          help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
+    p_rename.add_argument("old_name", help="Current filename (e.g. T.MYPROG)")
+    p_rename.add_argument("new_name", help="New filename (e.g. T.NEWNAME)")
+    p_rename.add_argument("--side", type=int, default=0,
+                          choices=[0, 1],
+                          help="Disc side for DFS (default: 0; ignored for ADFS)")
+
     args = parser.parse_args()
 
     try:
@@ -823,6 +849,8 @@ def main() -> None:
             cmdDisc(args)
         elif args.command == "attrib":
             cmdAttrib(args)
+        elif args.command == "rename":
+            cmdRename(args)
         else:
             parser.print_help()
     except Exception as e:

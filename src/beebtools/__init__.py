@@ -99,6 +99,7 @@ from .disc import (
     writeBasicText, readBasicText,
     getTitle, setTitle, getBoot, setBoot, discInfo, DiscInfo,
     getFileAttribs, setFileAttribs, FileAttribs,
+    renameFile,
 )
 from .cli import main
 
@@ -174,6 +175,7 @@ __all__ = [
     "getFileAttribs",
     "setFileAttribs",
     "FileAttribs",
+    "renameFile",
     # BASIC facade (basic.py)
     "looksLikeTokenizedBasic",
     "looksLikePlainText",

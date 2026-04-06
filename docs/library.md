@@ -313,6 +313,23 @@ setFileAttribs("mydisc.ssd", "T.MYPROG", load_addr=0x1900, exec_addr=0x8023)
 
 Only the attributes passed as non-None are changed; others are left intact.
 
+## Renaming files
+
+The `renameFile` function renames a file in-place on a disc image.
+
+```python
+from beebtools import renameFile
+
+# Simple rename
+renameFile("mydisc.ssd", "T.MYPROG", "T.NEWNAME")
+
+# Change DFS directory prefix
+renameFile("mydisc.ssd", "$.MYPROG", "T.MYPROG")
+```
+
+On DFS, the directory prefix can change. On ADFS, both names must be in the
+same parent directory.
+
 ## Working with .inf sidecar files
 
 The `.inf` format is the standard BBC Micro community interchange format for

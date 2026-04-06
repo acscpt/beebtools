@@ -19,6 +19,7 @@ For a quick overview and installation instructions, see the
 | [boot](https://github.com/acscpt/beebtools/blob/main/docs/commands/boot.md) | Read or set the disc boot option |
 | [disc](https://github.com/acscpt/beebtools/blob/main/docs/commands/disc.md) | Print disc summary or set disc properties |
 | [attrib](https://github.com/acscpt/beebtools/blob/main/docs/commands/attrib.md) | Read or set file attributes |
+| [rename](https://github.com/acscpt/beebtools/blob/main/docs/commands/rename.md) | Rename a file on a disc image |
 
 ## Guides
 

@@ -20,13 +20,14 @@ from beebtools.disc import (
     extractAll, buildImage,
     getTitle, setTitle, getBoot, setBoot, discInfo,
     getFileAttribs, setFileAttribs,
+    renameFile,
 )
 from beebtools.boot import BootOption
 from beebtools.adfs import openAdfsImage
 from beebtools.inf import formatInf, parseInf
 from beebtools.cli import (
     cmdCreate, cmdAdd, cmdDelete, cmdBuild,
-    cmdTitle, cmdBoot, cmdDisc, cmdAttrib,
+    cmdTitle, cmdBoot, cmdDisc, cmdAttrib, cmdRename,
 )
 
 
@@ -1741,3 +1742,196 @@ class TestCmdAttribAdfs:
         entry = image.sides[0]["$.MYFILE"]
         data = image.sides[0].readFile(entry)
         assert data == b"\xAA\xBB\xCC"
+
+
+# =======================================================================
+# cmdRename - DFS
+# =======================================================================
+
+class TestCmdRename:
+
+    def _createSsdWithFile(self, tmp_path) -> str:
+        """Create an SSD with one file and return its path."""
+        out = str(tmp_path / "disc.ssd")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "prog.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\x01\x02\x03\x04")
+
+        args = Namespace(
+            image=out, file=data_path, name="T.MYPROG",
+            load="1900", exec_addr="8023", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        return out
+
+    def testSimpleRename(self, tmp_path) -> None:
+        """Rename a file keeping the same directory."""
+        img = self._createSsdWithFile(tmp_path)
+
+        renameFile(img, "T.MYPROG", "T.NEWNAME")
+
+        attribs = getFileAttribs(img, "T.NEWNAME")
+        assert attribs.fullName == "T.NEWNAME"
+        assert attribs.load_addr == 0x1900
+
+    def testChangeDirPrefix(self, tmp_path) -> None:
+        """Rename a file to a different DFS directory."""
+        img = self._createSsdWithFile(tmp_path)
+
+        renameFile(img, "T.MYPROG", "$.MOVED")
+
+        attribs = getFileAttribs(img, "$.MOVED")
+        assert attribs.fullName == "$.MOVED"
+
+    def testDuplicateBlocked(self, tmp_path) -> None:
+        """Rename to an existing name raises DiscError."""
+        img = self._createSsdWithFile(tmp_path)
+
+        # Add a second file.
+        data_path = str(tmp_path / "other.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\xAA")
+
+        args = Namespace(
+            image=img, file=data_path, name="T.OTHER",
+            load="0", exec_addr="0", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        with pytest.raises(DiscError, match="already exists"):
+            renameFile(img, "T.MYPROG", "T.OTHER")
+
+    def testSourceNotFound(self, tmp_path) -> None:
+        """Rename of nonexistent file raises error."""
+        img = self._createSsdWithFile(tmp_path)
+
+        with pytest.raises(Exception, match="not found"):
+            renameFile(img, "$.NOPE", "$.NEW")
+
+    def testRenamePreservesData(self, tmp_path) -> None:
+        """Renaming does not corrupt file data."""
+        img = self._createSsdWithFile(tmp_path)
+
+        renameFile(img, "T.MYPROG", "T.RENAMED")
+
+        image = openDiscImage(img)
+        entry = image.sides[0]["T.RENAMED"]
+        data = image.sides[0].readFile(entry)
+        assert data == b"\x01\x02\x03\x04"
+
+    def testRenamePreservesAttribs(self, tmp_path) -> None:
+        """Renaming preserves load/exec/locked attributes."""
+        img = self._createSsdWithFile(tmp_path)
+
+        setFileAttribs(img, "T.MYPROG", locked=True)
+        renameFile(img, "T.MYPROG", "T.NEWNAME")
+
+        attribs = getFileAttribs(img, "T.NEWNAME")
+        assert attribs.locked
+        assert attribs.load_addr == 0x1900
+        assert attribs.exec_addr == 0x8023
+
+    def testCmdRenameHandler(self, tmp_path) -> None:
+        """cmdRename handler prints confirmation."""
+        img = self._createSsdWithFile(tmp_path)
+        args = Namespace(
+            image=img, old_name="T.MYPROG", new_name="T.NEWNAME", side=0,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdRename(args)
+
+        assert "Renamed" in buf.getvalue()
+        attribs = getFileAttribs(img, "T.NEWNAME")
+        assert attribs.fullName == "T.NEWNAME"
+
+
+# =======================================================================
+# cmdRename - ADFS
+# =======================================================================
+
+class TestCmdRenameAdfs:
+
+    def _createAdfWithFile(self, tmp_path) -> str:
+        """Create an ADFS image with one file and return its path."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "prog.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\xAA\xBB\xCC")
+
+        args = Namespace(
+            image=out, file=data_path, name="$.MYFILE",
+            load="2000", exec_addr="3000", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        return out
+
+    def testSimpleRenameAdfs(self, tmp_path) -> None:
+        """Rename a file on ADFS within the same directory."""
+        img = self._createAdfWithFile(tmp_path)
+
+        renameFile(img, "$.MYFILE", "$.NEWNAME")
+
+        attribs = getFileAttribs(img, "$.NEWNAME")
+        assert attribs.fullName == "$.NEWNAME"
+        assert attribs.load_addr == 0x2000
+
+    def testRenamePreservesDataAdfs(self, tmp_path) -> None:
+        """Renaming on ADFS does not corrupt file data."""
+        img = self._createAdfWithFile(tmp_path)
+
+        renameFile(img, "$.MYFILE", "$.RENAMED")
+
+        image = openAdfsImage(img)
+        entry = image.sides[0]["$.RENAMED"]
+        data = image.sides[0].readFile(entry)
+        assert data == b"\xAA\xBB\xCC"
+
+    def testDuplicateBlockedAdfs(self, tmp_path) -> None:
+        """Rename to an existing name on ADFS raises error."""
+        img = self._createAdfWithFile(tmp_path)
+
+        # Add a second file.
+        data_path = str(tmp_path / "other.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\xDD")
+
+        args = Namespace(
+            image=img, file=data_path, name="$.OTHER",
+            load="0", exec_addr="0", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        with pytest.raises(Exception, match="already exists"):
+            renameFile(img, "$.MYFILE", "$.OTHER")

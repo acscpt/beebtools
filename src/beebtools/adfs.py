@@ -1251,6 +1251,89 @@ class ADFSSide:
 
         self.writeDirectory(parent_sector, updated_dir)
 
+    def renameFile(self, old_path: str, new_path: str) -> None:
+        """Rename a file within the same directory.
+
+        Changes the entry's name field and rewrites the parent
+        directory with entries re-sorted. The file data is not moved.
+
+        Cross-directory moves are not supported - both paths must
+        share the same parent directory.
+
+        Args:
+            old_path: Current full ADFS path (e.g. '$.GAMES.ELITE').
+            new_path: New full ADFS path (e.g. '$.GAMES.NEWNAME').
+
+        Raises:
+            ADFSError: If the source is not found, the destination
+                       already exists, or the paths have different
+                       parent directories.
+        """
+        old_sector, old_dir, old_leaf = self._resolveParent(old_path)
+        new_sector, new_dir, new_leaf = self._resolveParent(new_path)
+
+        # Both paths must live in the same parent directory.
+        if old_sector != new_sector:
+            raise ADFSError(
+                "Cross-directory rename is not supported - "
+                "both paths must be in the same directory"
+            )
+
+        # Validate the new name against ADFS naming rules.
+        validateAdfsName(new_leaf)
+
+        # Find the source entry.
+        old_upper = old_leaf.upper()
+        new_upper = new_leaf.upper()
+        source = None
+
+        for entry in old_dir.entries:
+            if entry.name.upper() == old_upper:
+                source = entry
+                break
+
+        if source is None:
+            raise ADFSError(
+                f"File '{old_leaf}' not found in directory"
+            )
+
+        # Check the destination name is not already taken.
+        for entry in old_dir.entries:
+            if entry.name.upper() == new_upper and entry is not source:
+                raise ADFSError(
+                    f"File '{new_leaf}' already exists in directory"
+                )
+
+        # Build the renamed entry.
+        renamed = replace(source, name=new_leaf)
+
+        # Remove the old entry and re-insert with the new name so that
+        # directory entries remain sorted by name.
+        remaining = [
+            e for e in old_dir.entries
+            if e.name.upper() != old_upper
+        ]
+
+        # Insert in case-insensitive sorted order.
+        insert_pos = len(remaining)
+
+        for i, existing in enumerate(remaining):
+            if new_upper < existing.name.upper():
+                insert_pos = i
+                break
+
+        remaining.insert(insert_pos, renamed)
+
+        updated_dir = ADFSDirectory(
+            name=old_dir.name,
+            title=old_dir.title,
+            parent_sector=old_dir.parent_sector,
+            sequence=old_dir.sequence,
+            entries=tuple(remaining),
+        )
+
+        self.writeDirectory(old_sector, updated_dir)
+
     def mkdir(self, path: str) -> None:
         """Create a new subdirectory at the given ADFS path.
 

@@ -1064,3 +1064,40 @@ def setFileAttribs(
     side_obj.updateEntry(path, updated)
 
     _writeBack(image, image_path)
+
+
+# -------------------------------------------------------------------
+# Rename
+# -------------------------------------------------------------------
+
+def renameFile(
+    image_path: str,
+    old_name: str,
+    new_name: str,
+    side: int = 0,
+) -> None:
+    """Rename a file on an existing disc image.
+
+    Both names are normalised with qualifyDiscPath() so bare names
+    get a '$.' prefix. The file data is not moved - only the catalogue
+    entry is updated.
+
+    Args:
+        image_path: Path to a disc image file.
+        old_name:   Current filename on the disc (e.g. 'T.MYPROG').
+        new_name:   New filename (e.g. 'T.NEWNAME').
+        side:       Disc side (0 or 1, default 0).
+
+    Raises:
+        DiscError: If the source is not found or the destination
+                   already exists.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+
+    old_path = qualifyDiscPath(old_name)
+    new_path = qualifyDiscPath(new_name)
+
+    side_obj.renameFile(old_path, new_path)
+
+    _writeBack(image, image_path)

@@ -33,6 +33,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `mkdir` and `maxTitleLength` added to the `DiscSide` protocol so that
   Layer 4 no longer needs format-specific branching.
 
+- `rename` command: rename a file on DFS or ADFS images. DFS supports
+  directory prefix changes; ADFS supports same-directory renames.
+
+- Library function `renameFile` in the public API for programmatic
+  file renaming.
+
 ## [0.5.1] - 2026-04-05
 
 ### Added
