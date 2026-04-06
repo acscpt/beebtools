@@ -19,13 +19,14 @@ from beebtools.entry import DiscFile, DiscError
 from beebtools.disc import (
     extractAll, buildImage,
     getTitle, setTitle, getBoot, setBoot, discInfo,
+    getFileAttribs, setFileAttribs,
 )
 from beebtools.boot import BootOption
 from beebtools.adfs import openAdfsImage
 from beebtools.inf import formatInf, parseInf
 from beebtools.cli import (
     cmdCreate, cmdAdd, cmdDelete, cmdBuild,
-    cmdTitle, cmdBoot, cmdDisc,
+    cmdTitle, cmdBoot, cmdDisc, cmdAttrib,
 )
 
 
@@ -1562,3 +1563,181 @@ class TestCmdDiscAdfs:
         assert info.boot_option == BootOption.OFF
         assert info.free_space > 0
         assert info.total_sectors > 0
+
+
+# =======================================================================
+# cmdAttrib - DFS
+# =======================================================================
+
+class TestCmdAttrib:
+
+    def _createSsdWithFile(self, tmp_path) -> str:
+        """Create an SSD with one file and return its path."""
+        out = str(tmp_path / "disc.ssd")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "prog.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\x01\x02\x03\x04")
+
+        args = Namespace(
+            image=out, file=data_path, name="T.MYPROG",
+            load="1900", exec_addr="8023", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        return out
+
+    def testGetAttribs(self, tmp_path) -> None:
+        """Getter mode prints file attributes."""
+        img = self._createSsdWithFile(tmp_path)
+        args = Namespace(
+            image=img, filename="T.MYPROG", side=0,
+            locked=None, load=None, exec_addr=None,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAttrib(args)
+
+        output = buf.getvalue()
+        assert "T.MYPROG" in output
+        assert "00001900" in output
+        assert "00008023" in output
+
+    def testSetLocked(self, tmp_path) -> None:
+        """Lock a file and verify round-trip."""
+        img = self._createSsdWithFile(tmp_path)
+
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert not attribs.locked
+
+        setFileAttribs(img, "T.MYPROG", locked=True)
+
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert attribs.locked
+
+    def testSetUnlocked(self, tmp_path) -> None:
+        """Unlock a previously locked file."""
+        img = self._createSsdWithFile(tmp_path)
+
+        setFileAttribs(img, "T.MYPROG", locked=True)
+        setFileAttribs(img, "T.MYPROG", locked=False)
+
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert not attribs.locked
+
+    def testSetLoadExec(self, tmp_path) -> None:
+        """Change load and exec addresses."""
+        img = self._createSsdWithFile(tmp_path)
+
+        setFileAttribs(img, "T.MYPROG", load_addr=0x31900, exec_addr=0x38023)
+
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert attribs.load_addr == 0x31900
+        assert attribs.exec_addr == 0x38023
+
+    def testCmdAttribSetter(self, tmp_path) -> None:
+        """cmdAttrib setter mode locks and changes addresses."""
+        img = self._createSsdWithFile(tmp_path)
+        args = Namespace(
+            image=img, filename="T.MYPROG", side=0,
+            locked=True, load="031900", exec_addr="038023",
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAttrib(args)
+
+        assert "Updated" in buf.getvalue()
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert attribs.locked
+        assert attribs.load_addr == 0x31900
+
+    def testFileNotFound(self, tmp_path) -> None:
+        """Attrib on nonexistent file raises DiscError."""
+        img = self._createSsdWithFile(tmp_path)
+
+        with pytest.raises(DiscError, match="not found"):
+            getFileAttribs(img, "$.NOPE")
+
+    def testSetAttribsPreservesData(self, tmp_path) -> None:
+        """Changing attributes does not corrupt file data."""
+        img = self._createSsdWithFile(tmp_path)
+
+        setFileAttribs(img, "T.MYPROG", locked=True, load_addr=0xABCD)
+
+        image = openDiscImage(img)
+        entry = image.sides[0]["T.MYPROG"]
+        data = image.sides[0].readFile(entry)
+        assert data == b"\x01\x02\x03\x04"
+
+
+# =======================================================================
+# cmdAttrib - ADFS
+# =======================================================================
+
+class TestCmdAttribAdfs:
+
+    def _createAdfWithFile(self, tmp_path) -> str:
+        """Create an ADFS image with one file and return its path."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "prog.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\xAA\xBB\xCC")
+
+        args = Namespace(
+            image=out, file=data_path, name="$.MYFILE",
+            load="2000", exec_addr="3000", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        return out
+
+    def testSetLockedAdfs(self, tmp_path) -> None:
+        """Lock a file on an ADFS image."""
+        img = self._createAdfWithFile(tmp_path)
+
+        setFileAttribs(img, "$.MYFILE", locked=True)
+
+        attribs = getFileAttribs(img, "$.MYFILE")
+        assert attribs.locked
+
+    def testSetLoadExecAdfs(self, tmp_path) -> None:
+        """Change load and exec addresses on an ADFS image."""
+        img = self._createAdfWithFile(tmp_path)
+
+        setFileAttribs(img, "$.MYFILE", load_addr=0xFFFF1900, exec_addr=0xFFFF8023)
+
+        attribs = getFileAttribs(img, "$.MYFILE")
+        assert attribs.load_addr == 0xFFFF1900
+        assert attribs.exec_addr == 0xFFFF8023
+
+    def testSetAttribsPreservesDataAdfs(self, tmp_path) -> None:
+        """Changing ADFS attributes does not corrupt file data."""
+        img = self._createAdfWithFile(tmp_path)
+
+        setFileAttribs(img, "$.MYFILE", locked=True, load_addr=0x1234)
+
+        image = openAdfsImage(img)
+        entry = image.sides[0]["$.MYFILE"]
+        data = image.sides[0].readFile(entry)
+        assert data == b"\xAA\xBB\xCC"

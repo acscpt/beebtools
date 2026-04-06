@@ -289,6 +289,30 @@ print(f"Tracks: {info.tracks}")
 All functions accept a `side` parameter for DFS DSD images (default 0).
 Title length is validated against the format limit (12 for DFS, 19 for ADFS).
 
+## Reading and setting file attributes
+
+The `getFileAttribs` and `setFileAttribs` functions read and modify
+individual file attributes (locked, load address, exec address) on an
+existing disc image.
+
+```python
+from beebtools import getFileAttribs, setFileAttribs
+
+# Read attributes
+attribs = getFileAttribs("mydisc.ssd", "T.MYPROG")
+print(f"Load: {attribs.load_addr:08X}")
+print(f"Exec: {attribs.exec_addr:08X}")
+print(f"Locked: {attribs.locked}")
+
+# Lock a file
+setFileAttribs("mydisc.ssd", "T.MYPROG", locked=True)
+
+# Change load and exec addresses
+setFileAttribs("mydisc.ssd", "T.MYPROG", load_addr=0x1900, exec_addr=0x8023)
+```
+
+Only the attributes passed as non-None are changed; others are left intact.
+
 ## Working with .inf sidecar files
 
 The `.inf` format is the standard BBC Micro community interchange format for

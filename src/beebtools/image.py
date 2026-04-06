@@ -90,6 +90,23 @@ class DiscSide(Protocol):
         """Remove a file from the catalogue by its full path."""
         ...
 
+    def updateEntry(self, path: str, updated: DiscEntry) -> None:
+        """Replace a catalogue entry with an updated version."""
+        ...
+
+    def mkdir(self, path: str) -> None:
+        """Create a subdirectory at the given path.
+
+        For flat filing systems (DFS) this is a no-op because
+        directories are implicit single-character prefixes.
+        """
+        ...
+
+    @property
+    def maxTitleLength(self) -> int:
+        """Maximum number of characters allowed in a disc title."""
+        ...
+
     def __iter__(self) -> Iterator[DiscEntry]: ...
 
     def __len__(self) -> int: ...

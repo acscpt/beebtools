@@ -23,7 +23,7 @@ Exceptions:
     ADFSFormatError -- raised when the disc image is structurally invalid
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterator, List, Optional, Tuple
 
 from .boot import BootOption
@@ -318,6 +318,11 @@ class ADFSSide:
     def side(self) -> int:
         """Side number (always 0 for ADFS)."""
         return self._side
+
+    @property
+    def maxTitleLength(self) -> int:
+        """Maximum disc title length for ADFS (19 characters)."""
+        return 19
 
     # -------------------------------------------------------------------
     # Python data model
@@ -1194,6 +1199,57 @@ class ADFSSide:
                 (target.length + ADFS_SECTOR_SIZE - 1) // ADFS_SECTOR_SIZE
             )
             self._freeBlock(target.start_sector, sectors_used)
+
+    def updateEntry(self, path: str, updated: 'ADFSEntry') -> None:
+        """Replace a directory entry with an updated version.
+
+        Finds the entry matching the given path and substitutes it with
+        the updated entry. Used to change attributes (locked, load_addr,
+        exec_addr) without moving the file on disc.
+
+        Args:
+            path:    Full ADFS path (e.g. '$.GAMES.ELITE').
+            updated: Replacement entry with modified attributes.
+
+        Raises:
+            ADFSError: If the file is not found.
+        """
+        parent_sector, parent_dir, leaf_name = self._resolveParent(path)
+
+        # Keep the 'access' bitmask in sync with the 'locked' bool.
+        # Bit 2 of access is the lock flag; _encodeEntryName reads
+        # access (not locked) when writing to disc.
+        if updated.locked and not (updated.access & 0x04):
+            updated = replace(updated, access=updated.access | 0x04)
+        elif not updated.locked and (updated.access & 0x04):
+            updated = replace(updated, access=updated.access & ~0x04)
+
+        # Find the entry and replace it.
+        name_upper = leaf_name.upper()
+        new_entries = []
+        found = False
+
+        for entry in parent_dir.entries:
+            if not found and entry.name.upper() == name_upper:
+                new_entries.append(updated)
+                found = True
+            else:
+                new_entries.append(entry)
+
+        if not found:
+            raise ADFSError(
+                f"File '{leaf_name}' not found in directory"
+            )
+
+        updated_dir = ADFSDirectory(
+            name=parent_dir.name,
+            title=parent_dir.title,
+            parent_sector=parent_dir.parent_sector,
+            sequence=parent_dir.sequence,
+            entries=tuple(new_entries),
+        )
+
+        self.writeDirectory(parent_sector, updated_dir)
 
     def mkdir(self, path: str) -> None:
         """Create a new subdirectory at the given ADFS path.

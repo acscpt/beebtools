@@ -145,6 +145,7 @@ own detailed reference page.
 | [`title`](https://github.com/acscpt/beebtools/blob/main/docs/commands/title.md) | Read or set the disc title |
 | [`boot`](https://github.com/acscpt/beebtools/blob/main/docs/commands/boot.md) | Read or set the disc boot option |
 | [`disc`](https://github.com/acscpt/beebtools/blob/main/docs/commands/disc.md) | Print disc summary or set disc properties |
+| [`attrib`](https://github.com/acscpt/beebtools/blob/main/docs/commands/attrib.md) | Read or set file attributes |
 
 ## Usage
 
@@ -217,6 +218,15 @@ beebtools disc mydisc.ssd
 
 # Set title and boot option in one call
 beebtools disc mydisc.ssd --title "BOOTABLE" --boot RUN
+
+# Print file attributes (load, exec, length, locked)
+beebtools attrib mydisc.ssd T.MYPROG
+
+# Lock a file
+beebtools attrib mydisc.ssd T.MYPROG --locked
+
+# Change load and exec addresses
+beebtools attrib mydisc.ssd T.MYPROG --load 1900 --exec 8023
 ```
 
 ## Pretty-printer

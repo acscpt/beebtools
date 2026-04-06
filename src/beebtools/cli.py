@@ -24,6 +24,7 @@ from .disc import (
     extractFile, addFileTo, qualifyDiscPath,
     writeBasicText, escapeNonAscii,
     getTitle, setTitle, getBoot, setBoot, discInfo,
+    getFileAttribs, setFileAttribs,
 )
 
 
@@ -558,6 +559,59 @@ def cmdDisc(args: Namespace) -> None:
               f"({info.free_space // 256} sectors)")
 
 
+# ---------------------------------------------------------------------------
+# attrib command
+# ---------------------------------------------------------------------------
+
+def cmdAttrib(args: Namespace) -> None:
+    """Read or set file attributes on a disc image.
+
+    With no flags, prints the current attributes. With flags, sets them.
+
+    Args:
+        args: Parsed argparse namespace for the 'attrib' subcommand.
+    """
+    has_mutations = (
+        args.locked is not None
+        or args.load is not None
+        or args.exec_addr is not None
+    )
+
+    if has_mutations:
+        # Parse hex addresses.
+        load_addr = int(args.load, 16) if args.load is not None else None
+        exec_addr = int(args.exec_addr, 16) if args.exec_addr is not None else None
+
+        setFileAttribs(
+            args.image, args.filename, side=args.side,
+            locked=args.locked,
+            load_addr=load_addr,
+            exec_addr=exec_addr,
+        )
+
+        # Confirm what was changed.
+        parts = []
+        if args.locked is not None:
+            parts.append("locked" if args.locked else "unlocked")
+        if load_addr is not None:
+            parts.append(f"load={load_addr:08X}")
+        if exec_addr is not None:
+            parts.append(f"exec={exec_addr:08X}")
+        print(f"Updated {args.filename}: {', '.join(parts)}")
+    else:
+        # Getter mode - print current attributes.
+        use_colour = sys.stdout.isatty()
+        attribs = getFileAttribs(args.image, args.filename, side=args.side)
+
+        lock_str = "L" if attribs.locked else "-"
+        lock_display = _colour(lock_str, _RED, use_colour and attribs.locked)
+        print(f"File:   {attribs.fullName}")
+        print(f"Load:   {attribs.load_addr:08X}")
+        print(f"Exec:   {attribs.exec_addr:08X}")
+        print(f"Length: {attribs.length:08X}")
+        print(f"Locked: {lock_display}")
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -722,6 +776,28 @@ def main() -> None:
                         choices=[0, 1],
                         help="Disc side for DFS (default: 0; ignored for ADFS)")
 
+    # -- attrib subcommand --
+    p_attrib = sub.add_parser(
+        "attrib", help="Read or set file attributes")
+    p_attrib.add_argument("image",
+                          help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
+    p_attrib.add_argument("filename",
+                          help="Filename (e.g. T.MYPROG or $.GAMES.ELITE)")
+    lock_group = p_attrib.add_mutually_exclusive_group()
+    lock_group.add_argument("--locked", action="store_const", const=True,
+                            default=None, dest="locked",
+                            help="Lock the file")
+    lock_group.add_argument("--unlocked", action="store_const", const=False,
+                            dest="locked",
+                            help="Unlock the file")
+    p_attrib.add_argument("--load", default=None,
+                          help="Load address in hex (e.g. FF1900)")
+    p_attrib.add_argument("--exec", dest="exec_addr", default=None,
+                          help="Exec address in hex (e.g. FF8023)")
+    p_attrib.add_argument("--side", type=int, default=0,
+                          choices=[0, 1],
+                          help="Disc side for DFS (default: 0; ignored for ADFS)")
+
     args = parser.parse_args()
 
     try:
@@ -745,6 +821,8 @@ def main() -> None:
             cmdBoot(args)
         elif args.command == "disc":
             cmdDisc(args)
+        elif args.command == "attrib":
+            cmdAttrib(args)
         else:
             parser.print_help()
     except Exception as e:

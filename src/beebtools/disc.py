@@ -734,9 +734,9 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
             # Build the disc path for this directory.
             child_path = f"{disc_parent}.{name}" if disc_parent else name
 
-            # For ADFS images, create subdirectories below the root on disc.
-            # The root-level directories (like '$') already exist.
-            if disc_parent and hasattr(side, "mkdir"):
+            # Create subdirectories below the root on disc.  DFS has
+            # no real directories so its mkdir() is a no-op.
+            if disc_parent:
                 side.mkdir(child_path)
 
             _walkSourceTree(side, path, child_path)
@@ -828,13 +828,6 @@ def _writeBack(image: DiscImage, path: str) -> None:
 # Title
 # -------------------------------------------------------------------
 
-# Maximum title lengths per format. DFS stores the title across 12
-# bytes in sectors 0 and 1. ADFS stores it in a 19-byte field in the
-# root directory footer.
-_DFS_MAX_TITLE = 12
-_ADFS_MAX_TITLE = 19
-
-
 def getTitle(image_path: str, side: int = 0) -> str:
     """Read the disc title from an image file.
 
@@ -869,10 +862,8 @@ def setTitle(image_path: str, title: str, side: int = 0) -> None:
     side_obj = image[side]
     cat = side_obj.readCatalogue()
 
-    # Determine the maximum title length from the format. ADFS catalogues
-    # have a tracks property derived from total_sectors; DFS uses disc_size.
-    # A simpler check: ADFS images have much larger disc_size values.
-    max_len = _titleMaxLength(image_path)
+    # Ask the format engine for its title length limit.
+    max_len = side_obj.maxTitleLength
 
     if len(title) > max_len:
         raise DiscError(
@@ -884,16 +875,6 @@ def setTitle(image_path: str, title: str, side: int = 0) -> None:
     side_obj.writeCatalogue(updated)
 
     _writeBack(image, image_path)
-
-
-def _titleMaxLength(image_path: str) -> int:
-    """Return the maximum title length for the image format."""
-    ext = os.path.splitext(image_path)[1].lower()
-
-    if ext in (".adf", ".adl"):
-        return _ADFS_MAX_TITLE
-
-    return _DFS_MAX_TITLE
 
 
 # -------------------------------------------------------------------
@@ -972,3 +953,114 @@ def discInfo(image_path: str, side: int = 0) -> DiscInfo:
         tracks=cat.tracks,
         side=side,
     )
+
+
+# -------------------------------------------------------------------
+# File attributes
+# -------------------------------------------------------------------
+
+@dataclass
+class FileAttribs:
+    """File attribute summary returned by getFileAttribs()."""
+
+    fullName: str
+    load_addr: int
+    exec_addr: int
+    length: int
+    locked: bool
+
+
+def getFileAttribs(
+    image_path: str, filename: str, side: int = 0,
+) -> FileAttribs:
+    """Read the attributes of a file on a disc image.
+
+    Args:
+        image_path: Path to a disc image file.
+        filename:   File path on the disc (e.g. '$.MYPROG').
+        side:       Disc side (0 or 1, default 0).
+
+    Returns:
+        FileAttribs with name, addresses, length, and locked status.
+
+    Raises:
+        DiscError: If the file is not found.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+    path = qualifyDiscPath(filename)
+
+    # Look up the entry in the catalogue.
+    cat = side_obj.readCatalogue()
+    for entry in cat.entries:
+        if entry.fullName == path:
+            return FileAttribs(
+                fullName=entry.fullName,
+                load_addr=entry.load_addr,
+                exec_addr=entry.exec_addr,
+                length=entry.length,
+                locked=entry.locked,
+            )
+
+    raise DiscError(f"File '{path}' not found")
+
+
+def setFileAttribs(
+    image_path: str,
+    filename: str,
+    side: int = 0,
+    locked: Optional[bool] = None,
+    load_addr: Optional[int] = None,
+    exec_addr: Optional[int] = None,
+) -> None:
+    """Set file attributes on an existing disc image.
+
+    Only the attributes that are not None are changed. The file's data
+    is not moved - only the catalogue entry is updated.
+
+    Args:
+        image_path: Path to a disc image file.
+        filename:   File path on the disc (e.g. '$.MYPROG').
+        side:       Disc side (0 or 1, default 0).
+        locked:     New locked status, or None to leave unchanged.
+        load_addr:  New load address, or None to leave unchanged.
+        exec_addr:  New exec address, or None to leave unchanged.
+
+    Raises:
+        DiscError: If the file is not found.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+    path = qualifyDiscPath(filename)
+
+    # Look up the entry in the catalogue.
+    cat = side_obj.readCatalogue()
+    target = None
+
+    for entry in cat.entries:
+        if entry.fullName == path:
+            target = entry
+            break
+
+    if target is None:
+        raise DiscError(f"File '{path}' not found")
+
+    # Build the replacement fields dict - only include changed values.
+    changes = {}
+
+    if locked is not None:
+        changes["locked"] = locked
+
+    if load_addr is not None:
+        changes["load_addr"] = load_addr
+
+    if exec_addr is not None:
+        changes["exec_addr"] = exec_addr
+
+    if not changes:
+        return
+
+    updated = replace(target, **changes)
+    side_obj.updateEntry(path, updated)
+
+    _writeBack(image, image_path)

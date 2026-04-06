@@ -24,6 +24,15 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `writeCatalogue` added to the `DiscSide` protocol and implemented on
   `ADFSSide`, enabling catalogue-level mutations on ADFS images.
 
+- `attrib` command: read or set file attributes (locked, load address, exec
+  address). Works on both DFS and ADFS images.
+
+- Library functions `getFileAttribs` and `setFileAttribs` in the public API
+  for programmatic file attribute access.
+
+- `mkdir` and `maxTitleLength` added to the `DiscSide` protocol so that
+  Layer 4 no longer needs format-specific branching.
+
 ## [0.5.1] - 2026-04-05
 
 ### Added

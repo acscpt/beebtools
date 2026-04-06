@@ -20,7 +20,7 @@ Exceptions:
     DFSFormatError -- raised when the disc image is structurally invalid
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterator, List, Optional, Tuple
 
 from .boot import BootOption
@@ -145,6 +145,15 @@ class DFSSide:
     def side(self) -> int:
         """Side number (0 or 1) this reader represents."""
         return self._side
+
+    @property
+    def maxTitleLength(self) -> int:
+        """Maximum disc title length for DFS (12 characters)."""
+        return 12
+
+    def mkdir(self, path: str) -> None:
+        """No-op: DFS directories are implicit single-character prefixes."""
+        pass
 
     # -------------------------------------------------------------------
     # Python data model
@@ -718,6 +727,47 @@ class DFSSide:
             boot_option=cat.boot_option,
             disc_size=cat.disc_size,
             entries=tuple(remaining),
+        )
+
+        self.writeCatalogue(new_cat)
+
+    def updateEntry(self, path: str, updated: 'DFSEntry') -> None:
+        """Replace a catalogue entry with an updated version.
+
+        Finds the entry matching the given path and substitutes it with
+        the updated entry. The replacement must refer to the same file
+        (same start sector and length). Catalogue fields other than the
+        entry are preserved; the cycle number is incremented.
+
+        Args:
+            path:    Full DFS path (e.g. '$.MYPROG').
+            updated: Replacement entry with modified attributes.
+
+        Raises:
+            DFSError: If the file is not found.
+        """
+        directory, name = splitDfsPath(path)
+        cat = self.readCatalogue()
+
+        new_entries = []
+        found = False
+
+        for e in cat.entries:
+            if not found and e.name == name and e.directory == directory:
+                new_entries.append(updated)
+                found = True
+            else:
+                new_entries.append(e)
+
+        if not found:
+            raise DFSError(f"File {directory}.{name} not found")
+
+        new_cat = DFSCatalogue(
+            title=cat.title,
+            cycle=self._bcdIncrement(cat.cycle),
+            boot_option=cat.boot_option,
+            disc_size=cat.disc_size,
+            entries=tuple(new_entries),
         )
 
         self.writeCatalogue(new_cat)
