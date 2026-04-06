@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 from .boot import BootOption
 from .entry import DiscEntry, DiscFile, DiscError, isBasicExecAddr
 from .basic import (
-    basicProgramSize, classifyFileType, detokenize, tokenize,
+    basicProgramSize, classifyFileType, compactLine, detokenize, tokenize,
     escapeNonAscii, unescapeNonAscii,
     looksLikeTokenizedBasic, looksLikePlainText, prettyPrint,
 )
@@ -770,7 +770,34 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
         # disc image does not overflow.
         if name.endswith(".bas") and isBasicExecAddr(inf.exec_addr):
             lines = readBasicText(data)
-            data = tokenize(lines)
+
+            # Tokenize with auto-compaction for overflowing lines.
+            # Pretty-printed whitespace can push dense lines past the
+            # 255-byte limit.  The on_overflow callback compacts just
+            # the offending line and collects a warning.
+            compact_warnings: List[str] = []
+
+            # Callback for tokenize(): when a pretty-printed line
+            # overflows 255 bytes, strip cosmetic whitespace from
+            # just that line and warn the user after the build.
+            def compactAndWarn(text: str, msg: str) -> str:
+                """Compact a line and record the overflow warning."""
+                compact_warnings.append(msg)
+                return compactLine(text)
+
+            try:
+                data = tokenize(lines, on_overflow=compactAndWarn)
+            except ValueError as exc:
+                raise DiscError(
+                    f"side {side.side} {inf.fullName}: {exc}"
+                ) from exc
+
+            for w in compact_warnings:
+                print(
+                    f"Warning: side {side.side} {inf.fullName}: "
+                    f"compacted to fit ({w})",
+                    file=sys.stderr,
+                )
 
         # Add to disc using the path from the .inf sidecar.
         side.addFile(DiscFile(

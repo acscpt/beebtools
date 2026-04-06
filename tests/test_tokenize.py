@@ -85,6 +85,40 @@ def testParseLineInvalid():
         _parseLine("PRINT")
 
 
+def testLineTooLongRaises():
+    """A line whose tokenized content exceeds 255 bytes raises ValueError."""
+    # REM tokenizes to 1 byte (0xF4), rest is literal.  We need content
+    # that makes 4 + len(content) > 255, i.e. content > 251 bytes.
+    # 1 (REM token) + 251 (x's) = 252 content bytes -> linelen = 256.
+    long_line = "   10REM" + "x" * 251
+    with pytest.raises(ValueError, match="max 255"):
+        tokenize([long_line])
+
+
+def testOnOverflowCallbackCompacts():
+    """The on_overflow callback is invoked and its result retokenized."""
+    # Build a line that overflows: REM + 251 x's = 256 bytes total.
+    long_line = "   10REM" + "x" * 251
+    # Callback trims to 200 x's so it fits (4 + 1 + 200 = 205).
+    short_line = "   10REM" + "x" * 200
+    msgs = []
+    result = tokenize(
+        [long_line],
+        on_overflow=lambda text, msg: (msgs.append(msg), short_line)[-1],
+    )
+    assert len(msgs) == 1
+    assert "256 bytes" in msgs[0]
+    # Verify the tokenized output matches the short version.
+    assert result == tokenize([short_line])
+
+
+def testOnOverflowStillTooLongRaises():
+    """ValueError is raised when callback result still exceeds 255 bytes."""
+    long_line = "   10REM" + "x" * 251
+    with pytest.raises(ValueError, match="max 255"):
+        tokenize([long_line], on_overflow=lambda text, msg: text)
+
+
 # ---------------------------------------------------------------------------
 # Basic keyword tokenization
 # ---------------------------------------------------------------------------

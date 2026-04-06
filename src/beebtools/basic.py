@@ -18,11 +18,11 @@ have a single import point for all BASIC operations.
 """
 
 import re
-from typing import Dict, FrozenSet, List, Set, Tuple
+from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from .tokens import TOKENS, LINE_LITERAL_TOKENS
 from .entry import DiscEntry
-from .pretty import prettyPrint  # noqa: F401 - re-export
+from .pretty import compactLine, prettyPrint  # noqa: F401 - re-export
 
 
 # =====================================================================
@@ -718,7 +718,10 @@ def _tokenizeContent(text: str, fn_proc_names: Dict[str, FrozenSet[str]] = None)
     return bytes(result)
 
 
-def tokenize(lines: List[str]) -> bytes:
+def tokenize(
+    lines: List[str],
+    on_overflow: Optional[Callable[[str, str], str]] = None,
+) -> bytes:
     """Convert LIST-style text lines to tokenized BBC BASIC II binary.
 
     Accepts the output of detokenize() and produces bytes suitable for
@@ -726,15 +729,20 @@ def tokenize(lines: List[str]) -> bytes:
     whitespace are silently skipped.
 
     Args:
-        lines: List of strings in LIST format, each starting with a
-            line number (optionally preceded by whitespace).
+        lines:       List of strings in LIST format, each starting with a
+                     line number (optionally preceded by whitespace).
+        on_overflow: Optional callback invoked when a tokenized line exceeds
+                     255 bytes. Receives (line_text, error_message) and
+                     returns a replacement line to retry. If the replacement
+                     still overflows, ValueError is raised.
 
     Returns:
         Tokenized BBC BASIC II program as bytes, including the
         end-of-program marker (0x0D 0xFF).
 
     Raises:
-        ValueError: If a non-blank line cannot be parsed.
+        ValueError: If a non-blank line cannot be parsed, or if a line
+            still exceeds 255 bytes after the on_overflow callback.
     """
     result = bytearray()
 
@@ -758,6 +766,22 @@ def tokenize(lines: List[str]) -> bytes:
         # leading_0x0D + hi + lo + len_byte + content = 4 + len(content).
         # This is the Russell format used by BBC BASIC II on the 6502.
         linelen = 4 + len(content)
+
+        # The length byte is a single unsigned byte (max 255).  If the
+        # tokenized content exceeds that limit the program would be corrupt.
+        if linelen > 255:
+            msg = (f"Line {linenum} tokenizes to {linelen} bytes "
+                   f"(max 255)")
+
+            # Give the caller a chance to compact and retry.
+            if on_overflow is not None:
+                replacement = on_overflow(line, msg)
+                _, content_text = _parseLine(replacement)
+                content = _tokenizeContent(content_text, fn_proc_names)
+                linelen = 4 + len(content)
+
+            if linelen > 255:
+                raise ValueError(msg)
 
         result.append(0x0D)
         result.append(hi)

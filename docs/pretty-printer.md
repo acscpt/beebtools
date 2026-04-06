@@ -49,11 +49,48 @@ A common copy-protection trick was to follow a `*|` MOS comment with
 would go blank after that line. The program was still there - you just couldn't
 see it.
 
-`beebtools` detects `*|` at the start of a statement and converts it to `REM *|`,
-stripping any control characters from the tail. The comment text (if any) is
-preserved.
+`beebtools` detects `*|` at the start of a statement and preserves it as a
+MOS comment. Control characters (e.g. VDU 21 bytes) are kept intact so the
+text-encoding layer can handle them appropriately:
+
+- **ASCII mode** (default): control characters are replaced with `?`
+- **UTF-8 mode** (`-t utf8`): control characters pass through as-is
+- **Escape mode** (`-t escape`): control characters become `\xHH` notation,
+  enabling a lossless round-trip back to the original tokenized binary
 
 ```basic
-  590 *|                       <- in the tokenized file
-  590 REM *|                   <- what beebtools shows you
+  590 *|                       <- in the tokenized file (with VDU 21 bytes)
+  590 *|visible                <- default ASCII mode (control chars replaced)
+  590 *|\x15\x15visible        <- escape mode (control chars as \xHH)
 ```
+
+## Round-tripping pretty-printed files
+
+Pretty-printing is inherently lossy - it adds cosmetic spaces around operators
+that were not present in the original tokenized binary. When a pretty-printed
+file is retokenized (e.g. with `beebtools add` or `beebtools build`), those
+extra spaces are preserved as literal `0x20` bytes in the tokenized output.
+The retokenized program will run identically but will not be byte-identical
+to the original.
+
+For a byte-identical round-trip, extract without `--pretty`:
+
+```bash
+beebtools extract mydisc.ssd T.MYPROG -t escape -o myprog.bas
+beebtools add rebuilt.ssd myprog.bas --name T.MYPROG
+```
+
+If you want readable formatting and the closest achievable fidelity, combine
+`--pretty` with `-t escape`:
+
+```bash
+beebtools extract mydisc.ssd T.MYPROG --pretty -t escape -o myprog.bas
+beebtools add rebuilt.ssd myprog.bas --name T.MYPROG
+```
+
+This preserves anti-listing traps, teletext control codes, and all non-ASCII
+bytes embedded in PRINT strings. The only difference from the original binary
+is the cosmetic spacing the pretty-printer added.
+
+Without `-t escape`, the default ASCII mode replaces non-printable characters
+with `?`, which is lossy but produces cleaner output for casual browsing.

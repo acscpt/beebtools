@@ -11,7 +11,7 @@ and returns the same lines with operator spacing normalised.
 
 import pytest
 
-from beebtools import prettyPrint
+from beebtools import compactLine, prettyPrint, tokenize, detokenize
 
 
 # ---------------------------------------------------------------------------
@@ -238,30 +238,53 @@ def testStarMidExpressionIsMultiply():
 # Anti-listing trap (*| conversion)
 # ---------------------------------------------------------------------------
 
-def testAntiListingTrapConvertedToRem():
-    """*| at the start of statement should be converted to REM *|."""
+def testAntiListingTrapPreserved():
+    """*| at the start of statement is kept as *| (not converted to REM)."""
     result = prettyPrint(["   10*|"])
-    assert result[0] == "   10 REM *|"
+    assert result[0] == "   10 *|"
 
 
 def testAntiListingTrapTextPreserved():
     """Any printable text after *| should be preserved."""
     result = prettyPrint(["   10*|Hello"])
-    assert result[0] == "   10 REM *|Hello"
+    assert result[0] == "   10 *|Hello"
 
 
-def testAntiListingTrapControlCharsStripped():
-    """Control characters in the *| tail (e.g. VDU 21) should be stripped."""
+def testAntiListingTrapControlCharsPreserved():
+    """Control characters in the *| tail (e.g. VDU 21) are kept intact."""
     # VDU 21 (chr 21) was commonly inserted to blank the screen on LIST.
+    # The text-encoding layer handles display; pretty-printer preserves them.
     result = prettyPrint(["   10*|\x15\x15visible"])
-    assert result[0] == "   10 REM *|visible"
+    assert result[0] == "   10 *|\x15\x15visible"
 
 
-def testAntiListingTrapAllControlCharsStripped():
-    """Any byte with ord < 32 in the trap tail is removed."""
+def testAntiListingTrapAllControlCharsPreserved():
+    """All bytes in the trap tail are preserved for the encoding layer."""
     tail = "".join(chr(c) for c in range(1, 32))
     result = prettyPrint([f"   10*|{tail}text"])
-    assert result[0] == "   10 REM *|text"
+    assert result[0] == f"   10 *|{tail}text"
+
+
+def testAntiListingTrapRoundTrip():
+    """Anti-listing trap survives detokenize -> prettyPrint -> tokenize."""
+    # Build a tokenized program with a *| trap containing VDU 21 bytes.
+    # Star commands are literal ASCII in the tokenized form: the * byte
+    # followed by the rest of the line as raw characters.
+    # Include a leading space before *| since the pretty-printer normalises
+    # spacing between the line number and the first token.
+    trap_line = b' *|\x15\x15visible'
+    line_content = trap_line
+    line_len = 4 + len(line_content)  # 0x0D + hi + lo + len + content
+    original = bytes([
+        0x0D, 0x00, 0x0A, line_len,
+    ]) + line_content + bytes([0x0D, 0xFF])
+
+    # Round-trip through pretty-print.
+    lines = detokenize(original)
+    pretty_lines = prettyPrint(lines)
+    result = tokenize(pretty_lines)
+
+    assert result == original
 
 
 # ---------------------------------------------------------------------------
@@ -280,3 +303,80 @@ def testDoubleSpacesCollapsed():
     # Skip the fixed 5-char right-justified line number prefix, which may
     # contain leading spaces that are not part of the code output.
     assert "  " not in result[0][5:]
+
+
+# ---------------------------------------------------------------------------
+# compactLine - inverse of prettyPrint spacing
+# ---------------------------------------------------------------------------
+
+def testCompactStripsOperatorSpaces():
+    """Spaces around = and : added by prettyPrint are removed."""
+    pretty = "   10 A = 10 : B = 20"
+    assert compactLine(pretty) == "   10A=10:B=20"
+
+
+def testCompactPreservesWordBoundarySpaces():
+    """Spaces between two word characters are kept to avoid merging."""
+    pretty = "   10 IF A THEN B"
+    assert compactLine(pretty) == "   10IF A THEN B"
+
+
+def testCompactPreservesStringLiterals():
+    """Spaces inside quoted strings are never stripped."""
+    pretty = '   10 A$ = "hello world"'
+    assert compactLine(pretty) == '   10A$="hello world"'
+
+
+def testCompactPreservesRemTail():
+    """Everything after REM is literal and passed through unchanged."""
+    pretty = "   10 REM this is a comment  with  spaces"
+    assert compactLine(pretty) == "   10REM this is a comment  with  spaces"
+
+
+def testCompactPreservesDataTail():
+    """Everything after DATA is literal and passed through unchanged."""
+    pretty = "   10 DATA 1, 2, hello world"
+    assert compactLine(pretty) == "   10DATA 1, 2, hello world"
+
+
+def testCompactCommaSpaces():
+    """Trailing spaces after commas are stripped outside literal tails."""
+    pretty = "   10 ENVELOPE1, 1, 0, 0, 0"
+    assert compactLine(pretty) == "   10ENVELOPE1,1,0,0,0"
+
+
+def testCompactArithmeticOperators():
+    """Spaces around arithmetic operators are removed."""
+    pretty = "   10 V = A + B * C / D"
+    assert compactLine(pretty) == "   10V=A+B*C/D"
+
+
+def testCompactDenseLine():
+    """A dense multi-statement line compacts down substantially."""
+    pretty = (
+        "  100 PROCscreen : DEC% = FALSE : I% = 126 : T% = 0 : "
+        "VDU23;8202;0;0;0; : DIMMUS$(3), E(3), N(3) : V = 110"
+    )
+    result = compactLine(pretty)
+    # Colons lose 2 bytes each, = loses 2 each, commas lose 1 each.
+    assert " : " not in result
+    assert " = " not in result
+    assert ", " not in result
+    # Word boundaries still have spaces.
+    assert result.startswith("  100PROCscreen:")
+
+
+def testCompactNonBasicLineUnchanged():
+    """A line that does not start with a line number is returned as-is."""
+    line = "not a basic line"
+    assert compactLine(line) == line
+
+
+def testCompactRoundTrip():
+    """pretty -> compact -> tokenize produces the same bytes as raw tokenize."""
+    raw = "   10ENVELOPE1,1,0,0,0,0,0,0,126,-1,0,-1,127,63"
+    raw_bytes = tokenize([raw])
+    pretty_lines = prettyPrint([raw])
+    compact_lines = [compactLine(l) for l in pretty_lines]
+    compact_bytes = tokenize(compact_lines)
+    assert compact_bytes == raw_bytes
