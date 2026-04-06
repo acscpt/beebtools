@@ -15,6 +15,9 @@ For a quick overview and installation instructions, see the
 | [add](https://github.com/acscpt/beebtools/blob/main/docs/commands/add.md) | Add a file to an existing disc image |
 | [delete](https://github.com/acscpt/beebtools/blob/main/docs/commands/delete.md) | Delete a file from a disc image |
 | [build](https://github.com/acscpt/beebtools/blob/main/docs/commands/build.md) | Build a disc image from files with .inf sidecars |
+| [title](https://github.com/acscpt/beebtools/blob/main/docs/commands/title.md) | Read or set the disc title |
+| [boot](https://github.com/acscpt/beebtools/blob/main/docs/commands/boot.md) | Read or set the disc boot option |
+| [disc](https://github.com/acscpt/beebtools/blob/main/docs/commands/disc.md) | Print disc summary or set disc properties |
 
 ## Guides
 

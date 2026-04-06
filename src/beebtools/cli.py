@@ -23,6 +23,7 @@ from .disc import (
     sortCatalogueEntries, classifyFileType,
     extractFile, addFileTo, qualifyDiscPath,
     writeBasicText, escapeNonAscii,
+    getTitle, setTitle, getBoot, setBoot, discInfo,
 )
 
 
@@ -468,6 +469,95 @@ def cmdBuild(args: Namespace) -> None:
     print(f"Built {label}: {args.output}")
 
 
+# ---------------------------------------------------------------------------
+# title command
+# ---------------------------------------------------------------------------
+
+def cmdTitle(args: Namespace) -> None:
+    """Read or set the disc title on an existing image.
+
+    With no title argument, prints the current title.
+    With a title argument, sets the title and writes it back.
+
+    Args:
+        args: Parsed argparse namespace for the 'title' subcommand.
+    """
+    if args.title is None:
+        # Getter mode - print the current title.
+        title = getTitle(args.image, side=args.side)
+        print(title)
+    else:
+        # Setter mode - update the title.
+        setTitle(args.image, args.title, side=args.side)
+        print(f"Title set to '{args.title}'")
+
+
+# ---------------------------------------------------------------------------
+# boot command
+# ---------------------------------------------------------------------------
+
+def cmdBoot(args: Namespace) -> None:
+    """Read or set the disc boot option on an existing image.
+
+    With no boot argument, prints the current boot option.
+    With a boot argument, sets the option and writes it back.
+
+    Args:
+        args: Parsed argparse namespace for the 'boot' subcommand.
+    """
+    if args.boot is None:
+        # Getter mode - print the current boot option.
+        boot = getBoot(args.image, side=args.side)
+        print(boot.name)
+    else:
+        # Setter mode - update the boot option.
+        setBoot(args.image, args.boot, side=args.side)
+        print(f"Boot option set to {args.boot.name}")
+
+
+# ---------------------------------------------------------------------------
+# disc command
+# ---------------------------------------------------------------------------
+
+def cmdDisc(args: Namespace) -> None:
+    """Print disc summary or set disc-level properties.
+
+    With no mutation flags, prints a disc summary (title, boot option,
+    free space). With --title and/or --boot, sets the specified properties.
+
+    Args:
+        args: Parsed argparse namespace for the 'disc' subcommand.
+    """
+    has_mutations = args.set_title is not None or args.set_boot is not None
+
+    if has_mutations:
+        # Apply requested mutations.
+        if args.set_title is not None:
+            setTitle(args.image, args.set_title, side=args.side)
+
+        if args.set_boot is not None:
+            setBoot(args.image, args.set_boot, side=args.side)
+
+        # Confirm what was changed.
+        parts = []
+        if args.set_title is not None:
+            parts.append(f"title='{args.set_title}'")
+        if args.set_boot is not None:
+            parts.append(f"boot={args.set_boot.name}")
+        print(f"Updated: {', '.join(parts)}")
+    else:
+        # Summary mode - print disc metadata.
+        use_colour = sys.stdout.isatty()
+        info = discInfo(args.image, side=args.side)
+
+        title_display = info.title if info.title else "(none)"
+        print(f"Title:  {_colour(title_display, _BOLD + _CYAN, use_colour)}")
+        print(f"Boot:   {info.boot_option.name}")
+        print(f"Tracks: {info.tracks}")
+        print(f"Free:   {info.free_space:,} bytes "
+              f"({info.free_space // 256} sectors)")
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -594,6 +684,44 @@ def main() -> None:
                          default=BootOption.OFF,
                          help="Boot option: OFF, LOAD, RUN, EXEC (or 0-3)")
 
+    # -- title subcommand --
+    p_title = sub.add_parser(
+        "title", help="Read or set the disc title")
+    p_title.add_argument("image",
+                         help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
+    p_title.add_argument("title", nargs="?", default=None,
+                         help="New title (omit to print current title)")
+    p_title.add_argument("--side", type=int, default=0,
+                         choices=[0, 1],
+                         help="Disc side for DFS (default: 0; ignored for ADFS)")
+
+    # -- boot subcommand --
+    p_boot = sub.add_parser(
+        "boot", help="Read or set the disc boot option")
+    p_boot.add_argument("image",
+                        help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
+    p_boot.add_argument("boot", nargs="?", type=_parseBootOption,
+                        default=None,
+                        help="Boot option: OFF, LOAD, RUN, EXEC (omit to "
+                             "print current value)")
+    p_boot.add_argument("--side", type=int, default=0,
+                        choices=[0, 1],
+                        help="Disc side for DFS (default: 0; ignored for ADFS)")
+
+    # -- disc subcommand --
+    p_disc = sub.add_parser(
+        "disc", help="Print disc summary or set disc properties")
+    p_disc.add_argument("image",
+                        help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
+    p_disc.add_argument("--title", dest="set_title", default=None,
+                        help="Set the disc title")
+    p_disc.add_argument("--boot", dest="set_boot",
+                        type=_parseBootOption, default=None,
+                        help="Set boot option: OFF, LOAD, RUN, EXEC")
+    p_disc.add_argument("--side", type=int, default=0,
+                        choices=[0, 1],
+                        help="Disc side for DFS (default: 0; ignored for ADFS)")
+
     args = parser.parse_args()
 
     try:
@@ -611,6 +739,12 @@ def main() -> None:
             cmdDelete(args)
         elif args.command == "build":
             cmdBuild(args)
+        elif args.command == "title":
+            cmdTitle(args)
+        elif args.command == "boot":
+            cmdBoot(args)
+        elif args.command == "disc":
+            cmdDisc(args)
         else:
             parser.print_help()
     except Exception as e:

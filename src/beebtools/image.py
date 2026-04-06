@@ -59,6 +59,14 @@ class DiscSide(Protocol):
         """
         ...
 
+    def writeCatalogue(self, catalogue: DiscCatalogue) -> None:
+        """Write a modified catalogue back to the disc image.
+
+        Encodes the catalogue fields and writes them to the appropriate
+        sectors. Clears any cached catalogue so the next read re-parses.
+        """
+        ...
+
     def readFile(self, entry: DiscEntry) -> bytes:
         """Read the contents of a file from disc."""
         ...

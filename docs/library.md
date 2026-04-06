@@ -262,6 +262,33 @@ with open("rebuilt.adf", "wb") as f:
 Format sizes: `ADFS_S_SECTORS` (160K, 640 sectors), `ADFS_M_SECTORS` (320K,
 1280 sectors), `ADFS_L_SECTORS` (640K, 2560 sectors).
 
+## Reading and setting disc metadata
+
+The `getTitle`, `setTitle`, `getBoot`, `setBoot`, and `discInfo` functions
+provide programmatic access to disc-level properties.
+
+```python
+from beebtools import getTitle, setTitle, getBoot, setBoot, discInfo, BootOption
+
+# Read and set the disc title
+title = getTitle("mydisc.ssd")
+setTitle("mydisc.ssd", "NEW TITLE")
+
+# Read and set the boot option
+boot = getBoot("mydisc.ssd")
+setBoot("mydisc.ssd", BootOption.EXEC)
+
+# Get a full disc summary
+info = discInfo("mydisc.ssd")
+print(f"Title: {info.title}")
+print(f"Boot: {info.boot_option.name}")
+print(f"Free: {info.free_space} bytes ({info.free_space // 256} sectors)")
+print(f"Tracks: {info.tracks}")
+```
+
+All functions accept a `side` parameter for DFS DSD images (default 0).
+Title length is validated against the format limit (12 for DFS, 19 for ADFS).
+
 ## Working with .inf sidecar files
 
 The `.inf` format is the standard BBC Micro community interchange format for

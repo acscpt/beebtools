@@ -5,6 +5,25 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `title` command: read or set the disc title. Supports DFS (max 12 chars)
+  and ADFS (max 19 chars), including per-side titles on DSD images.
+
+- `boot` command: read or set the disc boot option (OFF, LOAD, RUN, EXEC).
+  Supports DFS and ADFS formats.
+
+- `disc` command: print a disc summary (title, boot, tracks, free space) or
+  set disc-level properties with `--title` and `--boot` flags.
+
+- Library functions `getTitle`, `setTitle`, `getBoot`, `setBoot`, and
+  `discInfo` in the public API for programmatic disc metadata access.
+
+- `writeCatalogue` added to the `DiscSide` protocol and implemented on
+  `ADFSSide`, enabling catalogue-level mutations on ADFS images.
+
 ## [0.5.1] - 2026-04-05
 
 ### Added

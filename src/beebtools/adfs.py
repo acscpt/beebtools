@@ -978,6 +978,39 @@ class ADFSSide:
 
         return self._catalogue
 
+    def writeCatalogue(self, catalogue: ADFSCatalogue) -> None:
+        """Write catalogue-level metadata back to the ADFS image.
+
+        Updates the root directory title and boot option in the free
+        space map. Entries are not modified - use writeDirectory() for
+        per-entry changes.
+
+        Clears the catalogue cache so the next readCatalogue() re-parses.
+        """
+        # Update the root directory title.
+        root = self.readDirectory(ADFS_ROOT_SECTOR)
+        updated_root = ADFSDirectory(
+            name=root.name,
+            title=catalogue.title,
+            parent_sector=root.parent_sector,
+            sequence=root.sequence,
+            entries=root.entries,
+        )
+        self.writeDirectory(ADFS_ROOT_SECTOR, updated_root)
+
+        # Update the boot option in the free space map.
+        fsm = self.readFreeSpaceMap()
+        updated_fsm = ADFSFreeSpaceMap(
+            blocks=fsm.blocks,
+            total_sectors=fsm.total_sectors,
+            disc_id=fsm.disc_id,
+            boot_option=catalogue.boot_option,
+        )
+        self.writeFreeSpaceMap(updated_fsm)
+
+        # Invalidate the catalogue cache.
+        self._catalogue = None
+
     # -------------------------------------------------------------------
     # File extraction
     # -------------------------------------------------------------------

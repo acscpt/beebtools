@@ -20,7 +20,7 @@ All operations that span more than one lower layer belong here.
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from .boot import BootOption
@@ -807,3 +807,168 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
             exec_addr=inf.exec_addr,
             locked=inf.locked,
         ))
+
+
+# ===================================================================
+# In-place disc mutation helpers
+# ===================================================================
+
+def _writeBack(image: DiscImage, path: str) -> None:
+    """Serialize a modified image back to its file.
+
+    Args:
+        image: The in-memory disc image (already mutated).
+        path:  The file path to write to.
+    """
+    with open(path, "wb") as f:
+        f.write(image.serialize())
+
+
+# -------------------------------------------------------------------
+# Title
+# -------------------------------------------------------------------
+
+# Maximum title lengths per format. DFS stores the title across 12
+# bytes in sectors 0 and 1. ADFS stores it in a 19-byte field in the
+# root directory footer.
+_DFS_MAX_TITLE = 12
+_ADFS_MAX_TITLE = 19
+
+
+def getTitle(image_path: str, side: int = 0) -> str:
+    """Read the disc title from an image file.
+
+    Args:
+        image_path: Path to a disc image file.
+        side:       Disc side (0 or 1, default 0).
+
+    Returns:
+        The disc title string.
+    """
+    image = openImage(image_path)
+    cat = image[side].readCatalogue()
+
+    return cat.title
+
+
+def setTitle(image_path: str, title: str, side: int = 0) -> None:
+    """Set the disc title on an existing image file.
+
+    Validates the title length for the detected format and writes the
+    updated catalogue back to disc.
+
+    Args:
+        image_path: Path to a disc image file.
+        title:      New disc title.
+        side:       Disc side (0 or 1, default 0).
+
+    Raises:
+        DiscError: If the title exceeds the format's maximum length.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+    cat = side_obj.readCatalogue()
+
+    # Determine the maximum title length from the format. ADFS catalogues
+    # have a tracks property derived from total_sectors; DFS uses disc_size.
+    # A simpler check: ADFS images have much larger disc_size values.
+    max_len = _titleMaxLength(image_path)
+
+    if len(title) > max_len:
+        raise DiscError(
+            f"Title too long: {len(title)} characters "
+            f"(maximum {max_len} for this format)"
+        )
+
+    updated = replace(cat, title=title)
+    side_obj.writeCatalogue(updated)
+
+    _writeBack(image, image_path)
+
+
+def _titleMaxLength(image_path: str) -> int:
+    """Return the maximum title length for the image format."""
+    ext = os.path.splitext(image_path)[1].lower()
+
+    if ext in (".adf", ".adl"):
+        return _ADFS_MAX_TITLE
+
+    return _DFS_MAX_TITLE
+
+
+# -------------------------------------------------------------------
+# Boot option
+# -------------------------------------------------------------------
+
+def getBoot(image_path: str, side: int = 0) -> BootOption:
+    """Read the boot option from an image file.
+
+    Args:
+        image_path: Path to a disc image file.
+        side:       Disc side (0 or 1, default 0).
+
+    Returns:
+        The current BootOption value.
+    """
+    image = openImage(image_path)
+    cat = image[side].readCatalogue()
+
+    return cat.boot_option
+
+
+def setBoot(image_path: str, boot_option: BootOption, side: int = 0) -> None:
+    """Set the boot option on an existing image file.
+
+    Args:
+        image_path:  Path to a disc image file.
+        boot_option: New boot option value.
+        side:        Disc side (0 or 1, default 0).
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+    cat = side_obj.readCatalogue()
+
+    updated = replace(cat, boot_option=boot_option)
+    side_obj.writeCatalogue(updated)
+
+    _writeBack(image, image_path)
+
+
+# -------------------------------------------------------------------
+# Disc summary
+# -------------------------------------------------------------------
+
+@dataclass
+class DiscInfo:
+    """Summary of disc-level metadata returned by discInfo()."""
+
+    title: str
+    boot_option: BootOption
+    free_space: int
+    total_sectors: int
+    tracks: int
+    side: int
+
+
+def discInfo(image_path: str, side: int = 0) -> DiscInfo:
+    """Return a summary of disc-level metadata.
+
+    Args:
+        image_path: Path to a disc image file.
+        side:       Disc side (0 or 1, default 0).
+
+    Returns:
+        DiscInfo with title, boot option, free space, and geometry.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+    cat = side_obj.readCatalogue()
+
+    return DiscInfo(
+        title=cat.title,
+        boot_option=cat.boot_option,
+        free_space=side_obj.freeSpace(),
+        total_sectors=cat.disc_size,
+        tracks=cat.tracks,
+        side=side,
+    )
