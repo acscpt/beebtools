@@ -734,8 +734,10 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
             # Build the disc path for this directory.
             child_path = f"{disc_parent}.{name}" if disc_parent else name
 
-            # Create subdirectories below the root on disc.  DFS has
-            # no real directories so its mkdir() is a no-op.
+            # Create subdirectories below the root on disc.  For DFS
+            # this level is never reached because DFS trees are flat
+            # (single-character directory prefixes sit at the top level
+            # where disc_parent is empty).
             if disc_parent:
                 side.mkdir(child_path)
 
@@ -1099,5 +1101,71 @@ def renameFile(
     new_path = qualifyDiscPath(new_name)
 
     side_obj.renameFile(old_path, new_path)
+
+    _writeBack(image, image_path)
+
+
+# -------------------------------------------------------------------
+# compact
+# -------------------------------------------------------------------
+
+def compactDisc(
+    image_path: str,
+    side: int = 0,
+) -> int:
+    """Defragment a disc image by closing gaps between files.
+
+    Files are packed toward the highest sectors so all free space is
+    contiguous. Only DFS images support compaction - ADFS raises
+    DiscError.
+
+    Args:
+        image_path: Path to a disc image file.
+        side:       Disc side (0 or 1, default 0).
+
+    Returns:
+        Number of bytes freed by compaction (zero if already packed).
+
+    Raises:
+        DiscError: If the format does not support compaction.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+
+    freed = side_obj.compact()
+
+    _writeBack(image, image_path)
+
+    return freed
+
+
+# -------------------------------------------------------------------
+# mkdir
+# -------------------------------------------------------------------
+
+def makeDirectory(
+    image_path: str,
+    path: str,
+    side: int = 0,
+) -> None:
+    """Create a subdirectory on an existing disc image.
+
+    Only ADFS images support subdirectories - DFS raises DiscError.
+    The parent directory must already exist.
+
+    Args:
+        image_path: Path to a disc image file.
+        path:       Full disc path for the new directory
+                    (e.g. '$.GAMES' or '$.GAMES.ARCADE').
+        side:       Disc side (0 or 1, default 0).
+
+    Raises:
+        DiscError: If the format does not support subdirectories
+                   or the parent directory does not exist.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+
+    side_obj.mkdir(path)
 
     _writeBack(image, image_path)

@@ -25,7 +25,7 @@ from .disc import (
     writeBasicText, escapeNonAscii,
     getTitle, setTitle, getBoot, setBoot, discInfo,
     getFileAttribs, setFileAttribs,
-    renameFile,
+    renameFile, compactDisc, makeDirectory,
 )
 
 
@@ -629,6 +629,33 @@ def cmdRename(args: Namespace) -> None:
     print(f"Renamed {args.old_name} -> {args.new_name}")
 
 
+def cmdCompact(args: Namespace) -> None:
+    """Defragment a DFS disc image by closing gaps between files.
+
+    Args:
+        args: Parsed argparse namespace for the 'compact' subcommand.
+    """
+    freed = compactDisc(args.image, side=args.side)
+
+    # Report the result in sectors and bytes.
+    sectors = freed // 256
+
+    if freed == 0:
+        print("Disc is already fully compacted")
+    else:
+        print(f"Freed {sectors} sectors ({freed} bytes)")
+
+
+def cmdMkdir(args: Namespace) -> None:
+    """Create a subdirectory on an ADFS disc image.
+
+    Args:
+        args: Parsed argparse namespace for the 'mkdir' subcommand.
+    """
+    makeDirectory(args.image, args.path, side=args.side)
+    print(f"Created directory {args.path}")
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -824,6 +851,26 @@ def main() -> None:
                           choices=[0, 1],
                           help="Disc side for DFS (default: 0; ignored for ADFS)")
 
+    # -- compact subcommand --
+    p_compact = sub.add_parser(
+        "compact", help="Defragment a DFS disc image")
+    p_compact.add_argument("image",
+                           help="Path to disc image (.ssd or .dsd)")
+    p_compact.add_argument("--side", type=int, default=0,
+                           choices=[0, 1],
+                           help="Disc side for DFS (default: 0)")
+
+    # -- mkdir subcommand --
+    p_mkdir = sub.add_parser(
+        "mkdir", help="Create a subdirectory on an ADFS disc image")
+    p_mkdir.add_argument("image",
+                         help="Path to disc image (.adf or .adl)")
+    p_mkdir.add_argument("path",
+                         help="Directory path (e.g. $.GAMES or $.GAMES.ARCADE)")
+    p_mkdir.add_argument("--side", type=int, default=0,
+                         choices=[0, 1],
+                         help="Disc side (default: 0; ignored for ADFS)")
+
     args = parser.parse_args()
 
     try:
@@ -851,6 +898,10 @@ def main() -> None:
             cmdAttrib(args)
         elif args.command == "rename":
             cmdRename(args)
+        elif args.command == "compact":
+            cmdCompact(args)
+        elif args.command == "mkdir":
+            cmdMkdir(args)
         else:
             parser.print_help()
     except Exception as e:

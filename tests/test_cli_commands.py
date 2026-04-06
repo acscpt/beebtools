@@ -20,7 +20,7 @@ from beebtools.disc import (
     extractAll, buildImage,
     getTitle, setTitle, getBoot, setBoot, discInfo,
     getFileAttribs, setFileAttribs,
-    renameFile,
+    renameFile, compactDisc, makeDirectory,
 )
 from beebtools.boot import BootOption
 from beebtools.adfs import openAdfsImage
@@ -28,6 +28,7 @@ from beebtools.inf import formatInf, parseInf
 from beebtools.cli import (
     cmdCreate, cmdAdd, cmdDelete, cmdBuild,
     cmdTitle, cmdBoot, cmdDisc, cmdAttrib, cmdRename,
+    cmdCompact, cmdMkdir,
 )
 
 
@@ -1935,3 +1936,180 @@ class TestCmdRenameAdfs:
 
         with pytest.raises(Exception, match="already exists"):
             renameFile(img, "$.MYFILE", "$.OTHER")
+
+
+# =======================================================================
+# compact command
+# =======================================================================
+
+class TestCmdCompact:
+
+    def _createSsdWithGap(self, tmp_path) -> str:
+        """Create an SSD with a gap (add 3 files, delete the middle one)."""
+        image = createDiscImage(tracks=80, title="COMPACT")
+        side = image.sides[0]
+        side.addFile(DiscFile("$.FILE1", b"\x11" * 512, load_addr=0))
+        side.addFile(DiscFile("$.FILE2", b"\x22" * 1024, load_addr=0))
+        side.addFile(DiscFile("$.FILE3", b"\x33" * 256, load_addr=0))
+        out = str(tmp_path / "disc.ssd")
+        with open(out, "wb") as f:
+            f.write(image.serialize())
+
+        # Delete the middle file to create a gap.
+        from beebtools.cli import cmdDelete
+        args = Namespace(image=out, filename="$.FILE2", side=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdDelete(args)
+
+        return out
+
+    def testCompactFreesSectors(self, tmp_path) -> None:
+        """Compacting a disc with a gap frees sectors."""
+        img = self._createSsdWithGap(tmp_path)
+        args = Namespace(image=img, side=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCompact(args)
+
+        output = buf.getvalue()
+        assert "Freed" in output
+        assert "sectors" in output
+
+    def testCompactAlreadyPacked(self, tmp_path) -> None:
+        """Compacting an already-compact disc reports zero freed."""
+        image = createDiscImage(tracks=80, title="PACKED")
+        side = image.sides[0]
+        side.addFile(DiscFile("$.FILE1", b"\x11" * 256, load_addr=0))
+        out = str(tmp_path / "packed.ssd")
+        with open(out, "wb") as f:
+            f.write(image.serialize())
+
+        args = Namespace(image=out, side=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCompact(args)
+
+        assert "already fully compacted" in buf.getvalue()
+
+    def testCompactPreservesFileData(self, tmp_path) -> None:
+        """File contents are intact after compaction."""
+        img = self._createSsdWithGap(tmp_path)
+
+        compactDisc(img, side=0)
+
+        image = openDiscImage(img)
+        side = image.sides[0]
+        cat = side.readCatalogue()
+
+        # Check the two remaining files are present and correct.
+        names = {e.fullName for e in cat.entries}
+        assert "$.FILE1" in names
+        assert "$.FILE3" in names
+
+        for entry in cat.entries:
+            data = side.readFile(entry)
+            if entry.fullName == "$.FILE1":
+                assert data == b"\x11" * 512
+            elif entry.fullName == "$.FILE3":
+                assert data == b"\x33" * 256
+
+    def testCompactEmptyDisc(self, tmp_path) -> None:
+        """Compacting an empty disc returns zero freed."""
+        image = createDiscImage(tracks=80, title="EMPTY")
+        out = str(tmp_path / "empty.ssd")
+        with open(out, "wb") as f:
+            f.write(image.serialize())
+
+        freed = compactDisc(out, side=0)
+        assert freed == 0
+
+    def testCompactAdfsRaisesError(self, tmp_path) -> None:
+        """Compacting an ADFS image raises an error."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        with pytest.raises(Exception, match="do not support compaction"):
+            compactDisc(out)
+
+
+# =======================================================================
+# mkdir command
+# =======================================================================
+
+class TestCmdMkdir:
+
+    def _createBlankAdf(self, tmp_path) -> str:
+        """Create a blank 80-track ADF and return its path."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+        return out
+
+    def testMkdirCreatesDirectory(self, tmp_path) -> None:
+        """mkdir creates a subdirectory on an ADFS image."""
+        img = self._createBlankAdf(tmp_path)
+
+        args = Namespace(image=img, path="$.GAMES", side=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdMkdir(args)
+
+        assert "Created directory $.GAMES" in buf.getvalue()
+
+        # Verify the directory entry exists.
+        image = openAdfsImage(img)
+        side = image.sides[0]
+        cat = side.readCatalogue()
+        names = [e.name for e in cat.entries]
+        assert "GAMES" in names
+
+    def testMkdirNestedDirectory(self, tmp_path) -> None:
+        """mkdir creates nested directories on ADFS."""
+        img = self._createBlankAdf(tmp_path)
+
+        # Create parent first.
+        makeDirectory(img, "$.GAMES")
+
+        # Create child.
+        args = Namespace(image=img, path="$.GAMES.ARCADE", side=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdMkdir(args)
+
+        assert "Created directory $.GAMES.ARCADE" in buf.getvalue()
+
+    def testMkdirParentNotFound(self, tmp_path) -> None:
+        """mkdir on a non-existent parent directory raises an error."""
+        img = self._createBlankAdf(tmp_path)
+
+        with pytest.raises(Exception):
+            makeDirectory(img, "$.NOSUCH.CHILD")
+
+    def testMkdirDfsRaisesError(self, tmp_path) -> None:
+        """mkdir on a DFS image raises an error."""
+        image = createDiscImage(tracks=80, title="DFSTEST")
+        out = str(tmp_path / "test.ssd")
+        with open(out, "wb") as f:
+            f.write(image.serialize())
+
+        with pytest.raises(DFSError):
+            makeDirectory(out, "$.GAMES")
+
+    def testMkdirViaLibrary(self, tmp_path) -> None:
+        """makeDirectory library function creates a directory."""
+        img = self._createBlankAdf(tmp_path)
+
+        makeDirectory(img, "$.MYDIR")
+
+        # Verify.
+        image = openAdfsImage(img)
+        entry = image.sides[0]["$.MYDIR"]
+        assert entry.is_directory is True

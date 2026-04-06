@@ -39,6 +39,22 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Library function `renameFile` in the public API for programmatic
   file renaming.
 
+- `compact` command: defragment a DFS disc image by closing gaps between
+  files. Reports sectors and bytes freed. DFS only - ADFS raises an error.
+
+- Library function `compactDisc` in the public API for programmatic
+  disc compaction.
+
+- `mkdir` command: create a subdirectory on an ADFS disc image. The parent
+  directory must already exist. DFS raises an error since it has no
+  subdirectories.
+
+- Library function `makeDirectory` in the public API for programmatic
+  directory creation.
+
+- `compact` added to the `DiscSide` protocol. `mkdir` now raises
+  `DiscError` on unsupported formats instead of silently no-oping.
+
 ## [0.5.1] - 2026-04-05
 
 ### Added

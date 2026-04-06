@@ -104,8 +104,16 @@ class DiscSide(Protocol):
     def mkdir(self, path: str) -> None:
         """Create a subdirectory at the given path.
 
-        For flat filing systems (DFS) this is a no-op because
-        directories are implicit single-character prefixes.
+        Raises DiscError on formats that do not support subdirectories.
+        """
+        ...
+
+    def compact(self) -> int:
+        """Defragment file storage by closing gaps between files.
+
+        Returns the number of bytes freed by compaction (zero if
+        already packed). Raises DiscError on formats that do not
+        support compaction.
         """
         ...
 

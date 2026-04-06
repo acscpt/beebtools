@@ -152,8 +152,11 @@ class DFSSide:
         return 12
 
     def mkdir(self, path: str) -> None:
-        """No-op: DFS directories are implicit single-character prefixes."""
-        pass
+        """DFS does not support subdirectories.
+
+        Raises DFSError unconditionally.
+        """
+        raise DFSError("DFS does not support subdirectories")
 
     # -------------------------------------------------------------------
     # Python data model

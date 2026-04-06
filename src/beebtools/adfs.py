@@ -1377,6 +1377,13 @@ class ADFSSide:
         updated_dir = self._insertEntry(parent_dir, dir_entry)
         self.writeDirectory(parent_sector, updated_dir)
 
+    def compact(self) -> int:
+        """ADFS images do not support compaction.
+
+        Raises ADFSError unconditionally.
+        """
+        raise ADFSError("ADFS images do not support compaction")
+
 
 # -----------------------------------------------------------------------
 # ADFSImage - disc image container
