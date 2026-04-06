@@ -20,7 +20,7 @@ All operations that span more than one lower layer belong here.
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from .boot import BootOption
@@ -734,9 +734,11 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
             # Build the disc path for this directory.
             child_path = f"{disc_parent}.{name}" if disc_parent else name
 
-            # For ADFS images, create subdirectories below the root on disc.
-            # The root-level directories (like '$') already exist.
-            if disc_parent and hasattr(side, "mkdir"):
+            # Create subdirectories below the root on disc.  For DFS
+            # this level is never reached because DFS trees are flat
+            # (single-character directory prefixes sit at the top level
+            # where disc_parent is empty).
+            if disc_parent:
                 side.mkdir(child_path)
 
             _walkSourceTree(side, path, child_path)
@@ -807,3 +809,363 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
             exec_addr=inf.exec_addr,
             locked=inf.locked,
         ))
+
+
+# ===================================================================
+# In-place disc mutation helpers
+# ===================================================================
+
+def _writeBack(image: DiscImage, path: str) -> None:
+    """Serialize a modified image back to its file.
+
+    Args:
+        image: The in-memory disc image (already mutated).
+        path:  The file path to write to.
+    """
+    with open(path, "wb") as f:
+        f.write(image.serialize())
+
+
+# -------------------------------------------------------------------
+# Title
+# -------------------------------------------------------------------
+
+def getTitle(image_path: str, side: int = 0) -> str:
+    """Read the disc title from an image file.
+
+    Args:
+        image_path: Path to a disc image file.
+        side:       Disc side (0 or 1, default 0).
+
+    Returns:
+        The disc title string.
+    """
+    image = openImage(image_path)
+    cat = image[side].readCatalogue()
+
+    return cat.title
+
+
+def setTitle(image_path: str, title: str, side: int = 0) -> None:
+    """Set the disc title on an existing image file.
+
+    Validates the title length for the detected format and writes the
+    updated catalogue back to disc.
+
+    Args:
+        image_path: Path to a disc image file.
+        title:      New disc title.
+        side:       Disc side (0 or 1, default 0).
+
+    Raises:
+        DiscError: If the title exceeds the format's maximum length.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+    cat = side_obj.readCatalogue()
+
+    # Ask the format engine for its title length limit.
+    max_len = side_obj.maxTitleLength
+
+    if len(title) > max_len:
+        raise DiscError(
+            f"Title too long: {len(title)} characters "
+            f"(maximum {max_len} for this format)"
+        )
+
+    updated = replace(cat, title=title)
+    side_obj.writeCatalogue(updated)
+
+    _writeBack(image, image_path)
+
+
+# -------------------------------------------------------------------
+# Boot option
+# -------------------------------------------------------------------
+
+def getBoot(image_path: str, side: int = 0) -> BootOption:
+    """Read the boot option from an image file.
+
+    Args:
+        image_path: Path to a disc image file.
+        side:       Disc side (0 or 1, default 0).
+
+    Returns:
+        The current BootOption value.
+    """
+    image = openImage(image_path)
+    cat = image[side].readCatalogue()
+
+    return cat.boot_option
+
+
+def setBoot(image_path: str, boot_option: BootOption, side: int = 0) -> None:
+    """Set the boot option on an existing image file.
+
+    Args:
+        image_path:  Path to a disc image file.
+        boot_option: New boot option value.
+        side:        Disc side (0 or 1, default 0).
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+    cat = side_obj.readCatalogue()
+
+    updated = replace(cat, boot_option=boot_option)
+    side_obj.writeCatalogue(updated)
+
+    _writeBack(image, image_path)
+
+
+# -------------------------------------------------------------------
+# Disc summary
+# -------------------------------------------------------------------
+
+@dataclass
+class DiscInfo:
+    """Summary of disc-level metadata returned by discInfo()."""
+
+    title: str
+    boot_option: BootOption
+    free_space: int
+    total_sectors: int
+    tracks: int
+    side: int
+
+
+def discInfo(image_path: str, side: int = 0) -> DiscInfo:
+    """Return a summary of disc-level metadata.
+
+    Args:
+        image_path: Path to a disc image file.
+        side:       Disc side (0 or 1, default 0).
+
+    Returns:
+        DiscInfo with title, boot option, free space, and geometry.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+    cat = side_obj.readCatalogue()
+
+    return DiscInfo(
+        title=cat.title,
+        boot_option=cat.boot_option,
+        free_space=side_obj.freeSpace(),
+        total_sectors=cat.disc_size,
+        tracks=cat.tracks,
+        side=side,
+    )
+
+
+# -------------------------------------------------------------------
+# File attributes
+# -------------------------------------------------------------------
+
+@dataclass
+class FileAttribs:
+    """File attribute summary returned by getFileAttribs()."""
+
+    fullName: str
+    load_addr: int
+    exec_addr: int
+    length: int
+    locked: bool
+
+
+def getFileAttribs(
+    image_path: str, filename: str, side: int = 0,
+) -> FileAttribs:
+    """Read the attributes of a file on a disc image.
+
+    Args:
+        image_path: Path to a disc image file.
+        filename:   File path on the disc (e.g. '$.MYPROG').
+        side:       Disc side (0 or 1, default 0).
+
+    Returns:
+        FileAttribs with name, addresses, length, and locked status.
+
+    Raises:
+        DiscError: If the file is not found.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+    path = qualifyDiscPath(filename)
+
+    # Look up the entry in the catalogue.
+    cat = side_obj.readCatalogue()
+    for entry in cat.entries:
+        if entry.fullName == path:
+            return FileAttribs(
+                fullName=entry.fullName,
+                load_addr=entry.load_addr,
+                exec_addr=entry.exec_addr,
+                length=entry.length,
+                locked=entry.locked,
+            )
+
+    raise DiscError(f"File '{path}' not found")
+
+
+def setFileAttribs(
+    image_path: str,
+    filename: str,
+    side: int = 0,
+    locked: Optional[bool] = None,
+    load_addr: Optional[int] = None,
+    exec_addr: Optional[int] = None,
+) -> None:
+    """Set file attributes on an existing disc image.
+
+    Only the attributes that are not None are changed. The file's data
+    is not moved - only the catalogue entry is updated.
+
+    Args:
+        image_path: Path to a disc image file.
+        filename:   File path on the disc (e.g. '$.MYPROG').
+        side:       Disc side (0 or 1, default 0).
+        locked:     New locked status, or None to leave unchanged.
+        load_addr:  New load address, or None to leave unchanged.
+        exec_addr:  New exec address, or None to leave unchanged.
+
+    Raises:
+        DiscError: If the file is not found.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+    path = qualifyDiscPath(filename)
+
+    # Look up the entry in the catalogue.
+    cat = side_obj.readCatalogue()
+    target = None
+
+    for entry in cat.entries:
+        if entry.fullName == path:
+            target = entry
+            break
+
+    if target is None:
+        raise DiscError(f"File '{path}' not found")
+
+    # Build the replacement fields dict - only include changed values.
+    changes = {}
+
+    if locked is not None:
+        changes["locked"] = locked
+
+    if load_addr is not None:
+        changes["load_addr"] = load_addr
+
+    if exec_addr is not None:
+        changes["exec_addr"] = exec_addr
+
+    if not changes:
+        return
+
+    updated = replace(target, **changes)
+    side_obj.updateEntry(path, updated)
+
+    _writeBack(image, image_path)
+
+
+# -------------------------------------------------------------------
+# Rename
+# -------------------------------------------------------------------
+
+def renameFile(
+    image_path: str,
+    old_name: str,
+    new_name: str,
+    side: int = 0,
+) -> None:
+    """Rename a file on an existing disc image.
+
+    Both names are normalised with qualifyDiscPath() so bare names
+    get a '$.' prefix. The file data is not moved - only the catalogue
+    entry is updated.
+
+    Args:
+        image_path: Path to a disc image file.
+        old_name:   Current filename on the disc (e.g. 'T.MYPROG').
+        new_name:   New filename (e.g. 'T.NEWNAME').
+        side:       Disc side (0 or 1, default 0).
+
+    Raises:
+        DiscError: If the source is not found or the destination
+                   already exists.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+
+    old_path = qualifyDiscPath(old_name)
+    new_path = qualifyDiscPath(new_name)
+
+    side_obj.renameFile(old_path, new_path)
+
+    _writeBack(image, image_path)
+
+
+# -------------------------------------------------------------------
+# compact
+# -------------------------------------------------------------------
+
+def compactDisc(
+    image_path: str,
+    side: int = 0,
+) -> int:
+    """Defragment a disc image by closing gaps between files.
+
+    Files are packed toward the highest sectors so all free space is
+    contiguous. Only DFS images support compaction - ADFS raises
+    DiscError.
+
+    Args:
+        image_path: Path to a disc image file.
+        side:       Disc side (0 or 1, default 0).
+
+    Returns:
+        Number of bytes freed by compaction (zero if already packed).
+
+    Raises:
+        DiscError: If the format does not support compaction.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+
+    freed = side_obj.compact()
+
+    _writeBack(image, image_path)
+
+    return freed
+
+
+# -------------------------------------------------------------------
+# mkdir
+# -------------------------------------------------------------------
+
+def makeDirectory(
+    image_path: str,
+    path: str,
+    side: int = 0,
+) -> None:
+    """Create a subdirectory on an existing disc image.
+
+    Only ADFS images support subdirectories - DFS raises DiscError.
+    The parent directory must already exist.
+
+    Args:
+        image_path: Path to a disc image file.
+        path:       Full disc path for the new directory
+                    (e.g. '$.GAMES' or '$.GAMES.ARCADE').
+        side:       Disc side (0 or 1, default 0).
+
+    Raises:
+        DiscError: If the format does not support subdirectories
+                   or the parent directory does not exist.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+
+    side_obj.mkdir(path)
+
+    _writeBack(image, image_path)

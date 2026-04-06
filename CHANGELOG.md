@@ -5,6 +5,56 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-04-06
+
+### Added
+
+- `title` command: read or set the disc title. Supports DFS (max 12 chars)
+  and ADFS (max 19 chars), including per-side titles on DSD images.
+
+- `boot` command: read or set the disc boot option (OFF, LOAD, RUN, EXEC).
+  Supports DFS and ADFS formats.
+
+- `disc` command: print a disc summary (title, boot, tracks, free space) or
+  set disc-level properties with `--title` and `--boot` flags.
+
+- Library functions `getTitle`, `setTitle`, `getBoot`, `setBoot`, and
+  `discInfo` in the public API for programmatic disc metadata access.
+
+- `writeCatalogue` added to the `DiscSide` protocol and implemented on
+  `ADFSSide`, enabling catalogue-level mutations on ADFS images.
+
+- `attrib` command: read or set file attributes (locked, load address, exec
+  address). Works on both DFS and ADFS images.
+
+- Library functions `getFileAttribs` and `setFileAttribs` in the public API
+  for programmatic file attribute access.
+
+- `mkdir` and `maxTitleLength` added to the `DiscSide` protocol so that
+  Layer 4 no longer needs format-specific branching.
+
+- `rename` command: rename a file on DFS or ADFS images. DFS supports
+  directory prefix changes; ADFS supports same-directory renames.
+
+- Library function `renameFile` in the public API for programmatic
+  file renaming.
+
+- `compact` command: defragment a DFS disc image by closing gaps between
+  files. Reports sectors and bytes freed. DFS only - ADFS raises an error.
+
+- Library function `compactDisc` in the public API for programmatic
+  disc compaction.
+
+- `mkdir` command: create a subdirectory on an ADFS disc image. The parent
+  directory must already exist. DFS raises an error since it has no
+  subdirectories.
+
+- Library function `makeDirectory` in the public API for programmatic
+  directory creation.
+
+- `compact` added to the `DiscSide` protocol. `mkdir` now raises
+  `DiscError` on unsupported formats instead of silently no-oping.
+
 ## [0.5.1] - 2026-04-05
 
 ### Added

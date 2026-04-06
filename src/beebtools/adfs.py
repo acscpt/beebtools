@@ -23,7 +23,7 @@ Exceptions:
     ADFSFormatError -- raised when the disc image is structurally invalid
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterator, List, Optional, Tuple
 
 from .boot import BootOption
@@ -318,6 +318,11 @@ class ADFSSide:
     def side(self) -> int:
         """Side number (always 0 for ADFS)."""
         return self._side
+
+    @property
+    def maxTitleLength(self) -> int:
+        """Maximum disc title length for ADFS (19 characters)."""
+        return 19
 
     # -------------------------------------------------------------------
     # Python data model
@@ -978,6 +983,39 @@ class ADFSSide:
 
         return self._catalogue
 
+    def writeCatalogue(self, catalogue: ADFSCatalogue) -> None:
+        """Write catalogue-level metadata back to the ADFS image.
+
+        Updates the root directory title and boot option in the free
+        space map. Entries are not modified - use writeDirectory() for
+        per-entry changes.
+
+        Clears the catalogue cache so the next readCatalogue() re-parses.
+        """
+        # Update the root directory title.
+        root = self.readDirectory(ADFS_ROOT_SECTOR)
+        updated_root = ADFSDirectory(
+            name=root.name,
+            title=catalogue.title,
+            parent_sector=root.parent_sector,
+            sequence=root.sequence,
+            entries=root.entries,
+        )
+        self.writeDirectory(ADFS_ROOT_SECTOR, updated_root)
+
+        # Update the boot option in the free space map.
+        fsm = self.readFreeSpaceMap()
+        updated_fsm = ADFSFreeSpaceMap(
+            blocks=fsm.blocks,
+            total_sectors=fsm.total_sectors,
+            disc_id=fsm.disc_id,
+            boot_option=catalogue.boot_option,
+        )
+        self.writeFreeSpaceMap(updated_fsm)
+
+        # Invalidate the catalogue cache.
+        self._catalogue = None
+
     # -------------------------------------------------------------------
     # File extraction
     # -------------------------------------------------------------------
@@ -1162,6 +1200,140 @@ class ADFSSide:
             )
             self._freeBlock(target.start_sector, sectors_used)
 
+    def updateEntry(self, path: str, updated: 'ADFSEntry') -> None:
+        """Replace a directory entry with an updated version.
+
+        Finds the entry matching the given path and substitutes it with
+        the updated entry. Used to change attributes (locked, load_addr,
+        exec_addr) without moving the file on disc.
+
+        Args:
+            path:    Full ADFS path (e.g. '$.GAMES.ELITE').
+            updated: Replacement entry with modified attributes.
+
+        Raises:
+            ADFSError: If the file is not found.
+        """
+        parent_sector, parent_dir, leaf_name = self._resolveParent(path)
+
+        # Keep the 'access' bitmask in sync with the 'locked' bool.
+        # Bit 2 of access is the lock flag; _encodeEntryName reads
+        # access (not locked) when writing to disc.
+        if updated.locked and not (updated.access & 0x04):
+            updated = replace(updated, access=updated.access | 0x04)
+        elif not updated.locked and (updated.access & 0x04):
+            updated = replace(updated, access=updated.access & ~0x04)
+
+        # Find the entry and replace it.
+        name_upper = leaf_name.upper()
+        new_entries = []
+        found = False
+
+        for entry in parent_dir.entries:
+            if not found and entry.name.upper() == name_upper:
+                new_entries.append(updated)
+                found = True
+            else:
+                new_entries.append(entry)
+
+        if not found:
+            raise ADFSError(
+                f"File '{leaf_name}' not found in directory"
+            )
+
+        updated_dir = ADFSDirectory(
+            name=parent_dir.name,
+            title=parent_dir.title,
+            parent_sector=parent_dir.parent_sector,
+            sequence=parent_dir.sequence,
+            entries=tuple(new_entries),
+        )
+
+        self.writeDirectory(parent_sector, updated_dir)
+
+    def renameFile(self, old_path: str, new_path: str) -> None:
+        """Rename a file within the same directory.
+
+        Changes the entry's name field and rewrites the parent
+        directory with entries re-sorted. The file data is not moved.
+
+        Cross-directory moves are not supported - both paths must
+        share the same parent directory.
+
+        Args:
+            old_path: Current full ADFS path (e.g. '$.GAMES.ELITE').
+            new_path: New full ADFS path (e.g. '$.GAMES.NEWNAME').
+
+        Raises:
+            ADFSError: If the source is not found, the destination
+                       already exists, or the paths have different
+                       parent directories.
+        """
+        old_sector, old_dir, old_leaf = self._resolveParent(old_path)
+        new_sector, new_dir, new_leaf = self._resolveParent(new_path)
+
+        # Both paths must live in the same parent directory.
+        if old_sector != new_sector:
+            raise ADFSError(
+                "Cross-directory rename is not supported - "
+                "both paths must be in the same directory"
+            )
+
+        # Validate the new name against ADFS naming rules.
+        validateAdfsName(new_leaf)
+
+        # Find the source entry.
+        old_upper = old_leaf.upper()
+        new_upper = new_leaf.upper()
+        source = None
+
+        for entry in old_dir.entries:
+            if entry.name.upper() == old_upper:
+                source = entry
+                break
+
+        if source is None:
+            raise ADFSError(
+                f"File '{old_leaf}' not found in directory"
+            )
+
+        # Check the destination name is not already taken.
+        for entry in old_dir.entries:
+            if entry.name.upper() == new_upper and entry is not source:
+                raise ADFSError(
+                    f"File '{new_leaf}' already exists in directory"
+                )
+
+        # Build the renamed entry.
+        renamed = replace(source, name=new_leaf)
+
+        # Remove the old entry and re-insert with the new name so that
+        # directory entries remain sorted by name.
+        remaining = [
+            e for e in old_dir.entries
+            if e.name.upper() != old_upper
+        ]
+
+        # Insert in case-insensitive sorted order.
+        insert_pos = len(remaining)
+
+        for i, existing in enumerate(remaining):
+            if new_upper < existing.name.upper():
+                insert_pos = i
+                break
+
+        remaining.insert(insert_pos, renamed)
+
+        updated_dir = ADFSDirectory(
+            name=old_dir.name,
+            title=old_dir.title,
+            parent_sector=old_dir.parent_sector,
+            sequence=old_dir.sequence,
+            entries=tuple(remaining),
+        )
+
+        self.writeDirectory(old_sector, updated_dir)
+
     def mkdir(self, path: str) -> None:
         """Create a new subdirectory at the given ADFS path.
 
@@ -1204,6 +1376,13 @@ class ADFSSide:
         # Insert into parent and write back.
         updated_dir = self._insertEntry(parent_dir, dir_entry)
         self.writeDirectory(parent_sector, updated_dir)
+
+    def compact(self) -> int:
+        """ADFS images do not support compaction.
+
+        Raises ADFSError unconditionally.
+        """
+        raise ADFSError("ADFS images do not support compaction")
 
 
 # -----------------------------------------------------------------------

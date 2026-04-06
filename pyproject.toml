@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "beebtools"
-version = "0.5.1"
+version = "0.6.0"
 description = "BBC Micro disc image tool - DFS and ADFS catalogue, extract, create, and build with BBC BASIC detokenizer"
 readme = "README.md"
 license = {text = "MIT"}

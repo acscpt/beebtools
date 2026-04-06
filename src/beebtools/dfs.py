@@ -20,7 +20,7 @@ Exceptions:
     DFSFormatError -- raised when the disc image is structurally invalid
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterator, List, Optional, Tuple
 
 from .boot import BootOption
@@ -145,6 +145,18 @@ class DFSSide:
     def side(self) -> int:
         """Side number (0 or 1) this reader represents."""
         return self._side
+
+    @property
+    def maxTitleLength(self) -> int:
+        """Maximum disc title length for DFS (12 characters)."""
+        return 12
+
+    def mkdir(self, path: str) -> None:
+        """DFS does not support subdirectories.
+
+        Raises DFSError unconditionally.
+        """
+        raise DFSError("DFS does not support subdirectories")
 
     # -------------------------------------------------------------------
     # Python data model
@@ -721,6 +733,94 @@ class DFSSide:
         )
 
         self.writeCatalogue(new_cat)
+
+    def updateEntry(self, path: str, updated: 'DFSEntry') -> None:
+        """Replace a catalogue entry with an updated version.
+
+        Finds the entry matching the given path and substitutes it with
+        the updated entry. The replacement must refer to the same file
+        (same start sector and length). Catalogue fields other than the
+        entry are preserved; the cycle number is incremented.
+
+        Args:
+            path:    Full DFS path (e.g. '$.MYPROG').
+            updated: Replacement entry with modified attributes.
+
+        Raises:
+            DFSError: If the file is not found.
+        """
+        directory, name = splitDfsPath(path)
+        cat = self.readCatalogue()
+
+        new_entries = []
+        found = False
+
+        for e in cat.entries:
+            if not found and e.name == name and e.directory == directory:
+                new_entries.append(updated)
+                found = True
+            else:
+                new_entries.append(e)
+
+        if not found:
+            raise DFSError(f"File {directory}.{name} not found")
+
+        new_cat = DFSCatalogue(
+            title=cat.title,
+            cycle=self._bcdIncrement(cat.cycle),
+            boot_option=cat.boot_option,
+            disc_size=cat.disc_size,
+            entries=tuple(new_entries),
+        )
+
+        self.writeCatalogue(new_cat)
+
+    def renameFile(self, old_path: str, new_path: str) -> None:
+        """Rename a file in the catalogue.
+
+        Changes the entry's name and/or directory prefix. The file data
+        is not moved - only the catalogue entry is updated.
+
+        Args:
+            old_path: Current full DFS path (e.g. '$.MYPROG').
+            new_path: New full DFS path (e.g. 'T.NEWNAME').
+
+        Raises:
+            DFSError: If the source is not found, or the destination
+                      name already exists.
+        """
+        old_dir, old_name = splitDfsPath(old_path)
+        new_dir, new_name = splitDfsPath(new_path)
+
+        # Validate the new name against DFS naming rules.
+        validateDfsName(new_dir, new_name)
+
+        cat = self.readCatalogue()
+
+        # Find the source entry.
+        source = None
+
+        for e in cat.entries:
+            if e.name == old_name and e.directory == old_dir:
+                source = e
+                break
+
+        if source is None:
+            raise DFSError(f"File {old_dir}.{old_name} not found")
+
+        # Check that the destination name is not already taken.
+        for e in cat.entries:
+            if e.name == new_name and e.directory == new_dir:
+                if e is not source:
+                    raise DFSError(
+                        f"File {new_dir}.{new_name} already exists"
+                    )
+
+        # Build the renamed entry and update the catalogue.
+        renamed = replace(
+            source, name=new_name, directory=new_dir,
+        )
+        self.updateEntry(old_path, renamed)
 
     def compact(self) -> int:
         """Defragment file storage by closing gaps between files.

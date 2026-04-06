@@ -262,6 +262,74 @@ with open("rebuilt.adf", "wb") as f:
 Format sizes: `ADFS_S_SECTORS` (160K, 640 sectors), `ADFS_M_SECTORS` (320K,
 1280 sectors), `ADFS_L_SECTORS` (640K, 2560 sectors).
 
+## Reading and setting disc metadata
+
+The `getTitle`, `setTitle`, `getBoot`, `setBoot`, and `discInfo` functions
+provide programmatic access to disc-level properties.
+
+```python
+from beebtools import getTitle, setTitle, getBoot, setBoot, discInfo, BootOption
+
+# Read and set the disc title
+title = getTitle("mydisc.ssd")
+setTitle("mydisc.ssd", "NEW TITLE")
+
+# Read and set the boot option
+boot = getBoot("mydisc.ssd")
+setBoot("mydisc.ssd", BootOption.EXEC)
+
+# Get a full disc summary
+info = discInfo("mydisc.ssd")
+print(f"Title: {info.title}")
+print(f"Boot: {info.boot_option.name}")
+print(f"Free: {info.free_space} bytes ({info.free_space // 256} sectors)")
+print(f"Tracks: {info.tracks}")
+```
+
+All functions accept a `side` parameter for DFS DSD images (default 0).
+Title length is validated against the format limit (12 for DFS, 19 for ADFS).
+
+## Reading and setting file attributes
+
+The `getFileAttribs` and `setFileAttribs` functions read and modify
+individual file attributes (locked, load address, exec address) on an
+existing disc image.
+
+```python
+from beebtools import getFileAttribs, setFileAttribs
+
+# Read attributes
+attribs = getFileAttribs("mydisc.ssd", "T.MYPROG")
+print(f"Load: {attribs.load_addr:08X}")
+print(f"Exec: {attribs.exec_addr:08X}")
+print(f"Locked: {attribs.locked}")
+
+# Lock a file
+setFileAttribs("mydisc.ssd", "T.MYPROG", locked=True)
+
+# Change load and exec addresses
+setFileAttribs("mydisc.ssd", "T.MYPROG", load_addr=0x1900, exec_addr=0x8023)
+```
+
+Only the attributes passed as non-None are changed; others are left intact.
+
+## Renaming files
+
+The `renameFile` function renames a file in-place on a disc image.
+
+```python
+from beebtools import renameFile
+
+# Simple rename
+renameFile("mydisc.ssd", "T.MYPROG", "T.NEWNAME")
+
+# Change DFS directory prefix
+renameFile("mydisc.ssd", "$.MYPROG", "T.MYPROG")
+```
+
+On DFS, the directory prefix can change. On ADFS, both names must be in the
+same parent directory.
+
 ## Working with .inf sidecar files
 
 The `.inf` format is the standard BBC Micro community interchange format for

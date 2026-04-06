@@ -23,6 +23,9 @@ from .disc import (
     sortCatalogueEntries, classifyFileType,
     extractFile, addFileTo, qualifyDiscPath,
     writeBasicText, escapeNonAscii,
+    getTitle, setTitle, getBoot, setBoot, discInfo,
+    getFileAttribs, setFileAttribs,
+    renameFile, compactDisc, makeDirectory,
 )
 
 
@@ -468,6 +471,191 @@ def cmdBuild(args: Namespace) -> None:
     print(f"Built {label}: {args.output}")
 
 
+# ---------------------------------------------------------------------------
+# title command
+# ---------------------------------------------------------------------------
+
+def cmdTitle(args: Namespace) -> None:
+    """Read or set the disc title on an existing image.
+
+    With no title argument, prints the current title.
+    With a title argument, sets the title and writes it back.
+
+    Args:
+        args: Parsed argparse namespace for the 'title' subcommand.
+    """
+    if args.title is None:
+        # Getter mode - print the current title.
+        title = getTitle(args.image, side=args.side)
+        print(title)
+    else:
+        # Setter mode - update the title.
+        setTitle(args.image, args.title, side=args.side)
+        print(f"Title set to '{args.title}'")
+
+
+# ---------------------------------------------------------------------------
+# boot command
+# ---------------------------------------------------------------------------
+
+def cmdBoot(args: Namespace) -> None:
+    """Read or set the disc boot option on an existing image.
+
+    With no boot argument, prints the current boot option.
+    With a boot argument, sets the option and writes it back.
+
+    Args:
+        args: Parsed argparse namespace for the 'boot' subcommand.
+    """
+    if args.boot is None:
+        # Getter mode - print the current boot option.
+        boot = getBoot(args.image, side=args.side)
+        print(boot.name)
+    else:
+        # Setter mode - update the boot option.
+        setBoot(args.image, args.boot, side=args.side)
+        print(f"Boot option set to {args.boot.name}")
+
+
+# ---------------------------------------------------------------------------
+# disc command
+# ---------------------------------------------------------------------------
+
+def cmdDisc(args: Namespace) -> None:
+    """Print disc summary or set disc-level properties.
+
+    With no mutation flags, prints a disc summary (title, boot option,
+    free space). With --title and/or --boot, sets the specified properties.
+
+    Args:
+        args: Parsed argparse namespace for the 'disc' subcommand.
+    """
+    has_mutations = args.set_title is not None or args.set_boot is not None
+
+    if has_mutations:
+        # Apply requested mutations.
+        if args.set_title is not None:
+            setTitle(args.image, args.set_title, side=args.side)
+
+        if args.set_boot is not None:
+            setBoot(args.image, args.set_boot, side=args.side)
+
+        # Confirm what was changed.
+        parts = []
+        if args.set_title is not None:
+            parts.append(f"title='{args.set_title}'")
+        if args.set_boot is not None:
+            parts.append(f"boot={args.set_boot.name}")
+        print(f"Updated: {', '.join(parts)}")
+    else:
+        # Summary mode - print disc metadata.
+        use_colour = sys.stdout.isatty()
+        info = discInfo(args.image, side=args.side)
+
+        title_display = info.title if info.title else "(none)"
+        print(f"Title:  {_colour(title_display, _BOLD + _CYAN, use_colour)}")
+        print(f"Boot:   {info.boot_option.name}")
+        print(f"Tracks: {info.tracks}")
+        print(f"Free:   {info.free_space:,} bytes "
+              f"({info.free_space // 256} sectors)")
+
+
+# ---------------------------------------------------------------------------
+# attrib command
+# ---------------------------------------------------------------------------
+
+def cmdAttrib(args: Namespace) -> None:
+    """Read or set file attributes on a disc image.
+
+    With no flags, prints the current attributes. With flags, sets them.
+
+    Args:
+        args: Parsed argparse namespace for the 'attrib' subcommand.
+    """
+    has_mutations = (
+        args.locked is not None
+        or args.load is not None
+        or args.exec_addr is not None
+    )
+
+    if has_mutations:
+        # Parse hex addresses.
+        load_addr = int(args.load, 16) if args.load is not None else None
+        exec_addr = int(args.exec_addr, 16) if args.exec_addr is not None else None
+
+        setFileAttribs(
+            args.image, args.filename, side=args.side,
+            locked=args.locked,
+            load_addr=load_addr,
+            exec_addr=exec_addr,
+        )
+
+        # Confirm what was changed.
+        parts = []
+        if args.locked is not None:
+            parts.append("locked" if args.locked else "unlocked")
+        if load_addr is not None:
+            parts.append(f"load={load_addr:08X}")
+        if exec_addr is not None:
+            parts.append(f"exec={exec_addr:08X}")
+        print(f"Updated {args.filename}: {', '.join(parts)}")
+    else:
+        # Getter mode - print current attributes.
+        use_colour = sys.stdout.isatty()
+        attribs = getFileAttribs(args.image, args.filename, side=args.side)
+
+        lock_str = "L" if attribs.locked else "-"
+        lock_display = _colour(lock_str, _RED, use_colour and attribs.locked)
+        print(f"File:   {attribs.fullName}")
+        print(f"Load:   {attribs.load_addr:08X}")
+        print(f"Exec:   {attribs.exec_addr:08X}")
+        print(f"Length: {attribs.length:08X}")
+        print(f"Locked: {lock_display}")
+
+
+# ---------------------------------------------------------------------------
+# rename command
+# ---------------------------------------------------------------------------
+
+def cmdRename(args: Namespace) -> None:
+    """Rename a file on a disc image.
+
+    Args:
+        args: Parsed argparse namespace for the 'rename' subcommand.
+    """
+    renameFile(
+        args.image, args.old_name, args.new_name, side=args.side,
+    )
+    print(f"Renamed {args.old_name} -> {args.new_name}")
+
+
+def cmdCompact(args: Namespace) -> None:
+    """Defragment a DFS disc image by closing gaps between files.
+
+    Args:
+        args: Parsed argparse namespace for the 'compact' subcommand.
+    """
+    freed = compactDisc(args.image, side=args.side)
+
+    # Report the result in sectors and bytes.
+    sectors = freed // 256
+
+    if freed == 0:
+        print("Disc is already fully compacted")
+    else:
+        print(f"Freed {sectors} sectors ({freed} bytes)")
+
+
+def cmdMkdir(args: Namespace) -> None:
+    """Create a subdirectory on an ADFS disc image.
+
+    Args:
+        args: Parsed argparse namespace for the 'mkdir' subcommand.
+    """
+    makeDirectory(args.image, args.path, side=args.side)
+    print(f"Created directory {args.path}")
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -594,6 +782,95 @@ def main() -> None:
                          default=BootOption.OFF,
                          help="Boot option: OFF, LOAD, RUN, EXEC (or 0-3)")
 
+    # -- title subcommand --
+    p_title = sub.add_parser(
+        "title", help="Read or set the disc title")
+    p_title.add_argument("image",
+                         help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
+    p_title.add_argument("title", nargs="?", default=None,
+                         help="New title (omit to print current title)")
+    p_title.add_argument("--side", type=int, default=0,
+                         choices=[0, 1],
+                         help="Disc side for DFS (default: 0; ignored for ADFS)")
+
+    # -- boot subcommand --
+    p_boot = sub.add_parser(
+        "boot", help="Read or set the disc boot option")
+    p_boot.add_argument("image",
+                        help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
+    p_boot.add_argument("boot", nargs="?", type=_parseBootOption,
+                        default=None,
+                        help="Boot option: OFF, LOAD, RUN, EXEC (omit to "
+                             "print current value)")
+    p_boot.add_argument("--side", type=int, default=0,
+                        choices=[0, 1],
+                        help="Disc side for DFS (default: 0; ignored for ADFS)")
+
+    # -- disc subcommand --
+    p_disc = sub.add_parser(
+        "disc", help="Print disc summary or set disc properties")
+    p_disc.add_argument("image",
+                        help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
+    p_disc.add_argument("--title", dest="set_title", default=None,
+                        help="Set the disc title")
+    p_disc.add_argument("--boot", dest="set_boot",
+                        type=_parseBootOption, default=None,
+                        help="Set boot option: OFF, LOAD, RUN, EXEC")
+    p_disc.add_argument("--side", type=int, default=0,
+                        choices=[0, 1],
+                        help="Disc side for DFS (default: 0; ignored for ADFS)")
+
+    # -- attrib subcommand --
+    p_attrib = sub.add_parser(
+        "attrib", help="Read or set file attributes")
+    p_attrib.add_argument("image",
+                          help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
+    p_attrib.add_argument("filename",
+                          help="Filename (e.g. T.MYPROG or $.GAMES.ELITE)")
+    lock_group = p_attrib.add_mutually_exclusive_group()
+    lock_group.add_argument("--locked", action="store_const", const=True,
+                            default=None, dest="locked",
+                            help="Lock the file")
+    lock_group.add_argument("--unlocked", action="store_const", const=False,
+                            dest="locked",
+                            help="Unlock the file")
+    p_attrib.add_argument("--load", default=None,
+                          help="Load address in hex (e.g. FF1900)")
+    p_attrib.add_argument("--exec", dest="exec_addr", default=None,
+                          help="Exec address in hex (e.g. FF8023)")
+    p_attrib.add_argument("--side", type=int, default=0,
+                          choices=[0, 1],
+                          help="Disc side for DFS (default: 0; ignored for ADFS)")
+
+    p_rename = sub.add_parser("rename", help="Rename a file on a disc image")
+    p_rename.add_argument("image",
+                          help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
+    p_rename.add_argument("old_name", help="Current filename (e.g. T.MYPROG)")
+    p_rename.add_argument("new_name", help="New filename (e.g. T.NEWNAME)")
+    p_rename.add_argument("--side", type=int, default=0,
+                          choices=[0, 1],
+                          help="Disc side for DFS (default: 0; ignored for ADFS)")
+
+    # -- compact subcommand --
+    p_compact = sub.add_parser(
+        "compact", help="Defragment a DFS disc image")
+    p_compact.add_argument("image",
+                           help="Path to disc image (.ssd or .dsd)")
+    p_compact.add_argument("--side", type=int, default=0,
+                           choices=[0, 1],
+                           help="Disc side for DFS (default: 0)")
+
+    # -- mkdir subcommand --
+    p_mkdir = sub.add_parser(
+        "mkdir", help="Create a subdirectory on an ADFS disc image")
+    p_mkdir.add_argument("image",
+                         help="Path to disc image (.adf or .adl)")
+    p_mkdir.add_argument("path",
+                         help="Directory path (e.g. $.GAMES or $.GAMES.ARCADE)")
+    p_mkdir.add_argument("--side", type=int, default=0,
+                         choices=[0, 1],
+                         help="Disc side (default: 0; ignored for ADFS)")
+
     args = parser.parse_args()
 
     try:
@@ -611,6 +888,20 @@ def main() -> None:
             cmdDelete(args)
         elif args.command == "build":
             cmdBuild(args)
+        elif args.command == "title":
+            cmdTitle(args)
+        elif args.command == "boot":
+            cmdBoot(args)
+        elif args.command == "disc":
+            cmdDisc(args)
+        elif args.command == "attrib":
+            cmdAttrib(args)
+        elif args.command == "rename":
+            cmdRename(args)
+        elif args.command == "compact":
+            cmdCompact(args)
+        elif args.command == "mkdir":
+            cmdMkdir(args)
         else:
             parser.print_help()
     except Exception as e:

@@ -97,6 +97,9 @@ from .disc import (
     sortCatalogueEntries,
     extractFile, ExtractedFile, addFileTo, qualifyDiscPath,
     writeBasicText, readBasicText,
+    getTitle, setTitle, getBoot, setBoot, discInfo, DiscInfo,
+    getFileAttribs, setFileAttribs, FileAttribs,
+    renameFile, compactDisc, makeDirectory,
 )
 from .cli import main
 
@@ -162,6 +165,19 @@ __all__ = [
     "qualifyDiscPath",
     "writeBasicText",
     "readBasicText",
+    # Disc mutation (disc.py)
+    "getTitle",
+    "setTitle",
+    "getBoot",
+    "setBoot",
+    "discInfo",
+    "DiscInfo",
+    "getFileAttribs",
+    "setFileAttribs",
+    "FileAttribs",
+    "renameFile",
+    "compactDisc",
+    "makeDirectory",
     # BASIC facade (basic.py)
     "looksLikeTokenizedBasic",
     "looksLikePlainText",

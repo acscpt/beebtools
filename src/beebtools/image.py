@@ -59,6 +59,14 @@ class DiscSide(Protocol):
         """
         ...
 
+    def writeCatalogue(self, catalogue: DiscCatalogue) -> None:
+        """Write a modified catalogue back to the disc image.
+
+        Encodes the catalogue fields and writes them to the appropriate
+        sectors. Clears any cached catalogue so the next read re-parses.
+        """
+        ...
+
     def readFile(self, entry: DiscEntry) -> bytes:
         """Read the contents of a file from disc."""
         ...
@@ -80,6 +88,38 @@ class DiscSide(Protocol):
 
     def deleteFile(self, path: str) -> None:
         """Remove a file from the catalogue by its full path."""
+        ...
+
+    def updateEntry(self, path: str, updated: DiscEntry) -> None:
+        """Replace a catalogue entry with an updated version."""
+        ...
+
+    def renameFile(self, old_path: str, new_path: str) -> None:
+        """Rename a file in the catalogue.
+
+        Both paths must be fully qualified. The file data is not moved.
+        """
+        ...
+
+    def mkdir(self, path: str) -> None:
+        """Create a subdirectory at the given path.
+
+        Raises DiscError on formats that do not support subdirectories.
+        """
+        ...
+
+    def compact(self) -> int:
+        """Defragment file storage by closing gaps between files.
+
+        Returns the number of bytes freed by compaction (zero if
+        already packed). Raises DiscError on formats that do not
+        support compaction.
+        """
+        ...
+
+    @property
+    def maxTitleLength(self) -> int:
+        """Maximum number of characters allowed in a disc title."""
         ...
 
     def __iter__(self) -> Iterator[DiscEntry]: ...

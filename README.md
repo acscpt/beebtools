@@ -142,6 +142,11 @@ own detailed reference page.
 | [`add`](https://github.com/acscpt/beebtools/blob/main/docs/commands/add.md) | Add a file to an existing disc image |
 | [`delete`](https://github.com/acscpt/beebtools/blob/main/docs/commands/delete.md) | Delete a file from a disc image |
 | [`build`](https://github.com/acscpt/beebtools/blob/main/docs/commands/build.md) | Build a disc image from files with `.inf` sidecars |
+| [`title`](https://github.com/acscpt/beebtools/blob/main/docs/commands/title.md) | Read or set the disc title |
+| [`boot`](https://github.com/acscpt/beebtools/blob/main/docs/commands/boot.md) | Read or set the disc boot option |
+| [`disc`](https://github.com/acscpt/beebtools/blob/main/docs/commands/disc.md) | Print disc summary or set disc properties |
+| [`attrib`](https://github.com/acscpt/beebtools/blob/main/docs/commands/attrib.md) | Read or set file attributes |
+| [`rename`](https://github.com/acscpt/beebtools/blob/main/docs/commands/rename.md) | Rename a file on a disc image |
 
 ## Usage
 
@@ -196,6 +201,39 @@ beebtools add mydisc.adf loader.bin --name $.GAMES.LOADER --load 1900 --exec 190
 
 # Build an ADFS image from a directory tree
 beebtools build output/ rebuilt.adl --title "REBUILT"
+
+# Print the disc title
+beebtools title mydisc.ssd
+
+# Set the disc title
+beebtools title mydisc.ssd "NEW TITLE"
+
+# Print the boot option
+beebtools boot mydisc.ssd
+
+# Set the boot option to EXEC
+beebtools boot mydisc.ssd EXEC
+
+# Print a disc summary (title, boot, tracks, free space)
+beebtools disc mydisc.ssd
+
+# Set title and boot option in one call
+beebtools disc mydisc.ssd --title "BOOTABLE" --boot RUN
+
+# Print file attributes (load, exec, length, locked)
+beebtools attrib mydisc.ssd T.MYPROG
+
+# Lock a file
+beebtools attrib mydisc.ssd T.MYPROG --locked
+
+# Change load and exec addresses
+beebtools attrib mydisc.ssd T.MYPROG --load 1900 --exec 8023
+
+# Rename a file
+beebtools rename mydisc.ssd T.MYPROG T.NEWNAME
+
+# Move to a different DFS directory prefix
+beebtools rename mydisc.ssd $.MYPROG T.MYPROG
 ```
 
 ## Pretty-printer

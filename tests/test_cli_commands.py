@@ -15,11 +15,21 @@ from argparse import Namespace
 import pytest
 
 from beebtools.dfs import createDiscImage, openDiscImage, DFSError
-from beebtools.entry import DiscFile
-from beebtools.disc import extractAll, buildImage
+from beebtools.entry import DiscFile, DiscError
+from beebtools.disc import (
+    extractAll, buildImage,
+    getTitle, setTitle, getBoot, setBoot, discInfo,
+    getFileAttribs, setFileAttribs,
+    renameFile, compactDisc, makeDirectory,
+)
+from beebtools.boot import BootOption
 from beebtools.adfs import openAdfsImage
 from beebtools.inf import formatInf, parseInf
-from beebtools.cli import cmdCreate, cmdAdd, cmdDelete, cmdBuild
+from beebtools.cli import (
+    cmdCreate, cmdAdd, cmdDelete, cmdBuild,
+    cmdTitle, cmdBoot, cmdDisc, cmdAttrib, cmdRename,
+    cmdCompact, cmdMkdir,
+)
 
 
 # =======================================================================
@@ -1197,3 +1207,909 @@ class TestAdfsExtractRebuildRoundTrip:
                              if e.fullName == entry.fullName][0]
             rebuilt_data = rebuilt_image.sides[0].readFile(rebuilt_entry)
             assert orig_data == rebuilt_data, f"Data mismatch for {entry.fullName}"
+
+
+# =======================================================================
+# cmdTitle - DFS
+# =======================================================================
+
+class TestCmdTitle:
+
+    def _createSsd(self, tmp_path, title="ORIGINAL") -> str:
+        """Create a blank 80-track SSD with a title and return its path."""
+        out = str(tmp_path / "disc.ssd")
+        args = Namespace(output=out, tracks=80, title=title, boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        return out
+
+    def testGetTitle(self, tmp_path) -> None:
+        """Read the current disc title."""
+        img = self._createSsd(tmp_path, title="HELLO")
+        args = Namespace(image=img, title=None, side=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdTitle(args)
+
+        assert buf.getvalue().strip() == "HELLO"
+
+    def testSetTitle(self, tmp_path) -> None:
+        """Set the disc title and verify it round-trips."""
+        img = self._createSsd(tmp_path)
+        args = Namespace(image=img, title="NEWTITLE", side=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdTitle(args)
+
+        assert "Title set" in buf.getvalue()
+
+        # Verify round-trip.
+        assert getTitle(img) == "NEWTITLE"
+
+    def testTitleTooLong(self, tmp_path) -> None:
+        """Title exceeding 12 chars raises DiscError for DFS."""
+        img = self._createSsd(tmp_path)
+
+        with pytest.raises(DiscError, match="Title too long"):
+            setTitle(img, "A" * 13)
+
+    def testTitleMaxLength(self, tmp_path) -> None:
+        """Title at exactly 12 chars is accepted for DFS."""
+        img = self._createSsd(tmp_path)
+        setTitle(img, "A" * 12)
+
+        assert getTitle(img) == "A" * 12
+
+    def testSetTitleDsd(self, tmp_path) -> None:
+        """Set title on side 1 of a DSD image."""
+        out = str(tmp_path / "double.dsd")
+        args = Namespace(output=out, tracks=80, title="SIDE0", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        # Set title on side 1.
+        setTitle(out, "SIDE1", side=1)
+
+        # Both sides should have independent titles.
+        assert getTitle(out, side=0) == "SIDE0"
+        assert getTitle(out, side=1) == "SIDE1"
+
+
+# =======================================================================
+# cmdTitle - ADFS
+# =======================================================================
+
+class TestCmdTitleAdfs:
+
+    def _createAdf(self, tmp_path, title="ADFSTITLE") -> str:
+        """Create a blank ADFS image and return its path."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title=title, boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        return out
+
+    def testGetTitleAdfs(self, tmp_path) -> None:
+        """Read the current ADFS disc title."""
+        img = self._createAdf(tmp_path, title="MYDISC")
+
+        assert getTitle(img) == "MYDISC"
+
+    def testSetTitleAdfs(self, tmp_path) -> None:
+        """Set the ADFS disc title and verify round-trip."""
+        img = self._createAdf(tmp_path)
+        setTitle(img, "NEWADFS")
+
+        assert getTitle(img) == "NEWADFS"
+
+    def testAdfsTitleMaxLength(self, tmp_path) -> None:
+        """ADFS allows up to 19-char titles."""
+        img = self._createAdf(tmp_path)
+        setTitle(img, "A" * 19)
+
+        assert getTitle(img) == "A" * 19
+
+    def testAdfsTitleTooLong(self, tmp_path) -> None:
+        """Title exceeding 19 chars raises DiscError for ADFS."""
+        img = self._createAdf(tmp_path)
+
+        with pytest.raises(DiscError, match="Title too long"):
+            setTitle(img, "A" * 20)
+
+
+# =======================================================================
+# cmdBoot - DFS
+# =======================================================================
+
+class TestCmdBoot:
+
+    def _createSsd(self, tmp_path) -> str:
+        """Create a blank 80-track SSD and return its path."""
+        out = str(tmp_path / "disc.ssd")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        return out
+
+    def testGetBootDefault(self, tmp_path) -> None:
+        """Default boot option is OFF."""
+        img = self._createSsd(tmp_path)
+        args = Namespace(image=img, boot=None, side=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdBoot(args)
+
+        assert buf.getvalue().strip() == "OFF"
+
+    def testSetBootAllValues(self, tmp_path) -> None:
+        """Set and verify each boot option value."""
+        img = self._createSsd(tmp_path)
+
+        for opt in BootOption:
+            setBoot(img, opt)
+            assert getBoot(img) == opt
+
+    def testCmdBootSetRun(self, tmp_path) -> None:
+        """cmdBoot setter sets boot to RUN."""
+        img = self._createSsd(tmp_path)
+        args = Namespace(image=img, boot=BootOption.RUN, side=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdBoot(args)
+
+        assert "RUN" in buf.getvalue()
+        assert getBoot(img) == BootOption.RUN
+
+    def testSetBootDsd(self, tmp_path) -> None:
+        """Set boot option on side 1 of a DSD image."""
+        out = str(tmp_path / "double.dsd")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        setBoot(out, BootOption.EXEC, side=1)
+
+        assert getBoot(out, side=0) == BootOption.OFF
+        assert getBoot(out, side=1) == BootOption.EXEC
+
+
+# =======================================================================
+# cmdBoot - ADFS
+# =======================================================================
+
+class TestCmdBootAdfs:
+
+    def _createAdf(self, tmp_path) -> str:
+        """Create a blank ADFS image and return its path."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        return out
+
+    def testSetBootAdfsAllValues(self, tmp_path) -> None:
+        """Set and verify each boot option on ADFS."""
+        img = self._createAdf(tmp_path)
+
+        for opt in BootOption:
+            setBoot(img, opt)
+            assert getBoot(img) == opt
+
+
+# =======================================================================
+# cmdDisc - DFS
+# =======================================================================
+
+class TestCmdDisc:
+
+    def _createSsd(self, tmp_path, title="DISCTEST") -> str:
+        """Create a blank 80-track SSD and return its path."""
+        out = str(tmp_path / "disc.ssd")
+        args = Namespace(output=out, tracks=80, title=title, boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        return out
+
+    def testDiscSummary(self, tmp_path) -> None:
+        """Summary mode prints title, boot, tracks, and free space."""
+        img = self._createSsd(tmp_path, title="SUMMARY")
+        args = Namespace(image=img, set_title=None, set_boot=None, side=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdDisc(args)
+
+        output = buf.getvalue()
+        assert "SUMMARY" in output
+        assert "OFF" in output
+        assert "80" in output
+
+    def testDiscMutateTitle(self, tmp_path) -> None:
+        """disc --title sets the title."""
+        img = self._createSsd(tmp_path)
+        args = Namespace(
+            image=img, set_title="CHANGED", set_boot=None, side=0,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdDisc(args)
+
+        assert "Updated" in buf.getvalue()
+        assert getTitle(img) == "CHANGED"
+
+    def testDiscMutateBoot(self, tmp_path) -> None:
+        """disc --boot sets the boot option."""
+        img = self._createSsd(tmp_path)
+        args = Namespace(
+            image=img, set_title=None, set_boot=BootOption.LOAD, side=0,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdDisc(args)
+
+        assert getBoot(img) == BootOption.LOAD
+
+    def testDiscMutateBoth(self, tmp_path) -> None:
+        """disc --title --boot sets both in one call."""
+        img = self._createSsd(tmp_path)
+        args = Namespace(
+            image=img, set_title="BOTH", set_boot=BootOption.EXEC, side=0,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdDisc(args)
+
+        assert getTitle(img) == "BOTH"
+        assert getBoot(img) == BootOption.EXEC
+
+    def testDiscInfoFunction(self, tmp_path) -> None:
+        """discInfo returns correct metadata."""
+        img = self._createSsd(tmp_path, title="INFO")
+        info = discInfo(img)
+
+        assert info.title == "INFO"
+        assert info.boot_option == BootOption.OFF
+        assert info.tracks == 80
+        assert info.side == 0
+        assert info.free_space > 0
+
+
+# =======================================================================
+# cmdDisc - ADFS
+# =======================================================================
+
+class TestCmdDiscAdfs:
+
+    def _createAdf(self, tmp_path, title="ADFSDISC") -> str:
+        """Create a blank ADFS image and return its path."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title=title, boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        return out
+
+    def testDiscSummaryAdfs(self, tmp_path) -> None:
+        """Summary mode for ADFS prints title and boot."""
+        img = self._createAdf(tmp_path, title="ADFSSUMM")
+        args = Namespace(image=img, set_title=None, set_boot=None, side=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdDisc(args)
+
+        output = buf.getvalue()
+        assert "ADFSSUMM" in output
+        assert "OFF" in output
+
+    def testDiscMutateTitleAdfs(self, tmp_path) -> None:
+        """disc --title on an ADFS image."""
+        img = self._createAdf(tmp_path)
+        args = Namespace(
+            image=img, set_title="NEWADFS", set_boot=None, side=0,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdDisc(args)
+
+        assert getTitle(img) == "NEWADFS"
+
+    def testDiscMutateBootAdfs(self, tmp_path) -> None:
+        """disc --boot on an ADFS image."""
+        img = self._createAdf(tmp_path)
+        args = Namespace(
+            image=img, set_title=None, set_boot=BootOption.RUN, side=0,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdDisc(args)
+
+        assert getBoot(img) == BootOption.RUN
+
+    def testDiscInfoAdfs(self, tmp_path) -> None:
+        """discInfo returns correct ADFS metadata."""
+        img = self._createAdf(tmp_path, title="AINFO")
+        info = discInfo(img)
+
+        assert info.title == "AINFO"
+        assert info.boot_option == BootOption.OFF
+        assert info.free_space > 0
+        assert info.total_sectors > 0
+
+
+# =======================================================================
+# cmdAttrib - DFS
+# =======================================================================
+
+class TestCmdAttrib:
+
+    def _createSsdWithFile(self, tmp_path) -> str:
+        """Create an SSD with one file and return its path."""
+        out = str(tmp_path / "disc.ssd")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "prog.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\x01\x02\x03\x04")
+
+        args = Namespace(
+            image=out, file=data_path, name="T.MYPROG",
+            load="1900", exec_addr="8023", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        return out
+
+    def testGetAttribs(self, tmp_path) -> None:
+        """Getter mode prints file attributes."""
+        img = self._createSsdWithFile(tmp_path)
+        args = Namespace(
+            image=img, filename="T.MYPROG", side=0,
+            locked=None, load=None, exec_addr=None,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAttrib(args)
+
+        output = buf.getvalue()
+        assert "T.MYPROG" in output
+        assert "00001900" in output
+        assert "00008023" in output
+
+    def testSetLocked(self, tmp_path) -> None:
+        """Lock a file and verify round-trip."""
+        img = self._createSsdWithFile(tmp_path)
+
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert not attribs.locked
+
+        setFileAttribs(img, "T.MYPROG", locked=True)
+
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert attribs.locked
+
+    def testSetUnlocked(self, tmp_path) -> None:
+        """Unlock a previously locked file."""
+        img = self._createSsdWithFile(tmp_path)
+
+        setFileAttribs(img, "T.MYPROG", locked=True)
+        setFileAttribs(img, "T.MYPROG", locked=False)
+
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert not attribs.locked
+
+    def testSetLoadExec(self, tmp_path) -> None:
+        """Change load and exec addresses."""
+        img = self._createSsdWithFile(tmp_path)
+
+        setFileAttribs(img, "T.MYPROG", load_addr=0x31900, exec_addr=0x38023)
+
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert attribs.load_addr == 0x31900
+        assert attribs.exec_addr == 0x38023
+
+    def testCmdAttribSetter(self, tmp_path) -> None:
+        """cmdAttrib setter mode locks and changes addresses."""
+        img = self._createSsdWithFile(tmp_path)
+        args = Namespace(
+            image=img, filename="T.MYPROG", side=0,
+            locked=True, load="031900", exec_addr="038023",
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAttrib(args)
+
+        assert "Updated" in buf.getvalue()
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert attribs.locked
+        assert attribs.load_addr == 0x31900
+
+    def testFileNotFound(self, tmp_path) -> None:
+        """Attrib on nonexistent file raises DiscError."""
+        img = self._createSsdWithFile(tmp_path)
+
+        with pytest.raises(DiscError, match="not found"):
+            getFileAttribs(img, "$.NOPE")
+
+    def testSetAttribsPreservesData(self, tmp_path) -> None:
+        """Changing attributes does not corrupt file data."""
+        img = self._createSsdWithFile(tmp_path)
+
+        setFileAttribs(img, "T.MYPROG", locked=True, load_addr=0xABCD)
+
+        image = openDiscImage(img)
+        entry = image.sides[0]["T.MYPROG"]
+        data = image.sides[0].readFile(entry)
+        assert data == b"\x01\x02\x03\x04"
+
+
+# =======================================================================
+# cmdAttrib - ADFS
+# =======================================================================
+
+class TestCmdAttribAdfs:
+
+    def _createAdfWithFile(self, tmp_path) -> str:
+        """Create an ADFS image with one file and return its path."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "prog.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\xAA\xBB\xCC")
+
+        args = Namespace(
+            image=out, file=data_path, name="$.MYFILE",
+            load="2000", exec_addr="3000", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        return out
+
+    def testSetLockedAdfs(self, tmp_path) -> None:
+        """Lock a file on an ADFS image."""
+        img = self._createAdfWithFile(tmp_path)
+
+        setFileAttribs(img, "$.MYFILE", locked=True)
+
+        attribs = getFileAttribs(img, "$.MYFILE")
+        assert attribs.locked
+
+    def testSetLoadExecAdfs(self, tmp_path) -> None:
+        """Change load and exec addresses on an ADFS image."""
+        img = self._createAdfWithFile(tmp_path)
+
+        setFileAttribs(img, "$.MYFILE", load_addr=0xFFFF1900, exec_addr=0xFFFF8023)
+
+        attribs = getFileAttribs(img, "$.MYFILE")
+        assert attribs.load_addr == 0xFFFF1900
+        assert attribs.exec_addr == 0xFFFF8023
+
+    def testSetAttribsPreservesDataAdfs(self, tmp_path) -> None:
+        """Changing ADFS attributes does not corrupt file data."""
+        img = self._createAdfWithFile(tmp_path)
+
+        setFileAttribs(img, "$.MYFILE", locked=True, load_addr=0x1234)
+
+        image = openAdfsImage(img)
+        entry = image.sides[0]["$.MYFILE"]
+        data = image.sides[0].readFile(entry)
+        assert data == b"\xAA\xBB\xCC"
+
+
+# =======================================================================
+# cmdRename - DFS
+# =======================================================================
+
+class TestCmdRename:
+
+    def _createSsdWithFile(self, tmp_path) -> str:
+        """Create an SSD with one file and return its path."""
+        out = str(tmp_path / "disc.ssd")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "prog.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\x01\x02\x03\x04")
+
+        args = Namespace(
+            image=out, file=data_path, name="T.MYPROG",
+            load="1900", exec_addr="8023", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        return out
+
+    def testSimpleRename(self, tmp_path) -> None:
+        """Rename a file keeping the same directory."""
+        img = self._createSsdWithFile(tmp_path)
+
+        renameFile(img, "T.MYPROG", "T.NEWNAME")
+
+        attribs = getFileAttribs(img, "T.NEWNAME")
+        assert attribs.fullName == "T.NEWNAME"
+        assert attribs.load_addr == 0x1900
+
+    def testChangeDirPrefix(self, tmp_path) -> None:
+        """Rename a file to a different DFS directory."""
+        img = self._createSsdWithFile(tmp_path)
+
+        renameFile(img, "T.MYPROG", "$.MOVED")
+
+        attribs = getFileAttribs(img, "$.MOVED")
+        assert attribs.fullName == "$.MOVED"
+
+    def testDuplicateBlocked(self, tmp_path) -> None:
+        """Rename to an existing name raises DiscError."""
+        img = self._createSsdWithFile(tmp_path)
+
+        # Add a second file.
+        data_path = str(tmp_path / "other.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\xAA")
+
+        args = Namespace(
+            image=img, file=data_path, name="T.OTHER",
+            load="0", exec_addr="0", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        with pytest.raises(DiscError, match="already exists"):
+            renameFile(img, "T.MYPROG", "T.OTHER")
+
+    def testSourceNotFound(self, tmp_path) -> None:
+        """Rename of nonexistent file raises error."""
+        img = self._createSsdWithFile(tmp_path)
+
+        with pytest.raises(Exception, match="not found"):
+            renameFile(img, "$.NOPE", "$.NEW")
+
+    def testRenamePreservesData(self, tmp_path) -> None:
+        """Renaming does not corrupt file data."""
+        img = self._createSsdWithFile(tmp_path)
+
+        renameFile(img, "T.MYPROG", "T.RENAMED")
+
+        image = openDiscImage(img)
+        entry = image.sides[0]["T.RENAMED"]
+        data = image.sides[0].readFile(entry)
+        assert data == b"\x01\x02\x03\x04"
+
+    def testRenamePreservesAttribs(self, tmp_path) -> None:
+        """Renaming preserves load/exec/locked attributes."""
+        img = self._createSsdWithFile(tmp_path)
+
+        setFileAttribs(img, "T.MYPROG", locked=True)
+        renameFile(img, "T.MYPROG", "T.NEWNAME")
+
+        attribs = getFileAttribs(img, "T.NEWNAME")
+        assert attribs.locked
+        assert attribs.load_addr == 0x1900
+        assert attribs.exec_addr == 0x8023
+
+    def testCmdRenameHandler(self, tmp_path) -> None:
+        """cmdRename handler prints confirmation."""
+        img = self._createSsdWithFile(tmp_path)
+        args = Namespace(
+            image=img, old_name="T.MYPROG", new_name="T.NEWNAME", side=0,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdRename(args)
+
+        assert "Renamed" in buf.getvalue()
+        attribs = getFileAttribs(img, "T.NEWNAME")
+        assert attribs.fullName == "T.NEWNAME"
+
+
+# =======================================================================
+# cmdRename - ADFS
+# =======================================================================
+
+class TestCmdRenameAdfs:
+
+    def _createAdfWithFile(self, tmp_path) -> str:
+        """Create an ADFS image with one file and return its path."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "prog.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\xAA\xBB\xCC")
+
+        args = Namespace(
+            image=out, file=data_path, name="$.MYFILE",
+            load="2000", exec_addr="3000", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        return out
+
+    def testSimpleRenameAdfs(self, tmp_path) -> None:
+        """Rename a file on ADFS within the same directory."""
+        img = self._createAdfWithFile(tmp_path)
+
+        renameFile(img, "$.MYFILE", "$.NEWNAME")
+
+        attribs = getFileAttribs(img, "$.NEWNAME")
+        assert attribs.fullName == "$.NEWNAME"
+        assert attribs.load_addr == 0x2000
+
+    def testRenamePreservesDataAdfs(self, tmp_path) -> None:
+        """Renaming on ADFS does not corrupt file data."""
+        img = self._createAdfWithFile(tmp_path)
+
+        renameFile(img, "$.MYFILE", "$.RENAMED")
+
+        image = openAdfsImage(img)
+        entry = image.sides[0]["$.RENAMED"]
+        data = image.sides[0].readFile(entry)
+        assert data == b"\xAA\xBB\xCC"
+
+    def testDuplicateBlockedAdfs(self, tmp_path) -> None:
+        """Rename to an existing name on ADFS raises error."""
+        img = self._createAdfWithFile(tmp_path)
+
+        # Add a second file.
+        data_path = str(tmp_path / "other.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\xDD")
+
+        args = Namespace(
+            image=img, file=data_path, name="$.OTHER",
+            load="0", exec_addr="0", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        with pytest.raises(Exception, match="already exists"):
+            renameFile(img, "$.MYFILE", "$.OTHER")
+
+
+# =======================================================================
+# compact command
+# =======================================================================
+
+class TestCmdCompact:
+
+    def _createSsdWithGap(self, tmp_path) -> str:
+        """Create an SSD with a gap (add 3 files, delete the middle one)."""
+        image = createDiscImage(tracks=80, title="COMPACT")
+        side = image.sides[0]
+        side.addFile(DiscFile("$.FILE1", b"\x11" * 512, load_addr=0))
+        side.addFile(DiscFile("$.FILE2", b"\x22" * 1024, load_addr=0))
+        side.addFile(DiscFile("$.FILE3", b"\x33" * 256, load_addr=0))
+        out = str(tmp_path / "disc.ssd")
+        with open(out, "wb") as f:
+            f.write(image.serialize())
+
+        # Delete the middle file to create a gap.
+        from beebtools.cli import cmdDelete
+        args = Namespace(image=out, filename="$.FILE2", side=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdDelete(args)
+
+        return out
+
+    def testCompactFreesSectors(self, tmp_path) -> None:
+        """Compacting a disc with a gap frees sectors."""
+        img = self._createSsdWithGap(tmp_path)
+        args = Namespace(image=img, side=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCompact(args)
+
+        output = buf.getvalue()
+        assert "Freed" in output
+        assert "sectors" in output
+
+    def testCompactAlreadyPacked(self, tmp_path) -> None:
+        """Compacting an already-compact disc reports zero freed."""
+        image = createDiscImage(tracks=80, title="PACKED")
+        side = image.sides[0]
+        side.addFile(DiscFile("$.FILE1", b"\x11" * 256, load_addr=0))
+        out = str(tmp_path / "packed.ssd")
+        with open(out, "wb") as f:
+            f.write(image.serialize())
+
+        args = Namespace(image=out, side=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCompact(args)
+
+        assert "already fully compacted" in buf.getvalue()
+
+    def testCompactPreservesFileData(self, tmp_path) -> None:
+        """File contents are intact after compaction."""
+        img = self._createSsdWithGap(tmp_path)
+
+        compactDisc(img, side=0)
+
+        image = openDiscImage(img)
+        side = image.sides[0]
+        cat = side.readCatalogue()
+
+        # Check the two remaining files are present and correct.
+        names = {e.fullName for e in cat.entries}
+        assert "$.FILE1" in names
+        assert "$.FILE3" in names
+
+        for entry in cat.entries:
+            data = side.readFile(entry)
+            if entry.fullName == "$.FILE1":
+                assert data == b"\x11" * 512
+            elif entry.fullName == "$.FILE3":
+                assert data == b"\x33" * 256
+
+    def testCompactEmptyDisc(self, tmp_path) -> None:
+        """Compacting an empty disc returns zero freed."""
+        image = createDiscImage(tracks=80, title="EMPTY")
+        out = str(tmp_path / "empty.ssd")
+        with open(out, "wb") as f:
+            f.write(image.serialize())
+
+        freed = compactDisc(out, side=0)
+        assert freed == 0
+
+    def testCompactAdfsRaisesError(self, tmp_path) -> None:
+        """Compacting an ADFS image raises an error."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        with pytest.raises(Exception, match="do not support compaction"):
+            compactDisc(out)
+
+
+# =======================================================================
+# mkdir command
+# =======================================================================
+
+class TestCmdMkdir:
+
+    def _createBlankAdf(self, tmp_path) -> str:
+        """Create a blank 80-track ADF and return its path."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+        return out
+
+    def testMkdirCreatesDirectory(self, tmp_path) -> None:
+        """mkdir creates a subdirectory on an ADFS image."""
+        img = self._createBlankAdf(tmp_path)
+
+        args = Namespace(image=img, path="$.GAMES", side=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdMkdir(args)
+
+        assert "Created directory $.GAMES" in buf.getvalue()
+
+        # Verify the directory entry exists.
+        image = openAdfsImage(img)
+        side = image.sides[0]
+        cat = side.readCatalogue()
+        names = [e.name for e in cat.entries]
+        assert "GAMES" in names
+
+    def testMkdirNestedDirectory(self, tmp_path) -> None:
+        """mkdir creates nested directories on ADFS."""
+        img = self._createBlankAdf(tmp_path)
+
+        # Create parent first.
+        makeDirectory(img, "$.GAMES")
+
+        # Create child.
+        args = Namespace(image=img, path="$.GAMES.ARCADE", side=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdMkdir(args)
+
+        assert "Created directory $.GAMES.ARCADE" in buf.getvalue()
+
+    def testMkdirParentNotFound(self, tmp_path) -> None:
+        """mkdir on a non-existent parent directory raises an error."""
+        img = self._createBlankAdf(tmp_path)
+
+        with pytest.raises(Exception):
+            makeDirectory(img, "$.NOSUCH.CHILD")
+
+    def testMkdirDfsRaisesError(self, tmp_path) -> None:
+        """mkdir on a DFS image raises an error."""
+        image = createDiscImage(tracks=80, title="DFSTEST")
+        out = str(tmp_path / "test.ssd")
+        with open(out, "wb") as f:
+            f.write(image.serialize())
+
+        with pytest.raises(DFSError):
+            makeDirectory(out, "$.GAMES")
+
+    def testMkdirViaLibrary(self, tmp_path) -> None:
+        """makeDirectory library function creates a directory."""
+        img = self._createBlankAdf(tmp_path)
+
+        makeDirectory(img, "$.MYDIR")
+
+        # Verify.
+        image = openAdfsImage(img)
+        entry = image.sides[0]["$.MYDIR"]
+        assert entry.is_directory is True
