@@ -35,7 +35,7 @@ jobs:
           path: tests/TEST_REPORT.md
 
       - name: Post report to job summary
-        if: always()
+        if: always() && matrix.python-version == '3.12'
         run: cat tests/TEST_REPORT.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage to Codecov
