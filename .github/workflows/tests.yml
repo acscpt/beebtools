@@ -34,6 +34,10 @@ jobs:
           name: test-report-py${{ matrix.python-version }}
           path: tests/TEST_REPORT.md
 
+      - name: Post report to job summary
+        if: always()
+        run: cat tests/TEST_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.12'
         uses: codecov/codecov-action@v5
