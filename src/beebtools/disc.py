@@ -362,6 +362,42 @@ def extractFile(
 # Add file to disc image
 # -----------------------------------------------------------------------
 
+def addFile(
+    image_path: str,
+    spec: DiscFile,
+    side: int = 0,
+    retokenize: bool = False,
+) -> DiscEntry:
+    """Add a file to an existing disc image and write it back.
+
+    Convenience wrapper around addFileTo() that handles the
+    open + add + serialize + write-back lifecycle for the common
+    single-file case. Use addFileTo() directly when adding multiple
+    files to an in-memory image before a single serialize (see
+    buildImage for that pattern).
+
+    Args:
+        image_path: Path to a disc image file.
+        spec:       DiscFile with path, data, addresses, and lock flag.
+        side:       Disc side (0 or 1, default 0).
+        retokenize: If True, tokenize plain-text BASIC data before
+                    adding to the disc.
+
+    Returns:
+        The new catalogue entry added to the disc.
+
+    Raises:
+        DiscError: If the file cannot be added.
+    """
+    image = openImage(image_path)
+
+    entry = addFileTo(image, side, spec, retokenize=retokenize)
+
+    _writeBack(image, image_path)
+
+    return entry
+
+
 def addFileTo(
     image: DiscImage,
     side_index: int,
@@ -406,6 +442,105 @@ def addFileTo(
 # -----------------------------------------------------------------------
 # Sorting (format-agnostic)
 # -----------------------------------------------------------------------
+
+# -----------------------------------------------------------------------
+# Catalogue read (display + optional content classification)
+# -----------------------------------------------------------------------
+
+@dataclass
+class CatalogueEntry:
+    """One entry in a catalogue listing, optionally classified.
+
+    entry:     The underlying DiscEntry from the format engine.
+    file_type: Classification string ("BASIC", "BASIC+MC", "BASIC?",
+               "TEXT", "binary") or None when unclassified. Directories
+               always carry None here - callers check entry.isDirectory.
+    """
+    entry: DiscEntry
+    file_type: Optional[str]
+
+
+@dataclass
+class CatalogueListing:
+    """Catalogue listing for one disc side.
+
+    Returned by readCatalogue() as part of a list (one per side).
+    Holds everything a CLI or library caller needs to render a listing
+    without touching the format engine directly.
+    """
+    side: int
+    title: str
+    boot_option: BootOption
+    tracks: int
+    entry_count: int
+    entries: List[CatalogueEntry]
+
+
+def readCatalogue(
+    image_path: str,
+    sort_mode: str = "name",
+    inspect: bool = False,
+) -> List[CatalogueListing]:
+    """Read the catalogue of every side of a disc image.
+
+    Performs the full catalogue-listing orchestration in one call so
+    CLI and library callers never need to open the image, iterate
+    sides, read catalogues, sort entries, or classify files themselves.
+
+    When inspect is True, each non-directory file is read and run
+    through classifyFileType() so the result carries content-based
+    classification (BASIC, BASIC+MC, TEXT, binary). When inspect is
+    False, the cheaper metadata-only BASIC detection via entry.isBasic
+    is used and all other files report None.
+
+    Args:
+        image_path: Path to a disc image file.
+        sort_mode:  Entry order: 'name' (default), 'catalog', or 'size'.
+        inspect:    Read file content to classify each entry.
+
+    Returns:
+        One CatalogueListing per disc side, in physical side order.
+    """
+    image = openImage(image_path)
+
+    listings: List[CatalogueListing] = []
+
+    for disc in image.sides:
+        cat = disc.readCatalogue()
+
+        ordered = sortCatalogueEntries(cat.entries, sort_mode)
+
+        classified: List[CatalogueEntry] = []
+
+        for e in ordered:
+            if e.isDirectory:
+                # Directories carry no file classification; CLI layer
+                # renders them separately based on entry.isDirectory.
+                classified.append(CatalogueEntry(entry=e, file_type=None))
+                continue
+
+            if inspect:
+                # Content inspection - read the file and classify.
+                data = disc.readFile(e)
+                tag = classifyFileType(e, data)
+                classified.append(CatalogueEntry(entry=e, file_type=tag))
+                continue
+
+            # Metadata-only: trust the BASIC exec address.
+            tag = "BASIC" if e.isBasic else None
+            classified.append(CatalogueEntry(entry=e, file_type=tag))
+
+        listings.append(CatalogueListing(
+            side=disc.side,
+            title=cat.title,
+            boot_option=cat.boot_option,
+            tracks=cat.tracks,
+            entry_count=len(cat.entries),
+            entries=classified,
+        ))
+
+    return listings
+
 
 def sortCatalogueEntries(
     entries: Sequence[DiscEntry], sort_mode: str
@@ -639,6 +774,41 @@ def extractAll(
                     f.write(inf_line + "\n")
 
     return results
+
+
+def createEmptyImage(
+    output_path: str,
+    tracks: int = 80,
+    title: str = "",
+    boot_option: BootOption = BootOption.OFF,
+) -> int:
+    """Create a blank formatted disc image and write it to disk.
+
+    The format is determined by the output_path extension:
+        .ssd  -- DFS single-sided
+        .dsd  -- DFS double-sided interleaved
+        .adf  -- ADFS (40-track: 160K, 80-track: 320K)
+        .adl  -- ADFS-L 640K
+
+    Args:
+        output_path: Path for the new disc image. Extension sets format.
+        tracks:      Number of tracks (40 or 80).
+        title:       Disc title (format-specific length limit).
+        boot_option: Boot option to record in the catalogue.
+
+    Returns:
+        The size in bytes of the image written to disk.
+    """
+    image = createImage(
+        output_path, tracks=tracks, title=title, boot_option=boot_option,
+    )
+
+    image_bytes = image.serialize()
+
+    with open(output_path, "wb") as f:
+        f.write(image_bytes)
+
+    return len(image_bytes)
 
 
 def buildImage(
@@ -1071,6 +1241,35 @@ def setFileAttribs(
 # -------------------------------------------------------------------
 # Rename
 # -------------------------------------------------------------------
+
+def deleteFile(
+    image_path: str,
+    filename: str,
+    side: int = 0,
+) -> None:
+    """Delete a file from an existing disc image.
+
+    The filename is normalised with qualifyDiscPath() so bare names
+    get a '$.' prefix. The image is written back to disk after the
+    entry is removed.
+
+    Args:
+        image_path: Path to a disc image file.
+        filename:   Name of the file to delete (e.g. 'T.MYPROG').
+        side:       Disc side (0 or 1, default 0).
+
+    Raises:
+        DiscError: If the file is not found.
+    """
+    image = openImage(image_path)
+    side_obj = image[side]
+
+    path = qualifyDiscPath(filename)
+
+    side_obj.deleteFile(path)
+
+    _writeBack(image, image_path)
+
 
 def renameFile(
     image_path: str,

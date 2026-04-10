@@ -5,6 +5,27 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Library functions `readCatalogue`, `deleteFile`, `addFile`, and
+  `createEmptyImage` in the public API, giving single-call wrappers for
+  every CLI operation.
+
+- `CatalogueListing` and `CatalogueEntry` dataclasses returned by
+  `readCatalogue`, carrying per-side metadata and optional file-type
+  classification.
+
+### Changed
+
+- CLI commands now route every disc operation through `disc.py` wrappers.
+  `cmdCat`, `cmdDelete`, `cmdAdd`, and `cmdCreate` no longer open
+  images, read catalogues, or serialize bytes directly.
+
+- Deduplicated the format-label dictionary shared by `create` and
+  `build` into a single `_formatLabel` helper in `cli.py`.
+
 ## [0.6.0] - 2026-04-06
 
 ### Added

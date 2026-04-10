@@ -93,13 +93,14 @@ from .adfs import (
 from .image import openImage, createImage, DiscSide, DiscImage
 from .inf import InfData, parseInf, formatInf
 from .disc import (
-    search, extractAll, buildImage,
+    search, extractAll, buildImage, createEmptyImage,
     sortCatalogueEntries,
-    extractFile, ExtractedFile, addFileTo, qualifyDiscPath,
+    readCatalogue, CatalogueListing, CatalogueEntry,
+    extractFile, ExtractedFile, addFile, addFileTo, qualifyDiscPath,
     writeBasicText, readBasicText,
     getTitle, setTitle, getBoot, setBoot, discInfo, DiscInfo,
     getFileAttribs, setFileAttribs, FileAttribs,
-    renameFile, compactDisc, makeDirectory,
+    deleteFile, renameFile, compactDisc, makeDirectory,
 )
 from .cli import main
 
@@ -158,9 +159,14 @@ __all__ = [
     "search",
     "extractAll",
     "buildImage",
+    "createEmptyImage",
     "sortCatalogueEntries",
+    "readCatalogue",
+    "CatalogueListing",
+    "CatalogueEntry",
     "extractFile",
     "ExtractedFile",
+    "addFile",
     "addFileTo",
     "qualifyDiscPath",
     "writeBasicText",
@@ -175,6 +181,7 @@ __all__ = [
     "getFileAttribs",
     "setFileAttribs",
     "FileAttribs",
+    "deleteFile",
     "renameFile",
     "compactDisc",
     "makeDirectory",

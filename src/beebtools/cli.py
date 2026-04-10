@@ -18,14 +18,13 @@ from .boot import BootOption
 from .entry import DiscError, DiscFile
 from .inf import parseInf
 from .disc import (
-    openImage, createImage,
-    search, extractAll, buildImage,
-    sortCatalogueEntries, classifyFileType,
-    extractFile, addFileTo, qualifyDiscPath,
+    search, extractAll, buildImage, createEmptyImage,
+    readCatalogue,
+    extractFile, addFile, qualifyDiscPath,
     writeBasicText, escapeNonAscii,
     getTitle, setTitle, getBoot, setBoot, discInfo,
     getFileAttribs, setFileAttribs,
-    renameFile, compactDisc, makeDirectory,
+    deleteFile, renameFile, compactDisc, makeDirectory,
 )
 
 
@@ -58,6 +57,40 @@ def _colour(text: str, code: str, enabled: bool) -> str:
     return f"{code}{text}{_RESET}"
 
 
+# Colour mapping for classified file types in the catalogue listing.
+_TAG_COLOURS = {
+    "BASIC":    (_CYAN,    "BASIC"),
+    "BASIC+MC": (_MAGENTA, "BASIC+MC"),
+    "BASIC?":   (_GREEN,   "BASIC?"),
+    "TEXT":     (_YELLOW,  "TEXT"),
+}
+
+
+def _formatLabel(output_path: str, tracks: int, size_bytes: int) -> str:
+    """Return a human-readable disc format label for CLI output.
+
+    Derives the label from the file extension of output_path. DFS
+    formats report the track count; ADFS formats report the image
+    size in kilobytes.
+
+    Args:
+        output_path: Path to the disc image.
+        tracks:      Number of tracks (used for DFS labels).
+        size_bytes:  Image size in bytes (used for ADFS labels).
+
+    Returns:
+        A label such as "80-track SSD" or "640K ADL".
+    """
+    ext = os.path.splitext(output_path)[1].lower()
+    labels = {
+        ".ssd": f"{tracks}-track SSD",
+        ".dsd": f"{tracks}-track DSD",
+        ".adf": f"{size_bytes // 1024}K ADF",
+        ".adl": f"{size_bytes // 1024}K ADL",
+    }
+    return labels.get(ext, ext)
+
+
 def cmdCat(args: Namespace) -> None:
     """Print the disc catalogue to stdout.
 
@@ -67,58 +100,39 @@ def cmdCat(args: Namespace) -> None:
     # Enable colour only when writing to a real terminal.
     use_colour = sys.stdout.isatty()
 
-    sides = openImage(args.image)
+    listings = readCatalogue(args.image, sort_mode=args.sort, inspect=args.inspect)
 
-    for disc in sides.sides:
-        catalogue = disc.readCatalogue()
-        side_label = f"Side {disc.side}"
+    for listing in listings:
+        side_label = f"Side {listing.side}"
         header = f"--- {side_label}"
 
-        if catalogue.title:
-            header += f": {catalogue.title}"
+        if listing.title:
+            header += f": {listing.title}"
 
-        boot_desc = catalogue.boot_option.name
-        header += (f" ({len(catalogue.entries)} files,"
-                  f" {catalogue.tracks} tracks,"
+        boot_desc = listing.boot_option.name
+        header += (f" ({listing.entry_count} files,"
+                  f" {listing.tracks} tracks,"
                   f" boot={boot_desc}) ---")
         print(_colour(header, _BOLD, use_colour))
         print()
 
-        if not catalogue.entries:
+        if not listing.entries:
             print("  (empty)")
         else:
-            orderedEntries = sortCatalogueEntries(catalogue.entries, args.sort)
-
             # Dynamic column width for ADFS hierarchical names.
-            max_name = max(len(e.fullName) for e in orderedEntries)
+            max_name = max(len(ce.entry.fullName) for ce in listing.entries)
             col_width = max(12, max_name + 2)
 
             print(f"    {'Name':<{col_width}s} {'Load':>8s} {'Exec':>8s} {'Length':>8s}  {'Type'}")
 
-            for e in orderedEntries:
-                is_dir = e.isDirectory
+            for ce in listing.entries:
+                e = ce.entry
 
-                if is_dir:
+                if e.isDirectory:
                     ftype = _colour("DIR", _CYAN, use_colour)
-                elif args.inspect:
-                    # Content-inspect the file to classify its type.
-                    file_data = disc.readFile(e)
-                    tag = classifyFileType(e, file_data)
-
-                    _TAG_COLOURS = {
-                        "BASIC":    (_CYAN,    "BASIC"),
-                        "BASIC+MC": (_MAGENTA, "BASIC+MC"),
-                        "BASIC?":   (_GREEN,   "BASIC?"),
-                        "TEXT":     (_YELLOW,  "TEXT"),
-                    }
-                    if tag in _TAG_COLOURS:
-                        colour, label = _TAG_COLOURS[tag]
-                        ftype = _colour(label, colour, use_colour)
-                    else:
-                        ftype = ""
-                elif e.isBasic:
-                    # Metadata-only mode: trust the exec address.
-                    ftype = _colour("BASIC", _CYAN, use_colour)
+                elif ce.file_type in _TAG_COLOURS:
+                    colour, label = _TAG_COLOURS[ce.file_type]
+                    ftype = _colour(label, colour, use_colour)
                 else:
                     ftype = ""
 
@@ -289,26 +303,14 @@ def cmdCreate(args: Namespace) -> None:
     Args:
         args: Parsed argparse namespace for the 'create' subcommand.
     """
-    image = createImage(
+    size_bytes = createEmptyImage(
         args.output,
         tracks=args.tracks,
         title=args.title or "",
         boot_option=args.boot,
     )
 
-    image_bytes = image.serialize()
-    with open(args.output, "wb") as f:
-        f.write(image_bytes)
-
-    # Determine human-readable format description from extension.
-    ext = os.path.splitext(args.output)[1].lower()
-    _FMT_LABELS = {
-        ".ssd": f"{args.tracks}-track SSD",
-        ".dsd": f"{args.tracks}-track DSD",
-        ".adf": f"{len(image_bytes) // 1024}K ADF",
-        ".adl": f"{len(image_bytes) // 1024}K ADL",
-    }
-    label = _FMT_LABELS.get(ext, ext)
+    label = _formatLabel(args.output, args.tracks, size_bytes)
     print(f"Created {label}: {args.output}")
 
 
@@ -318,8 +320,6 @@ def cmdAdd(args: Namespace) -> None:
     Args:
         args: Parsed argparse namespace for the 'add' subcommand.
     """
-    image = openImage(args.image)
-
     if args.inf:
         # Warn if --basic was also specified - .inf overrides everything.
         if args.basic:
@@ -386,13 +386,14 @@ def cmdAdd(args: Namespace) -> None:
     original_size = len(data)
 
     try:
-        entry = addFileTo(
-            image, args.side,
+        entry = addFile(
+            args.image,
             DiscFile(
                 path=disc_path, data=data,
                 load_addr=load_addr, exec_addr=exec_addr,
                 locked=locked,
             ),
+            side=args.side,
             retokenize=args.basic,
         )
     except DiscError as e:
@@ -403,10 +404,6 @@ def cmdAdd(args: Namespace) -> None:
     if args.basic and entry.length != original_size:
         print(f"Tokenized {args.file} ({entry.length} bytes)", file=sys.stderr)
 
-    # Write the modified image back to the file.
-    with open(args.image, "wb") as f:
-        f.write(image.serialize())
-
     print(f"Added {disc_path} ({entry.length} bytes) to {args.image}")
 
 
@@ -416,22 +413,13 @@ def cmdDelete(args: Namespace) -> None:
     Args:
         args: Parsed argparse namespace for the 'delete' subcommand.
     """
-    image = openImage(args.image)
-    side = image.sides[args.side]
-
-    path = args.filename
-
-    disc_path = qualifyDiscPath(path)
+    disc_path = qualifyDiscPath(args.filename)
 
     try:
-        side.deleteFile(disc_path)
+        deleteFile(args.image, args.filename, side=args.side)
     except DiscError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-
-    # Write the modified image back to the file.
-    with open(args.image, "wb") as f:
-        f.write(image.serialize())
 
     print(f"Deleted {disc_path} from {args.image}")
 
@@ -459,15 +447,7 @@ def cmdBuild(args: Namespace) -> None:
     with open(args.output, "wb") as f:
         f.write(image_bytes)
 
-    # Determine human-readable format description from extension.
-    ext = os.path.splitext(args.output)[1].lower()
-    _FMT_LABELS = {
-        ".ssd": f"{args.tracks}-track SSD",
-        ".dsd": f"{args.tracks}-track DSD",
-        ".adf": f"{len(image_bytes) // 1024}K ADF",
-        ".adl": f"{len(image_bytes) // 1024}K ADL",
-    }
-    label = _FMT_LABELS.get(ext, ext)
+    label = _formatLabel(args.output, args.tracks, len(image_bytes))
     print(f"Built {label}: {args.output}")
 
 
