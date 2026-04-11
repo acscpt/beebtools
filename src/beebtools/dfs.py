@@ -322,7 +322,14 @@ class DFSSide(DiscSide):
 
         locked = bool(dir_byte & 0x80)
         directory = chr(dir_byte & 0x7F)
-        name = sec0[base : base + 7].decode("bbc").rstrip()
+
+        # Strip the 0x20 padding DFS uses to fill unused bytes after
+        # the 1-7 character name. A degenerate all-space catalogue
+        # entry (seen on some cheat/pokes discs) collapses to a
+        # single-space name so the rebuilt image stays byte-identical
+        # while keeping the name non-empty for the .inf sidecar.
+        raw_name = sec0[base : base + 7].decode("bbc")
+        name = raw_name.rstrip(" ") or " "
 
         # --- Addresses, length, and start sector from sector 1 ---
         # Low 16 bits of each address/length are stored in byte pairs.
@@ -1053,10 +1060,12 @@ def validateDfsName(directory: str, name: str) -> None:
     """Validate a DFS directory character and filename.
 
     DFS filenames consist of a single-character directory prefix and a
-    name of 1-7 characters. In the default (ROM-faithful) mode every
-    byte in the printable range 0x20-0x7F is accepted, matching the
-    behaviour of real Acorn DFS ROMs which byte-push filenames without
-    enforcing the spec restrictions.
+    name of 1-7 characters. In the default (ROM-faithful) mode any
+    7-bit byte is accepted, matching the behaviour of real Acorn DFS
+    ROMs which byte-push filenames into the catalogue without enforcing
+    the spec restrictions. This covers control bytes like 0x06 and
+    0x00 that appear in real commercial discs such as cheat menus and
+    copy-protection images.
 
     Under strictMode() the stricter spec rules apply: directory and
     name must be in 0x21-0x7E and must not contain any of the
@@ -1082,8 +1091,9 @@ def validateDfsName(directory: str, name: str) -> None:
             f"DFS directory must be a single character, got {len(directory)}"
         )
 
-    # Directory byte range. Default mode accepts 0x20-0x7F (matches ROM),
-    # strict mode narrows to 0x21-0x7E per the spec.
+    # Directory byte range. Default mode accepts any 7-bit byte
+    # (0x00-0x7F), matching what a real DFS ROM byte-pushes into the
+    # catalogue. Strict mode narrows to 0x21-0x7E per the spec.
     d = ord(directory)
     if isStrict():
         if d < 0x21 or d > 0x7E:
@@ -1097,9 +1107,9 @@ def validateDfsName(directory: str, name: str) -> None:
                 f"the DFS spec"
             )
     else:
-        if d < 0x20 or d > 0x7F:
+        if d > 0x7F:
             raise DFSError(
-                f"DFS directory must be a printable byte (0x20-0x7F), "
+                f"DFS directory must be a 7-bit byte (0x00-0x7F), "
                 f"got 0x{d:02X}"
             )
 
@@ -1111,8 +1121,10 @@ def validateDfsName(directory: str, name: str) -> None:
             f"DFS filename must be 1-7 characters, got {len(name)}"
         )
 
-    # Name byte range check. Default mode accepts 0x20-0x7F, strict mode
-    # narrows to 0x21-0x7E and also rejects spec-forbidden chars.
+    # Name byte range check. Default mode accepts any 7-bit byte, so
+    # control bytes such as 0x00 and 0x06 that appear in real commercial
+    # discs are preserved verbatim. Strict mode narrows to 0x21-0x7E
+    # and also rejects spec-forbidden chars.
     strict = isStrict()
 
     for ch in name:
@@ -1128,9 +1140,9 @@ def validateDfsName(directory: str, name: str) -> None:
                     f"DFS filename contains spec-forbidden character '{ch}'"
                 )
         else:
-            if c < 0x20 or c > 0x7F:
+            if c > 0x7F:
                 raise DFSError(
-                    f"DFS filename contains non-printable byte 0x{c:02X}"
+                    f"DFS filename contains non-7-bit byte 0x{c:02X}"
                 )
 
 

@@ -815,10 +815,15 @@ class TestValidateDfsName:
         with pytest.raises(DFSError):
             validateDfsName("AB", "FILE")
 
-    def testControlCharDirectoryRejected(self):
-        """A control character as the directory should be rejected."""
-        with pytest.raises(DFSError):
-            validateDfsName("\x01", "FILE")
+    def testControlCharDirectoryAcceptedByDefault(self):
+        """Real DFS byte-pushes control bytes into the directory field."""
+        validateDfsName("\x01", "FILE")
+
+    def testControlCharDirectoryRejectedStrict(self):
+        """Strict mode rejects a control character as the directory."""
+        with strictMode():
+            with pytest.raises(DFSError):
+                validateDfsName("\x01", "FILE")
 
     def testEmptyNameRejected(self):
         """An empty filename part should be rejected."""
@@ -830,10 +835,16 @@ class TestValidateDfsName:
         with pytest.raises(DFSError):
             validateDfsName("$", "ABCDEFGH")
 
-    def testNameWithControlCharRejected(self):
-        """A filename containing any control character should be rejected."""
-        with pytest.raises(DFSError):
-            validateDfsName("$", "A\x00B")
+    def testNameWithControlCharAcceptedByDefault(self):
+        """Real DFS preserves embedded control bytes (0x00, 0x06) in names."""
+        validateDfsName("$", "A\x00B")
+        validateDfsName("$", "BLANK\x06")
+
+    def testNameWithControlCharRejectedStrict(self):
+        """Strict mode rejects control bytes inside filenames."""
+        with strictMode():
+            with pytest.raises(DFSError):
+                validateDfsName("$", "A\x00B")
 
     def testNameWithHighBitRejected(self):
         """A filename containing a byte with bit 7 set should be rejected."""
