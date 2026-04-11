@@ -200,13 +200,46 @@ SECTOR_SIZE = 256
 
 
 def _blankSsd(tracks: int = 80) -> bytearray:
-    """Return a zeroed SSD-sized bytearray for building test images."""
-    return bytearray(tracks * 10 * SECTOR_SIZE)
+    """Return a zeroed SSD-sized bytearray for building test images.
+
+    Writes a valid disc_size into the sector 1 descriptor and byte 7
+    so that DFSSide.readCatalogue() does not reconcile the metadata
+    against the backing length and emit a UserWarning. Tests that
+    want to simulate a malformed disc_size field can overwrite those
+    bytes explicitly.
+    """
+    data = bytearray(tracks * 10 * SECTOR_SIZE)
+
+    sectors = tracks * 10
+    data[SECTOR_SIZE + 6] = (sectors >> 8) & 0x03
+    data[SECTOR_SIZE + 7] = sectors & 0xFF
+
+    return data
 
 
 def _blankDsd(tracks: int = 80) -> bytearray:
-    """Return a zeroed DSD-sized bytearray for building test images."""
-    return bytearray(tracks * 20 * SECTOR_SIZE)
+    """Return a zeroed DSD-sized bytearray for building test images.
+
+    Writes a valid disc_size into both sides' catalogue descriptors.
+    DSD interleaves both sides track-by-track, so side 0's sector 1
+    is at byte offset 1*256 and side 1's is at byte offset
+    (10+1)*256 = 11*256.
+    """
+    data = bytearray(tracks * 20 * SECTOR_SIZE)
+
+    sectors = tracks * 10
+
+    # Side 0, sector 1 descriptor and low byte.
+    data[SECTOR_SIZE + 6] = (sectors >> 8) & 0x03
+    data[SECTOR_SIZE + 7] = sectors & 0xFF
+
+    # Side 1 interleaves after side 0's track 0 (10 sectors) plus its
+    # own sector 0, so its sector 1 lands at byte offset 11 * 256.
+    side1_sec1 = (10 + 1) * SECTOR_SIZE
+    data[side1_sec1 + 6] = (sectors >> 8) & 0x03
+    data[side1_sec1 + 7] = sectors & 0xFF
+
+    return data
 
 
 def _ssdWithOneFile(
@@ -510,8 +543,10 @@ class TestCatalogueMetadata:
     def testBootOption(self):
         """The boot option stored in the catalogue should map to the correct BootOption enum member."""
         data = _blankSsd()
-        # Boot option in bits 4-5 of sec1[6]. Value 3 = EXEC.
-        data[SECTOR_SIZE + 6] = 0x30
+        # Boot option in bits 4-5 of sec1[6]. Value 3 = EXEC. Preserve
+        # the disc_size high bits (bits 0-1) that _blankSsd() set so
+        # the reader does not trip the disc_size reconciliation path.
+        data[SECTOR_SIZE + 6] = (data[SECTOR_SIZE + 6] & 0x03) | 0x30
         image = DFSImage(data, is_dsd=False)
         cat = image.sides[0].readCatalogue()
         assert cat.boot_option == 3

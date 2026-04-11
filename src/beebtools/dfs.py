@@ -20,6 +20,7 @@ Exceptions:
     DFSFormatError -- raised when the disc image is structurally invalid
 """
 
+import warnings as _warnings
 from dataclasses import dataclass, replace
 from typing import List, Optional, Tuple
 
@@ -283,7 +284,14 @@ class DFSSide(DiscSide):
 
         # --- Disc size ---
         # Low 8 bits in sector 1 byte 7, high 2 bits from the descriptor.
+        # A few real-world images (e.g. LordOfTheRings-GameDiscSide1.ssd)
+        # store disc_size = 0 even though the backing file is a full
+        # 80-track SSD. Trust the physical image over the metadata: if
+        # the stored value would produce an invalid track count (zero
+        # or not 40/80), derive it from the actual byte length of this
+        # side and emit a UserWarning so the anomaly is visible.
         disc_size = sec1[7] | (disc_size_hi << 8)
+        disc_size = self._reconcileDiscSize(disc_size)
 
         # --- File entries ---
         entries: List[DFSEntry] = []
@@ -300,6 +308,54 @@ class DFSSide(DiscSide):
             entries=tuple(entries),
         )
         return self._catalogue
+
+    def _reconcileDiscSize(self, stored: int) -> int:
+        """Validate a catalogue disc_size against the backing image.
+
+        A well-formed DFS image stores the side's sector count in the
+        descriptor byte and sector 1 byte 7. Some real-world images
+        (LordOfTheRings-GameDiscSide1.ssd is the canonical example)
+        leave that field at zero even though the physical disc is a
+        full 40 or 80 tracks. Trust the physical image over the
+        metadata: if the stored value is not a sane 40- or 80-track
+        sector count, fall back to deriving it from the backing byte
+        length and emit a UserWarning so the anomaly is visible.
+
+        Args:
+            stored: The disc_size value parsed out of the catalogue.
+
+        Returns:
+            The stored value when it is valid, otherwise a value
+            derived from the image byte length.
+        """
+        if stored in (40 * SECTORS_PER_TRACK, 80 * SECTORS_PER_TRACK):
+            return stored
+
+        # Compute sectors per side from the backing data. DSD images
+        # interleave both sides track-by-track, so each side owns half
+        # the bytes.
+        total_bytes = len(self._image.data)
+
+        if self._image.is_dsd:
+            side_bytes = total_bytes // 2
+        else:
+            side_bytes = total_bytes
+
+        derived = side_bytes // SECTOR_SIZE
+        derived_tracks = derived // SECTORS_PER_TRACK
+
+        if derived_tracks not in (40, 80):
+            return stored
+
+        _warnings.warn(
+            f"DFS side {self._side} catalogue disc_size={stored} is not "
+            f"a 40- or 80-track sector count; trusting the physical "
+            f"image length and using {derived} sectors "
+            f"({derived_tracks} tracks) instead",
+            stacklevel=3,
+        )
+
+        return derived
 
     def _parseEntry(self, sec0: bytes, sec1: bytes, index: int) -> DFSEntry:
         """Decode one file entry from the raw catalogue sectors.

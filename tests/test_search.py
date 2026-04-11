@@ -54,6 +54,10 @@ def _makeSector0(filename: str, directory: str = "$") -> bytes:
 def _makeSector1(file_data_len: int, exec_addr: int = 0x00008023, start_sector: int = 2) -> bytes:
     buf = bytearray(SECTOR_SIZE)
     buf[5] = 1 * 8  # one file
+    # disc_size: 800 sectors (80-track SSD) so DFSSide._reconcileDiscSize
+    # does not trigger a UserWarning on this synthetic image.
+    buf[6] = (800 >> 8) & 0x03
+    buf[7] = 800 & 0xFF
     length_lo = file_data_len & 0xFFFF
     buf[8]  = 0x00          # load lo
     buf[9]  = 0x0E          # load hi (0x0E00 - typical BASIC load)

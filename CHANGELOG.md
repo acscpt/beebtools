@@ -53,6 +53,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   byte would otherwise be ambiguous, and always escapes `.` inside the
   leaf name so filenames containing dots do not collide with ADFS
   nested path separators on parse.
+- DFS catalogue reader reconciles the stored `disc_size` field against
+  the backing image length. When the sector count is not a valid 40-
+  or 80-track value (as on `LordOfTheRings-GameDiscSide1.ssd`, which
+  stores zero) the library emits a `UserWarning` and trusts the
+  physical image size instead, so malformed catalogues no longer
+  break iteration or rebuild.
 - `buildImage()` now treats the `.inf` sidecar as the sole source of
   truth for every disc-side name (DFS directory letter, DFS filename,
   and ADFS nested path alike). The filesystem layout is only used to
