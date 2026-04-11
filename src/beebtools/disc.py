@@ -20,6 +20,7 @@ All operations that span more than one lower layer belong here.
 
 import os
 import re
+import sys
 from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
@@ -27,7 +28,7 @@ from .boot import BootOption
 from .entry import DiscEntry, DiscFile, DiscError, isBasicExecAddr
 from .basic import (
     basicProgramSize, classifyFileType, compactLine, detokenize, tokenize,
-    escapeNonAscii, unescapeNonAscii,
+    escapeNonAscii, unescapeNonAscii, hasEscapes,
     looksLikeTokenizedBasic, looksLikePlainText, prettyPrint,
 )
 from .image import DiscImage, DiscSide, createImage, openImage
@@ -159,6 +160,21 @@ def resolveOutputPath(
 # Path qualification
 # -----------------------------------------------------------------------
 
+def formatEntryInf(entry: DiscEntry) -> str:
+    """Format a catalogue entry as a .inf sidecar line.
+
+    Convenience wrapper over formatInf() that destructures a DiscEntry
+    into the positional arguments formatInf() expects. Lives in disc.py
+    rather than inf.py because inf.py is a Layer 0 leaf module and must
+    not know about DiscEntry.
+    """
+    return formatInf(
+        entry.directory, entry.name,
+        entry.load_addr, entry.exec_addr,
+        entry.length, entry.locked,
+    )
+
+
 def qualifyDiscPath(path: str) -> str:
     """Normalise a user-supplied path to a fully-qualified disc path.
 
@@ -179,10 +195,6 @@ def qualifyDiscPath(path: str) -> str:
 # -----------------------------------------------------------------------
 # Text-mode helpers for BASIC extraction/build round-tripping
 # -----------------------------------------------------------------------
-
-# Regex matching a \xHH escape sequence (two uppercase hex digits).
-_ESCAPE_RE = re.compile(r"\\x([0-9A-F]{2})")
-
 
 def writeBasicText(
     path: str,
@@ -225,7 +237,7 @@ def readBasicText(data: bytes) -> List[str]:
     lines = text.splitlines()
 
     # If any line contains \xHH escapes, unescape them all.
-    if any(_ESCAPE_RE.search(line) for line in lines):
+    if hasEscapes(text):
         lines = [unescapeNonAscii(line) for line in lines]
 
     return lines
@@ -765,11 +777,7 @@ def extractAll(
 
             # Write .inf sidecar alongside the data file if requested.
             if write_inf:
-                inf_line = formatInf(
-                    entry.directory, entry.name,
-                    entry.load_addr, entry.exec_addr,
-                    entry.length, entry.locked,
-                )
+                inf_line = formatEntryInf(entry)
                 with open(out_path + ".inf", "w", encoding="utf-8") as f:
                     f.write(inf_line + "\n")
 
@@ -817,6 +825,7 @@ def buildImage(
     tracks: int = 80,
     title: str = "",
     boot_option: BootOption = BootOption.OFF,
+    warnings: Optional[List[str]] = None,
 ) -> bytes:
     """Build a disc image from a directory of files with .inf sidecars.
 
@@ -831,9 +840,11 @@ def buildImage(
     character (e.g. '$/', 'T/'). For DSD: side0/ and side1/
     subdirectories. For ADFS: a '$' root directory.
 
-    Files without a .inf sidecar are skipped with a warning printed to
-    stderr. The .inf file provides metadata (disc path, load address,
-    exec address, lock flag) needed to add the file to the catalogue.
+    Files without a .inf sidecar are skipped with a warning. BASIC
+    programs compacted to fit the 255-byte line limit also emit
+    warnings. If the caller passes a warnings list, every warning is
+    appended to it silently; otherwise warnings are printed to stderr
+    (the pre-existing behaviour).
 
     Args:
         source_dir:  Path to the root directory of extracted files.
@@ -841,6 +852,8 @@ def buildImage(
         tracks:      Number of tracks (40 or 80).
         title:       Disc title (up to 12 characters).
         boot_option: Boot option (0-3).
+        warnings:    Optional list. When provided, build-time warnings
+                     are appended to it instead of printed to stderr.
 
     Returns:
         The assembled disc image as bytes, ready to write to a file.
@@ -857,15 +870,33 @@ def buildImage(
         # Double-sided: expect side0/ and side1/ subdirectories.
         for i, side in enumerate(image):
             side_path = os.path.join(source_dir, f"side{i}")
-            _walkSourceTree(side, side_path)
+            _walkSourceTree(side, side_path, warnings=warnings)
     else:
         # Single-sided: the source_dir itself holds the directory tree.
-        _walkSourceTree(image[0], source_dir)
+        _walkSourceTree(image[0], source_dir, warnings=warnings)
 
     return image.serialize()
 
 
-def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
+def _emitWarning(message: str, warnings: Optional[List[str]]) -> None:
+    """Route a build warning to the caller's list or to stderr.
+
+    Library callers who pass a warnings list get every message
+    appended to it; callers who pass None get the historical
+    stderr-printing behaviour.
+    """
+    if warnings is not None:
+        warnings.append(message)
+    else:
+        print(f"Warning: {message}", file=sys.stderr)
+
+
+def _walkSourceTree(
+    side: DiscSide,
+    fs_dir: str,
+    disc_parent: str = "",
+    warnings: Optional[List[str]] = None,
+) -> None:
     """Recursively walk a filesystem directory and add files to a disc side.
 
     Handles both DFS and ADFS layouts:
@@ -888,8 +919,6 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
         disc_parent: Accumulated disc path of the current directory.
                      Empty string at the top level.
     """
-    import sys
-
     if not os.path.isdir(fs_dir):
         return
 
@@ -911,7 +940,7 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
             if disc_parent:
                 side.mkdir(child_path)
 
-            _walkSourceTree(side, path, child_path)
+            _walkSourceTree(side, path, child_path, warnings=warnings)
             continue
 
         if not os.path.isfile(path):
@@ -920,10 +949,7 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
         # Read the .inf sidecar for disc metadata.
         inf_path = path + ".inf"
         if not os.path.isfile(inf_path):
-            print(
-                f"Warning: no .inf sidecar for {path}, skipping",
-                file=sys.stderr,
-            )
+            _emitWarning(f"no .inf sidecar for {path}, skipping", warnings)
             continue
 
         with open(inf_path, "r", encoding="utf-8") as f:
@@ -965,10 +991,10 @@ def _walkSourceTree(side: DiscSide, fs_dir: str, disc_parent: str = "") -> None:
                 ) from exc
 
             for w in compact_warnings:
-                print(
-                    f"Warning: side {side.side} {inf.fullName}: "
+                _emitWarning(
+                    f"side {side.side} {inf.fullName}: "
                     f"compacted to fit ({w})",
-                    file=sys.stderr,
+                    warnings,
                 )
 
         # Add to disc using the path from the .inf sidecar.

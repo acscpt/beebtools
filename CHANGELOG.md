@@ -17,6 +17,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `readCatalogue`, carrying per-side metadata and optional file-type
   classification.
 
+- `hasEscapes` and `formatEntryInf` convenience helpers in the public
+  API.
+
+- Optional `warnings` parameter on `buildImage`. When a list is passed,
+  build-time warnings are appended to it instead of printed to stderr
+  so library callers can collect them without capturing stderr.
+
 ### Changed
 
 - CLI commands now route every disc operation through `disc.py` wrappers.
@@ -25,6 +32,9 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Deduplicated the format-label dictionary shared by `create` and
   `build` into a single `_formatLabel` helper in `cli.py`.
+
+- Removed the duplicated `_ESCAPE_RE` regex in `disc.py`; escape
+  detection now goes through the new `basic.hasEscapes()` helper.
 
 ## [0.6.0] - 2026-04-06
 

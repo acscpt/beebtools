@@ -884,6 +884,15 @@ def classifyFileType(entry: DiscEntry, data: bytes) -> str:
 _ESCAPE_RE = re.compile(r"\\x([0-9A-F]{2})")
 
 
+def hasEscapes(text: str) -> bool:
+    """Return True if text contains any \\xHH escape sequence.
+
+    Used by callers that want to decide whether to run unescapeNonAscii()
+    on a block of text without scanning it twice.
+    """
+    return bool(_ESCAPE_RE.search(text))
+
+
 def escapeNonAscii(line: str) -> str:
     """Replace non-printable-ASCII characters with \\xHH escapes.
 

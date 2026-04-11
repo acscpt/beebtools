@@ -53,7 +53,7 @@ from .basic import (
     tokenize, encodeLineRef,
     prettyPrint,
     looksLikeTokenizedBasic, looksLikePlainText, classifyFileType,
-    escapeNonAscii, unescapeNonAscii,
+    escapeNonAscii, unescapeNonAscii, hasEscapes,
 )
 from .boot import BootOption
 from .entry import DiscEntry, DiscCatalogue, DiscFile, DiscError, DiscFormatError, isBasicExecAddr
@@ -97,7 +97,7 @@ from .disc import (
     sortCatalogueEntries,
     readCatalogue, CatalogueListing, CatalogueEntry,
     extractFile, ExtractedFile, addFile, addFileTo, qualifyDiscPath,
-    writeBasicText, readBasicText,
+    writeBasicText, readBasicText, formatEntryInf,
     getTitle, setTitle, getBoot, setBoot, discInfo, DiscInfo,
     getFileAttribs, setFileAttribs, FileAttribs,
     deleteFile, renameFile, compactDisc, makeDirectory,
@@ -171,6 +171,7 @@ __all__ = [
     "qualifyDiscPath",
     "writeBasicText",
     "readBasicText",
+    "formatEntryInf",
     # Disc mutation (disc.py)
     "getTitle",
     "setTitle",
@@ -191,6 +192,7 @@ __all__ = [
     "classifyFileType",
     "escapeNonAscii",
     "unescapeNonAscii",
+    "hasEscapes",
     "main",
 ]
 
