@@ -33,7 +33,7 @@ from .basic import (
     looksLikeTokenizedBasic, looksLikePlainText, prettyPrint,
 )
 from .image import DiscImage, DiscSide, createImage, openImage
-from .inf import formatInf, parseInf
+from .inf import formatInf, parseInf, InfData
 
 
 # Characters that are illegal in Windows filenames, used when building
@@ -971,93 +971,182 @@ def _emitWarning(message: str, warnings: Optional[List[str]]) -> None:
         print(f"Warning: {message}", file=sys.stderr)
 
 
+def _collectSourceFiles(
+    fs_dir: str,
+    warnings: Optional[List[str]] = None,
+) -> List[Tuple[str, str, InfData]]:
+    """Walk a filesystem tree and collect (fs_path, fs_leaf, inf) tuples.
+
+    This is the read-only first half of the build pipeline: it only
+    visits files and reads their .inf sidecars, so no disc mutation
+    happens until the caller applies the collected records. Directories
+    on the filesystem are descended into but their names are not
+    retained - the true disc layout comes from the .inf sidecars, not
+    from the (possibly sanitised) filesystem names.
+
+    Args:
+        fs_dir:   Root filesystem directory to walk.
+        warnings: Optional list of warnings to append to when a .inf
+                  sidecar is missing.
+
+    Returns:
+        List of (fs_path, fs_leaf_name, InfData) tuples, sorted by
+        disc path so output is deterministic.
+    """
+
+    collected: List[Tuple[str, str, InfData]] = []
+
+    def _visit(current: str) -> None:
+        """Depth-first walk of a filesystem directory."""
+        if not os.path.isdir(current):
+            return
+
+        for entry in sorted(os.listdir(current)):
+            # Skip .inf sidecar files - they are read alongside their data file.
+            if entry.endswith(".inf"):
+                continue
+
+            path = os.path.join(current, entry)
+
+            if os.path.isdir(path):
+                _visit(path)
+                continue
+
+            if not os.path.isfile(path):
+                continue
+
+            inf_path = path + ".inf"
+            if not os.path.isfile(inf_path):
+                _emitWarning(
+                    f"no .inf sidecar for {path}, skipping", warnings,
+                )
+                continue
+
+            with open(inf_path, "r", encoding="utf-8") as handle:
+                inf_line = handle.readline().rstrip("\r\n")
+
+            try:
+                inf = parseInf(inf_line)
+            except ValueError as exc:
+                _emitWarning(
+                    f"bad .inf sidecar {inf_path}: {exc}", warnings,
+                )
+                continue
+
+            collected.append((path, entry, inf))
+
+    _visit(fs_dir)
+
+    # Sort by disc path so directory creation is deterministic.
+    collected.sort(key=lambda rec: rec[2].fullName)
+
+    return collected
+
+
+def _ensureAdfsDirs(side: DiscSide, dir_paths: List[str]) -> None:
+    """Auto-create every ADFS directory referenced by the build set.
+
+    Takes the set of parent directories mentioned by the .inf records
+    being placed on disc and creates each one (shortest first) unless
+    it is the root or already exists. Non-ADFS sides are a no-op
+    because DFS directories are implicit.
+
+    Args:
+        side:      The DiscSide to create directories on.
+        dir_paths: Unsorted list of ADFS parent directory paths such
+                   as ``$``, ``$.GAMES``, ``$.GAMES.ACTION``.
+    """
+
+    # Collect every path prefix we might need, de-duplicated. A file
+    # under "$.A.B.C" requires "$.A", "$.A.B", and "$.A.B.C" to exist.
+    # Directory paths that do not start with the $ root are DFS-style
+    # single-character tokens and are skipped entirely because DFS has
+    # no explicit directory structure on disc.
+    prefixes = set()
+
+    for dir_path in dir_paths:
+        if not dir_path or dir_path == "$":
+            continue
+
+        if not dir_path.startswith("$"):
+            continue
+
+        parts = dir_path.split(".")[1:]
+
+        accumulated = "$"
+        for segment in parts:
+            accumulated = f"{accumulated}.{segment}"
+            prefixes.add(accumulated)
+
+    # Create shortest paths first so parents exist before children.
+    # Any DiscError from mkdir (e.g. "subdirectories not supported" on
+    # a DFS side, or a pre-existing directory of the same name) aborts
+    # the loop because the remaining paths are either unreachable or
+    # already in place.
+    for path in sorted(prefixes, key=lambda p: (p.count("."), p)):
+        try:
+            side.mkdir(path)
+        except DiscError:
+            return
+
+
 def _walkSourceTree(
     side: DiscSide,
     fs_dir: str,
     disc_parent: str = "",
     warnings: Optional[List[str]] = None,
 ) -> None:
-    """Recursively walk a filesystem directory and add files to a disc side.
+    """Build a disc side from a filesystem tree of data + .inf sidecars.
 
-    Handles both DFS and ADFS layouts:
+    File metadata (disc path, load/exec addresses, lock flag) comes from
+    the .inf sidecar next to each data file. The filesystem directory
+    names are irrelevant - the disc layout is reconstructed entirely
+    from the .inf records, so sanitised filesystem names like
+    ``T_x3E_D`` correctly map back to the original disc name ``T>D``.
 
-    DFS directories (e.g. '$', 'T', '+') are implicit - the directory
-    letter is stored as metadata in each file's catalogue entry, so
-    addFile is sufficient. There is no separate directory-creation step.
+    Processing happens in two passes:
 
-    ADFS directories are explicit container entries on disc that must be
-    created with mkdir before files can be placed inside them. Only
-    sub-directories below the root ('$') need creating, since the root
-    already exists on a freshly formatted image.
+    1. Collect every (data file, .inf record) pair from the filesystem.
+    2. Auto-create any ADFS directories referenced by the collected
+       records, then add each file using its .inf-supplied disc path.
 
-    File metadata (disc path, load/exec addresses, lock flag) is read
-    from .inf sidecars accompanying each data file.
+    DFS directories (e.g. ``$``, ``T``, ``+``) are implicit - the
+    directory letter is stored as metadata in each file's catalogue
+    entry, so no mkdir step is needed.
 
     Args:
         side:        A DiscSide to add files and directories to.
         fs_dir:      Filesystem directory to walk.
-        disc_parent: Accumulated disc path of the current directory.
-                     Empty string at the top level.
+        disc_parent: Unused; retained for backward compatibility with
+                     the previous recursive signature.
+        warnings:    Optional list that collects build warnings.
     """
-    if not os.path.isdir(fs_dir):
-        return
 
-    for name in sorted(os.listdir(fs_dir)):
-        # Skip .inf sidecar files - they are read alongside their data file.
-        if name.endswith(".inf"):
-            continue
+    # Pass 1: collect every source file with its .inf metadata.
+    records = _collectSourceFiles(fs_dir, warnings=warnings)
 
-        path = os.path.join(fs_dir, name)
+    # Auto-create every ADFS parent directory referenced by the records.
+    _ensureAdfsDirs(side, [rec[2].directory for rec in records])
 
-        if os.path.isdir(path):
-            # Build the disc path for this directory.
-            child_path = f"{disc_parent}.{name}" if disc_parent else name
+    # Pass 2: add each file to the disc side using the .inf disc path.
+    for path, fs_leaf, inf in records:
+        with open(path, "rb") as handle:
+            data = handle.read()
 
-            # Create subdirectories below the root on disc.  For DFS
-            # this level is never reached because DFS trees are flat
-            # (single-character directory prefixes sit at the top level
-            # where disc_parent is empty).
-            if disc_parent:
-                side.mkdir(child_path)
-
-            _walkSourceTree(side, path, child_path, warnings=warnings)
-            continue
-
-        if not os.path.isfile(path):
-            continue
-
-        # Read the .inf sidecar for disc metadata.
-        inf_path = path + ".inf"
-        if not os.path.isfile(inf_path):
-            _emitWarning(f"no .inf sidecar for {path}, skipping", warnings)
-            continue
-
-        with open(inf_path, "r", encoding="utf-8") as f:
-            inf_line = f.readline().strip()
-
-        inf = parseInf(inf_line)
-
-        # Read the data file.
-        with open(path, "rb") as f:
-            data = f.read()
-
-        # Retokenize .bas files back to BBC BASIC binary format.
-        # The extract step detokenizes BASIC programs into plain text,
+        # Retokenize .bas files back to BBC BASIC binary format. The
+        # extract step detokenizes BASIC programs into plain text,
         # which is larger than the tokenized form. Re-tokenizing here
         # restores the compact binary representation so the rebuilt
         # disc image does not overflow.
-        if name.endswith(".bas") and isBasicExecAddr(inf.exec_addr):
+        if fs_leaf.endswith(".bas") and isBasicExecAddr(inf.exec_addr):
             lines = readBasicText(data)
 
             # Tokenize with auto-compaction for overflowing lines.
             # Pretty-printed whitespace can push dense lines past the
-            # 255-byte limit.  The on_overflow callback compacts just
+            # 255-byte limit. The on_overflow callback compacts just
             # the offending line and collects a warning.
             compact_warnings: List[str] = []
 
-            # Callback for tokenize(): when a pretty-printed line
-            # overflows 255 bytes, strip cosmetic whitespace from
-            # just that line and warn the user after the build.
             def compactAndWarn(text: str, msg: str) -> str:
                 """Compact a line and record the overflow warning."""
                 compact_warnings.append(msg)
@@ -1077,7 +1166,6 @@ def _walkSourceTree(
                     warnings,
                 )
 
-        # Add to disc using the path from the .inf sidecar.
         side.addFile(DiscFile(
             path=inf.fullName,
             data=data,

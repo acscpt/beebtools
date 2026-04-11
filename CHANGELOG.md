@@ -13,14 +13,37 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   API, backed by `contextvars.ContextVar`. Scopes spec-compliance checks
   to a block of code so validators can consult the current setting
   without threading a `strict` parameter through every call site.
+- `.inf` sidecar parser and formatter now implement the full stardot
+  `inf_format` spec: quoted string fields with RFC 3986 percent-encoding,
+  syntax 1/2/3 forms, 6- and 8-digit hex with `FF`-prefix sign extension,
+  symbolic ADFS access strings, and `KEY=value` extra-info pass-through.
+- `InfData` gains `fullName`, `nameBytes`, `directoryBytes`, `access`,
+  `crc` properties plus an `extra_info` dict for arbitrary sidecar keys.
 
 ### Changed
 
-- `validateDfsName()` default behaviour relaxed to accept any printable
-  byte (0x20-0x7F) in filenames and directory characters, including
-  `. : " # *` and space. Wrap a call in `with strictMode():` to opt in
-  to the historical spec-compliance check which rejects those
-  characters and narrows the byte range to 0x21-0x7E.
+- `validateDfsName()` default behaviour relaxed to accept any 7-bit byte
+  in filenames and directory characters, including control bytes and
+  spec-forbidden punctuation. Wrap a call in `with strictMode():` to
+  opt in to the spec-compliance check which narrows the byte range to
+  0x21-0x7E and rejects `. : " # *` and space.
+- DFS catalogue reader now preserves degenerate all-space filenames as
+  a single-space name instead of collapsing them to the empty string,
+  so such entries survive extract-and-rebuild cycles.
+- `formatInf()` emits syntax 1 with 8-digit hex addresses and a 2-digit
+  hex access byte, quotes and percent-encodes the name field when any
+  byte would otherwise be ambiguous, and always escapes `.` inside the
+  leaf name so filenames containing dots do not collide with ADFS
+  nested path separators on parse.
+- `buildImage()` now treats the `.inf` sidecar as the sole source of
+  truth for every disc-side name (DFS directory letter, DFS filename,
+  and ADFS nested path alike). The filesystem layout is only used to
+  discover data files; the build walks the tree to collect
+  `(data file, .inf record)` pairs, auto-creates every ADFS parent
+  directory referenced by the records (shortest path first), and adds
+  each file using the disc path from its sidecar. This means a
+  sanitised filesystem name such as `T_x3E_D` correctly maps back to
+  the original disc name `T>D` on both DFS and ADFS sides.
 
 ## [0.7.0] - 2026-04-11
 
