@@ -892,6 +892,7 @@ def buildImage(
     title: str = "",
     boot_option: BootOption = BootOption.OFF,
     warnings: Optional[List[str]] = None,
+    save: bool = False,
 ) -> bytes:
     """Build a disc image from a directory of files with .inf sidecars.
 
@@ -915,18 +916,25 @@ def buildImage(
     Args:
         source_dir:  Path to the root directory of extracted files.
         output_path: Path whose extension determines the disc format.
+                     When save is True this is also the destination file.
         tracks:      Number of tracks (40 or 80).
         title:       Disc title (up to 12 characters).
         boot_option: Boot option (0-3).
         warnings:    Optional list. When provided, build-time warnings
                      are appended to it instead of printed to stderr.
+        save:        When True, the assembled image is also written to
+                     output_path. Default False, in which case no file
+                     is written and the caller is responsible for
+                     persisting the returned bytes.
 
     Returns:
-        The assembled disc image as bytes, ready to write to a file.
+        The assembled disc image as bytes. When save is True the same
+        bytes have also been written to output_path.
 
     Raises:
         DiscError: If a file cannot be added (name conflict, disc full, etc.).
         DFSFormatError: If the output_path extension is unrecognised.
+        OSError:   If save is True and the write to output_path fails.
     """
     image = createImage(
         output_path, tracks=tracks, title=title, boot_option=boot_option,
@@ -941,7 +949,13 @@ def buildImage(
         # Single-sided: the source_dir itself holds the directory tree.
         _walkSourceTree(image[0], source_dir, warnings=warnings)
 
-    return image.serialize()
+    image_bytes = image.serialize()
+
+    if save:
+        with open(output_path, "wb") as f:
+            f.write(image_bytes)
+
+    return image_bytes
 
 
 def _emitWarning(message: str, warnings: Optional[List[str]]) -> None:

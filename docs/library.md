@@ -58,25 +58,28 @@ each entry's `directory` field containing the full parent path.
 ```python
 from beebtools import openAdfsImage
 
-image = openAdfsImage("game.adf")
-side = image[0]
+with openAdfsImage("game.adf") as image:
+    side = image[0]
 
-for entry in side.readCatalogue():
-    if entry.isDirectory:
-        print(f"  [DIR] {entry.fullName}")
-    elif entry.isBasic:
-        print(f"  [BAS] {entry.fullName}")
-    else:
-        print(f"        {entry.fullName}  {entry.length} bytes")
+    for entry in side.readCatalogue():
+        if entry.isDirectory:
+            print(f"  [DIR] {entry.fullName}")
+        elif entry.isBasic:
+            print(f"  [BAS] {entry.fullName}")
+        else:
+            print(f"        {entry.fullName}  {entry.length} bytes")
 ```
 
 You can also walk the raw directory tree for structured access:
 
 ```python
-side = image.sides[0]
-root = side.readDirectory(2)   # root directory at sector 2
-for entry in root.entries:
-    print(entry.name, "DIR" if entry.isDirectory else "")
+from beebtools import openAdfsImage, ADFS_ROOT_SECTOR
+
+with openAdfsImage("game.adf") as image:
+    side = image.sides[0]
+    root = side.readDirectory(ADFS_ROOT_SECTOR)
+    for entry in root.entries:
+        print(entry.name, "DIR" if entry.isDirectory else "")
 ```
 
 ## Searching BASIC source
@@ -110,7 +113,7 @@ from beebtools import extractFile, FileType
 
 result = extractFile("mydisc.ssd", "T.MYPROG", pretty=True)
 
-if result.file_type is FileType.BASIC and result.lines is not None:
+if result.file_type is FileType.BASIC:
     # Pure BASIC - result.lines contains detokenized text
     print("\n".join(result.lines))
 
@@ -150,20 +153,42 @@ an f-string) yields the historical short label.
 ```python
 from beebtools import openImage, classifyFileType, FileType
 
-image = openImage("mydisc.ssd")
-for side in image.sides:
-    catalogue = side.readCatalogue()
-    for entry in catalogue.entries:
-        data = side.readFile(entry)
-        file_type = classifyFileType(entry, data)
-        print(f"{entry.fullName:12s}  {file_type}")
+with openImage("mydisc.ssd") as image:
+    for side in image.sides:
+        catalogue = side.readCatalogue()
+        for entry in catalogue.entries:
+            data = side.readFile(entry)
+            file_type = classifyFileType(entry, data)
+            print(f"{entry.fullName:12s}  {file_type}")
 
-        if file_type is FileType.BASIC_ISH:
-            # BASIC-adjacent file worth a closer look - see Section 5.
-            pass
+            if file_type is FileType.BASIC_ISH:
+                # Worth a closer look - see Section 5.
+                pass
 ```
 
-## Adding files with retokenization
+## Adding files
+
+Every `DiscSide` exposes `addFile()`, which takes a `DiscFile` spec and
+returns the catalogue entry that was written. Use it directly when the
+data is already in the format the disc expects (raw bytes, tokenized
+BASIC, etc.).
+
+```python
+from beebtools import openImage, DiscFile, tokenize
+
+with openImage("mydisc.ssd") as image:
+    side = image[0]
+    entry = side.addFile(DiscFile(
+        path="$.HELLO",
+        data=tokenize(['10 PRINT "HELLO WORLD"']),
+        load_addr=0x1900,
+        exec_addr=0x8023,
+    ))
+    print(f"Added {entry.fullName} ({entry.length} bytes)")
+    image.save("mydisc.ssd")
+```
+
+### Retokenizing plain-text BASIC on the way in
 
 `addFileTo()` wraps `side.addFile()` with optional retokenization - if
 the source file is plain-text BASIC (e.g. a `.bas` file saved from an
@@ -172,21 +197,18 @@ editor), it is tokenized before being written to the disc image.
 ```python
 from beebtools import openImage, addFileTo, DiscFile
 
-image = openImage("mydisc.ssd")
-
-# Add a plain-text BASIC file - it will be tokenized automatically
 with open("game.bas", "rb") as f:
     data = f.read()
 
-entry = addFileTo(
-    image, side_index=0,
-    spec=DiscFile(path="$.GAME", data=data,
-                  load_addr=0x1900, exec_addr=0x8023),
-    retokenize=True,
-)
-print(f"Added {entry.fullName} ({entry.length} bytes)")
-
-image.save("mydisc.ssd")
+with openImage("mydisc.ssd") as image:
+    entry = addFileTo(
+        image, side_index=0,
+        spec=DiscFile(path="$.GAME", data=data,
+                      load_addr=0x1900, exec_addr=0x8023),
+        retokenize=True,
+    )
+    print(f"Added {entry.fullName} ({entry.length} bytes)")
+    image.save("mydisc.ssd")
 ```
 
 ## Non-ASCII round-tripping
@@ -214,36 +236,51 @@ Create blank disc images programmatically, add files one at a time, or
 build an entire image from a directory of files with `.inf` sidecars.
 The `BootOption` enum provides the standard boot options (shared by DFS and ADFS).
 
-```python
-from beebtools import createDiscImage, DiscFile, BootOption, buildImage
-
-# Create a blank DFS image and add files programmatically
-image = createDiscImage(tracks=80, title="DEMO", boot_option=BootOption.EXEC)
-side = image[0]
-side.addFile(DiscFile(path="$.HELLO", data=b"...",
-                      load_addr=0x1900, exec_addr=0x8023))
-image.save("demo.ssd")
-
-# Or build from a directory of files with .inf sidecars
-raw = buildImage(source_dir="extracted/", output_path="rebuilt.ssd",
-                 tracks=80, boot_option=BootOption.RUN)
-```
-
 `createImage()` is the format-dispatching counterpart to `openImage()`. It
 returns a blank in-memory `DiscImage` chosen from the output path
 extension. `createImageFile()` wraps it to also write the serialized bytes
 straight to disk in one call.
 
 ```python
-from beebtools import createImage, createImageFile, BootOption
+from beebtools import createImage, createImageFile, DiscFile, BootOption, tokenize
 
-# In-memory blank image, caller serializes when ready
-image = createImage("blank.ssd", tracks=80, title="DEMO",
-                    boot_option=BootOption.EXEC)
+# In-memory blank image, caller adds files and serializes when ready
+with createImage("demo.ssd", tracks=80, title="DEMO",
+                 boot_option=BootOption.EXEC) as image:
+    image[0].addFile(DiscFile(
+        path="$.HELLO",
+        data=tokenize(['10 PRINT "HELLO WORLD"']),
+        load_addr=0x1900, exec_addr=0x8023,
+    ))
+    image.save("demo.ssd")
 
-# Same, but written directly to disk
-size = createImageFile("blank.ssd", tracks=80, title="DEMO",
+# Or just write a blank image straight to disk
+size = createImageFile("blank.ssd", tracks=80, title="BLANK",
                        boot_option=BootOption.EXEC)
+```
+
+For DFS-specific code that does not need format dispatch, `createDiscImage()`
+returns a `DFSImage` directly and accepts the same `tracks` / `title` /
+`boot_option` arguments. `createAdfsImage()` is the ADFS counterpart and is
+covered in the next section.
+
+### Building from an extracted directory tree
+
+`buildImage()` assembles a disc from a directory of files with `.inf`
+sidecars. The format is chosen from the output path extension. Pass
+`save=True` to write the assembled image straight to `output_path`;
+the assembled bytes are returned either way.
+
+```python
+from beebtools import buildImage, BootOption
+
+# Build and write the image in one call
+raw = buildImage(source_dir="extracted/", output_path="rebuilt.ssd",
+                 tracks=80, boot_option=BootOption.RUN, save=True)
+
+# Or get the bytes back without touching the filesystem
+raw = buildImage(source_dir="extracted/", output_path="rebuilt.ssd",
+                 tracks=80, boot_option=BootOption.RUN)
 ```
 
 ## Creating and building ADFS disc images
@@ -253,34 +290,33 @@ path (e.g. `$.GAMES.ELITE`). Use `createAdfsImage()` to create a blank image
 and `addFile()`, `deleteFile()`, `mkdir()` to manipulate it.
 
 ```python
-from beebtools import createAdfsImage, DiscFile, BootOption
+from beebtools import createAdfsImage, DiscFile, BootOption, tokenize
 from beebtools import ADFS_S_SECTORS, ADFS_M_SECTORS, ADFS_L_SECTORS
 
 # Create a blank 320K ADFS image
-image = createAdfsImage(
+with createAdfsImage(
     total_sectors=ADFS_M_SECTORS,
     title="GAMES",
     boot_option=BootOption.RUN,
-)
-side = image[0]
+) as image:
+    side = image[0]
 
-# Create a subdirectory and add a file into it
-side.mkdir("$.GAMES")
-side.addFile(DiscFile(
-    path="$.GAMES.ELITE",
-    data=b"\x00" * 1024,
-    load_addr=0x1900,
-    exec_addr=0x1900,
-))
+    # Create a subdirectory and add a BASIC loader into it
+    side.mkdir("$.GAMES")
+    side.addFile(DiscFile(
+        path="$.GAMES.ELITE",
+        data=tokenize(['10 PRINT "ELITE"', '20 CHAIN "GAME"']),
+        load_addr=0x1900,
+        exec_addr=0x8023,
+    ))
 
-# Add a file to the root directory
-side.addFile(DiscFile(path="$.BOOT", data=b"*RUN GAMES.ELITE\r"))
+    # Add a boot file to the root directory
+    side.addFile(DiscFile(path="$.BOOT", data=b"*RUN GAMES.ELITE\r"))
 
-# Delete a file
-side.deleteFile("$.GAMES.ELITE")
+    # deleteFile removes a catalogue entry by its full path
+    # side.deleteFile("$.GAMES.ELITE")
 
-# Write the image to a file
-image.save("mydisc.adf")
+    image.save("mydisc.adf")
 ```
 
 Build an ADFS image from an extracted directory tree:
@@ -288,9 +324,7 @@ Build an ADFS image from an extracted directory tree:
 ```python
 from beebtools import buildImage
 
-raw = buildImage(source_dir="extracted/", output_path="rebuilt.adf")
-with open("rebuilt.adf", "wb") as f:
-    f.write(raw)
+buildImage(source_dir="extracted/", output_path="rebuilt.adf", save=True)
 ```
 
 Format sizes: `ADFS_S_SECTORS` (160K, 640 sectors), `ADFS_M_SECTORS` (320K,

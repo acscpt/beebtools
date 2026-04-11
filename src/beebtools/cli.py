@@ -440,13 +440,11 @@ def cmdBuild(args: Namespace) -> None:
             tracks=args.tracks,
             title=args.title or "",
             boot_option=args.boot,
+            save=True,
         )
     except DiscError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-
-    with open(args.output, "wb") as f:
-        f.write(image_bytes)
 
     label = _formatLabel(args.output, args.tracks, len(image_bytes))
     print(f"Built {label}: {args.output}")

@@ -32,6 +32,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on `ExtractedFile.file_type`, `CatalogueEntry.file_type`, and the
   return value of `classifyFileType`.
 
+- Optional `save` parameter on `buildImage` (default `False`). When
+  `True`, the assembled image is written to `output_path` instead of
+  requiring the caller to open-and-write the returned bytes.
+
+- `ADFS_ROOT_SECTOR` constant on the public API, alongside the existing
+  `ADFS_S_SECTORS` / `ADFS_M_SECTORS` / `ADFS_L_SECTORS` size constants.
+
 ### Changed
 
 - CLI commands now route every disc operation through `disc.py` wrappers.

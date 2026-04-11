@@ -66,7 +66,7 @@ Tier 4, format-specific:
     ADFSSide, ADFSImage
     ADFSError, ADFSFormatError
     openAdfsImage, createAdfsImage, validateAdfsName
-    ADFS_S_SECTORS, ADFS_M_SECTORS, ADFS_L_SECTORS
+    ADFS_S_SECTORS, ADFS_M_SECTORS, ADFS_L_SECTORS, ADFS_ROOT_SECTOR
 
     parseInf, formatInf, formatEntryInf, InfData
     addFileTo, qualifyDiscPath, sortCatalogueEntries
@@ -153,6 +153,7 @@ from .adfs import (
     ADFS_S_SECTORS,
     ADFS_M_SECTORS,
     ADFS_L_SECTORS,
+    ADFS_ROOT_SECTOR,
 )
 from .image import openImage, createImage, DiscSide, DiscImage
 from .inf import InfData, parseInf, formatInf
@@ -256,6 +257,7 @@ __all__ = [
     "ADFS_S_SECTORS",
     "ADFS_M_SECTORS",
     "ADFS_L_SECTORS",
+    "ADFS_ROOT_SECTOR",
     # .inf sidecars
     "parseInf",
     "formatInf",
