@@ -14,7 +14,7 @@ Classes:
     ADFSEntry        -- one file entry from an ADFS directory (frozen dataclass)
     ADFSDirectory    -- one parsed ADFS directory (frozen dataclass)
     ADFSFreeSpaceMap -- parsed free space map from sectors 0-1 (frozen dataclass)
-    ADFSCatalogue    -- flattened catalogue for duck-typing compat (frozen dataclass)
+    ADFSCatalogue    -- flattened catalogue for one ADFS disc (frozen dataclass)
     ADFSSide         -- sector I/O, directory parsing, and file extraction
     ADFSImage        -- disc image container
 
@@ -302,7 +302,7 @@ class ADFSSide(DiscSide):
 
     ADFS uses a single flat logical sector space regardless of whether
     the physical disc is single-sided or double-sided. The side number
-    is always 0 for compatibility with the duck-typing interface.
+    is always 0 to satisfy the DiscSide contract.
     """
 
     def __init__(self, image: "ADFSImage", side: int) -> None:
@@ -956,7 +956,7 @@ class ADFSSide(DiscSide):
         return result
 
     # -------------------------------------------------------------------
-    # Catalogue (duck-typing interface)
+    # Catalogue (DiscSide interface)
     # -------------------------------------------------------------------
 
     def readCatalogue(self) -> ADFSCatalogue:

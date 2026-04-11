@@ -1006,7 +1006,7 @@ def createDiscImage(
     tracks: int = 80,
     is_dsd: bool = False,
     title: str = "",
-    boot_option: int = BootOption.OFF,
+    boot_option: BootOption = BootOption.OFF,
 ) -> DFSImage:
     """Create a blank formatted DFS disc image.
 

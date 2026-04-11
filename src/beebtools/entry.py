@@ -11,7 +11,7 @@ Defines the hierarchy that every disc format engine builds on:
     DiscSide      -- one side of a disc image (read and mutation API)
     DiscImage     -- a complete disc image container
 
-This is a Layer 0 module - no internal imports beyond boot.
+This is a Contracts-layer module - no internal imports beyond boot.
 """
 
 from abc import ABC, abstractmethod

@@ -3,19 +3,20 @@
 
 """High-level disc operations.
 
-Orchestration layer that composes the lower-level modules into coherent
-disc-wide operations. All operations work through Protocols defined in
-image.py, so the same code handles both DFS and ADFS formats.
+Orchestration module that composes the lower-level modules into
+coherent disc-wide operations. All operations work through the
+DiscSide and DiscImage abstract base classes defined in entry.py, so
+the same code handles both DFS and ADFS formats without branching.
 
-Layer responsibilities:
-    boot   -- BootOption enum (Layer 0)
-    entry  -- DiscEntry Protocol and DiscFile transport (Layer 0)
-    basic  -- BASIC facade: tokenize, detokenize, classify, escape (Layer 2b)
-    image  -- DiscSide/DiscImage Protocols plus openImage/createImage (Layer 3)
-    disc   -- cross-layer orchestration (this module, Layer 4)
-    cli    -- argument parsing, output formatting (Layer 5)
+Collaborators:
+    boot   -- BootOption enum (Contracts)
+    entry  -- DiscEntry / DiscSide / DiscImage ABCs, DiscFile transport (Contracts)
+    basic  -- BASIC facade: tokenize, detokenize, classify, escape (BASIC)
+    image  -- openImage / createImage dispatchers (Dispatch)
+    disc   -- cross-module orchestration (this module, Orchestration)
+    cli    -- argument parsing, output formatting (CLI)
 
-All operations that span more than one lower layer belong here.
+All operations that span more than one of these belong here.
 """
 
 import os
@@ -165,8 +166,8 @@ def formatEntryInf(entry: DiscEntry) -> str:
 
     Convenience wrapper over formatInf() that destructures a DiscEntry
     into the positional arguments formatInf() expects. Lives in disc.py
-    rather than inf.py because inf.py is a Layer 0 leaf module and must
-    not know about DiscEntry.
+    rather than inf.py because inf.py is a Contracts-layer leaf module
+    and must not know about DiscEntry.
     """
     return formatInf(
         entry.directory, entry.name,

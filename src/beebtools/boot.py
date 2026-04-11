@@ -5,8 +5,8 @@
 
 The 2-bit boot option is stored identically in both DFS catalogue
 descriptor bytes and ADFS free space maps. This module provides the
-enum so that both format engines can import it from a common Layer 0
-module without lateral coupling.
+enum so that both format engines can import it from a common
+Contracts-layer module without lateral coupling.
 """
 
 from enum import IntEnum
