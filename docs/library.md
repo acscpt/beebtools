@@ -29,11 +29,12 @@ or `openAdfsImage()` (ADFS).
 
 ## Inspecting catalogue entries
 
-Both `DFSEntry` and `ADFSEntry` carry the file's name, directory, load and
-exec addresses, byte length, lock flag, and an `isBasic` property that checks
-the exec address against known BASIC entry points. Both types expose
-`fullName`, `isBasic`, and `isDirectory` properties for duck-typing
-compatibility. Entries can be sorted by name, catalogue order, or size.
+`DFSEntry` and `ADFSEntry` both inherit from the `DiscEntry` abstract base
+class. Every entry carries the file's name, directory, load and exec
+addresses, byte length, and lock flag, and exposes `fullName`, `isBasic`,
+and `isDirectory` properties. `isBasic` checks the exec address against
+known BASIC entry points. Entries can be sorted by name, catalogue order,
+or size.
 
 ```python
 from beebtools import openImage, sortCatalogueEntries
@@ -209,6 +210,23 @@ raw = image.serialize()
 # Or build from a directory of files with .inf sidecars
 raw = buildImage(source_dir="extracted/", output_path="rebuilt.ssd",
                  tracks=80, boot_option=BootOption.RUN)
+```
+
+`createImage()` is the format-dispatching counterpart to `openImage()`. It
+returns a blank in-memory `DiscImage` chosen from the output path
+extension. `createImageFile()` wraps it to also write the serialized bytes
+straight to disk in one call.
+
+```python
+from beebtools import createImage, createImageFile, BootOption
+
+# In-memory blank image, caller serializes when ready
+image = createImage("blank.ssd", tracks=80, title="DEMO",
+                    boot_option=BootOption.EXEC)
+
+# Same, but written directly to disk
+size = createImageFile("blank.ssd", tracks=80, title="DEMO",
+                       boot_option=BootOption.EXEC)
 ```
 
 ## Creating and building ADFS disc images
