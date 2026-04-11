@@ -29,8 +29,28 @@ on the disc image reader. The orchestration layer (`disc.py`) handles
 reading and writing the actual `.inf` files on disc.
 """
 
+import warnings as _warnings
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
+
+
+# -----------------------------------------------------------------------
+# Extra-info keys
+# -----------------------------------------------------------------------
+
+# beebtools proposes ``START_SECTOR`` as an .inf extra-info key that
+# records the on-disc start sector for a file, so that a rebuild can
+# place the file at its original location instead of running
+# free-space allocation. This is what makes byte-exact rebuilds of
+# copy-protected discs (Level 9 games) possible when their catalogue
+# entries legitimately declare overlapping sector ranges. Until the
+# convention sees wider adoption the library only ever WRITES the
+# HTTP-style experimental form ``X_START_SECTOR``; it reads both and
+# prefers the bare form when both appear. Drop the X- prefix on the
+# write path (``INF_X_START_SECTOR = INF_START_SECTOR``) once the
+# experimental status lifts.
+INF_START_SECTOR = "START_SECTOR"
+INF_X_START_SECTOR = "X_" + INF_START_SECTOR
 
 
 # -----------------------------------------------------------------------
@@ -110,6 +130,66 @@ class InfData:
             return int(value, 16)
         except ValueError:
             return None
+
+    @property
+    def startSector(self) -> Optional[int]:
+        """Return the on-disc start sector recorded in extra_info, if any.
+
+        Reads the experimental ``X_START_SECTOR`` field, or the bare
+        ``START_SECTOR`` field if the convention has graduated. The
+        plain form is preferred when both are present but that is an
+        anomaly - in practice only one should ever appear - so both
+        keys showing up at once also emits a warning. An unparseable
+        or negative value emits a ``UserWarning`` via ``warnings.warn``
+        and returns None, so callers still fall back to normal
+        free-space allocation but the data problem is visible to any
+        observer that has not silenced warnings.
+        """
+
+        has_plain = INF_START_SECTOR in self.extra_info
+        has_x = INF_X_START_SECTOR in self.extra_info
+
+        if has_plain and has_x:
+            _warnings.warn(
+                f".inf sidecar for {self.fullName!r} contains both "
+                f"{INF_START_SECTOR}="
+                f"{self.extra_info[INF_START_SECTOR]!r} and "
+                f"{INF_X_START_SECTOR}="
+                f"{self.extra_info[INF_X_START_SECTOR]!r}; "
+                f"only one should be present, using the plain form",
+                stacklevel=2,
+            )
+
+        if has_plain:
+            key = INF_START_SECTOR
+        elif has_x:
+            key = INF_X_START_SECTOR
+        else:
+            return None
+
+        value = self.extra_info[key]
+
+        try:
+            parsed = int(value, 0)
+        except ValueError:
+            _warnings.warn(
+                f".inf {key}={value!r} for {self.fullName!r} is not a "
+                f"valid integer, ignoring and falling back to "
+                f"auto-allocation",
+                stacklevel=2,
+            )
+            return None
+
+        if parsed < 0:
+            _warnings.warn(
+                f".inf {key}={value!r} for {self.fullName!r} is "
+                f"negative, ignoring and falling back to "
+                f"auto-allocation",
+                stacklevel=2,
+            )
+            return None
+
+        return parsed
 
 
 # -----------------------------------------------------------------------

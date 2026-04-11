@@ -18,7 +18,7 @@ This is a Contracts-layer module - no internal imports beyond boot.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterator, List, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 from .boot import BootOption
 
@@ -139,6 +139,7 @@ class DiscEntry(ABC):
     exec_addr: int
     length: int
     locked: bool
+    start_sector: int
 
     @property
     @abstractmethod
@@ -201,6 +202,13 @@ class DiscFile:
     Bundles everything needed to add a file to a disc image into a
     single value. Format engines extract what they need from path:
     DFS splits it into directory and name, ADFS uses it directly.
+
+    When ``start_sector`` is set, format engines that support placed
+    writes use the exact sector rather than running free-space
+    allocation. This preserves the original on-disc layout for
+    byte-exact rebuilds and for round-tripping copy-protected discs
+    that declare overlapping sector allocations (typically Level 9
+    games). A value of None means the engine picks a sector normally.
     """
 
     path: str
@@ -208,6 +216,7 @@ class DiscFile:
     load_addr: int = 0
     exec_addr: int = 0
     locked: bool = False
+    start_sector: Optional[int] = None
 
 
 # -----------------------------------------------------------------------

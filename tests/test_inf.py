@@ -446,3 +446,83 @@ class TestRoundTrip:
                 f"Directory byte 0x{code:02X} did not round-trip"
             )
             assert result.name == "FILE"
+
+
+# =======================================================================
+# InfData.startSector
+# =======================================================================
+
+class TestStartSector:
+    """The experimental X_START_SECTOR / START_SECTOR extra_info field."""
+
+    def testAbsentReturnsNone(self) -> None:
+        """An .inf with no start sector key returns None."""
+        result = parseInf("$.BOOT FFFF1900 FFFF8023 00000A00 00")
+
+        assert result.startSector is None
+
+    def testExperimentalFormParses(self) -> None:
+        """X_START_SECTOR alone returns the parsed integer."""
+        result = parseInf(
+            "$.BOOT FFFF1900 FFFF8023 00000A00 00 X_START_SECTOR=42"
+        )
+
+        assert result.startSector == 42
+
+    def testPlainFormParses(self) -> None:
+        """START_SECTOR alone returns the parsed integer."""
+        result = parseInf(
+            "$.BOOT FFFF1900 FFFF8023 00000A00 00 START_SECTOR=42"
+        )
+
+        assert result.startSector == 42
+
+    def testBothPresentPrefersPlainAndWarns(self) -> None:
+        """Both keys present: plain wins, a warning is emitted."""
+        result = parseInf(
+            "$.BOOT FFFF1900 FFFF8023 00000A00 00 "
+            "START_SECTOR=7 X_START_SECTOR=99"
+        )
+
+        with pytest.warns(UserWarning, match="both"):
+            value = result.startSector
+
+        assert value == 7
+
+    def testInvalidIntegerWarnsAndReturnsNone(self) -> None:
+        """An unparseable value emits a warning and returns None."""
+        result = parseInf(
+            "$.BOOT FFFF1900 FFFF8023 00000A00 00 X_START_SECTOR=notanumber"
+        )
+
+        with pytest.warns(UserWarning, match="not a.*valid integer"):
+            value = result.startSector
+
+        assert value is None
+
+    def testNegativeValueWarnsAndReturnsNone(self) -> None:
+        """A negative integer emits a warning and returns None."""
+        result = parseInf(
+            "$.BOOT FFFF1900 FFFF8023 00000A00 00 X_START_SECTOR=-5"
+        )
+
+        with pytest.warns(UserWarning, match="negative"):
+            value = result.startSector
+
+        assert value is None
+
+    def testZeroIsValid(self) -> None:
+        """Sector 0 is a legal value; no warning, returns 0."""
+        result = parseInf(
+            "$.BOOT FFFF1900 FFFF8023 00000A00 00 X_START_SECTOR=0"
+        )
+
+        assert result.startSector == 0
+
+    def testHexPrefixAccepted(self) -> None:
+        """int(value, 0) accepts 0x-prefixed hex start sectors."""
+        result = parseInf(
+            "$.BOOT FFFF1900 FFFF8023 00000A00 00 X_START_SECTOR=0x10"
+        )
+
+        assert result.startSector == 16
