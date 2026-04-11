@@ -93,7 +93,7 @@ from .adfs import (
 from .image import openImage, createImage, DiscSide, DiscImage
 from .inf import InfData, parseInf, formatInf
 from .disc import (
-    search, extractAll, buildImage, createEmptyImage,
+    search, extractAll, buildImage, createImageFile,
     sortCatalogueEntries,
     readCatalogue, CatalogueListing, CatalogueEntry,
     extractFile, ExtractedFile, addFile, addFileTo, qualifyDiscPath,
@@ -159,7 +159,7 @@ __all__ = [
     "search",
     "extractAll",
     "buildImage",
-    "createEmptyImage",
+    "createImageFile",
     "sortCatalogueEntries",
     "readCatalogue",
     "CatalogueListing",

@@ -784,13 +784,16 @@ def extractAll(
     return results
 
 
-def createEmptyImage(
+def createImageFile(
     output_path: str,
     tracks: int = 80,
     title: str = "",
     boot_option: BootOption = BootOption.OFF,
 ) -> int:
     """Create a blank formatted disc image and write it to disk.
+
+    Use this to create a new disc image file on disk directly, unlike
+    `image.createImage` that creates an in-memory image only.
 
     The format is determined by the output_path extension:
         .ssd  -- DFS single-sided

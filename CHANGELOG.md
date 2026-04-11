@@ -10,7 +10,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Library functions `readCatalogue`, `deleteFile`, `addFile`, and
-  `createEmptyImage` in the public API, giving single-call wrappers for
+  `createImageFile` in the public API, giving single-call wrappers for
   every CLI operation.
 
 - `CatalogueListing` and `CatalogueEntry` dataclasses returned by

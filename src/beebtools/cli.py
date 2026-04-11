@@ -18,7 +18,7 @@ from .boot import BootOption
 from .entry import DiscError, DiscFile
 from .inf import parseInf
 from .disc import (
-    search, extractAll, buildImage, createEmptyImage,
+    search, extractAll, buildImage, createImageFile,
     readCatalogue,
     extractFile, addFile, qualifyDiscPath,
     writeBasicText, escapeNonAscii,
@@ -303,7 +303,7 @@ def cmdCreate(args: Namespace) -> None:
     Args:
         args: Parsed argparse namespace for the 'create' subcommand.
     """
-    size_bytes = createEmptyImage(
+    size_bytes = createImageFile(
         args.output,
         tracks=args.tracks,
         title=args.title or "",
