@@ -106,35 +106,49 @@ resolution, BASIC/hybrid detection, and detokenization in a single call.
 It returns an `ExtractedFile` with the classified data.
 
 ```python
-from beebtools import extractFile
+from beebtools import extractFile, FileType
 
 result = extractFile("mydisc.ssd", "T.MYPROG", pretty=True)
 
-if result.file_type == "BASIC" and result.lines is not None:
+if result.file_type is FileType.BASIC and result.lines is not None:
     # Pure BASIC - result.lines contains detokenized text
     print("\n".join(result.lines))
 
-elif result.file_type == "BASIC+MC":
+elif result.file_type is FileType.BASIC_MC:
     # Hybrid - BASIC with appended machine code
     print(f"BASIC portion: {result.basic_size} bytes")
     print(f"Total size: {len(result.data)} bytes")
 
 else:
-    # Binary file - result.data contains raw bytes
-    print(f"{result.entry.fullName}  {len(result.data)} bytes")
+    # BASIC_ISH, TEXT, or BINARY - result.data contains raw bytes
+    print(f"{result.entry.fullName}  {result.file_type}  {len(result.data)} bytes")
 ```
 
-The `file_type` field is one of `"BASIC"`, `"BASIC+MC"`, `"BASIC?"`,
-`"TEXT"`, or `"binary"`. The `entry` field carries the original catalogue
+The `file_type` field is a `FileType` enum member: `FileType.BASIC`,
+`FileType.BASIC_MC`, `FileType.BASIC_ISH`, `FileType.TEXT`, or
+`FileType.BINARY`. Stringifying a member (via `str()` or an f-string)
+yields the historical short label (`"BASIC"`, `"BASIC+MC"`, `"BASIC?"`,
+`"TEXT"`, `"BINARY"`). The `entry` field carries the original catalogue
 metadata (`load_addr`, `exec_addr`, `fullName`, etc.).
+
+`FileType.BASIC_ISH` is the interesting one: it means the file looks
+like BASIC along one axis but not the other. Either the exec address
+claims BASIC but the bytes are not tokenized, or the bytes are valid
+tokenized BASIC but the exec address is non-standard. The second case
+is usually a deliberately-marked "include" file, produced with `*SAVE`
+and explicit addresses so that it cannot be run directly with
+`*RUN`/`CHAIN` - callers are expected to `LOAD` it or merge it into
+another program. See the `FileType` class docstring for the full story.
 
 ## Classifying file contents
 
 `classifyFileType()` inspects a file's metadata and raw content to
 determine its type. This is the same logic used by `beebtools cat -i`.
+It returns a `FileType` enum member; stringifying it (or using it in
+an f-string) yields the historical short label.
 
 ```python
-from beebtools import openImage, classifyFileType
+from beebtools import openImage, classifyFileType, FileType
 
 image = openImage("mydisc.ssd")
 for side in image.sides:
@@ -143,6 +157,10 @@ for side in image.sides:
         data = side.readFile(entry)
         file_type = classifyFileType(entry, data)
         print(f"{entry.fullName:12s}  {file_type}")
+
+        if file_type is FileType.BASIC_ISH:
+            # BASIC-adjacent file worth a closer look - see Section 5.
+            pass
 ```
 
 ## Adding files with retokenization

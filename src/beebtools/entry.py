@@ -10,12 +10,14 @@ Defines the hierarchy that every disc format engine builds on:
     DiscFile      -- file content and metadata transport object
     DiscSide      -- one side of a disc image (read and mutation API)
     DiscImage     -- a complete disc image container
+    FileType      -- classification of extracted file content
 
 This is a Contracts-layer module - no internal imports beyond boot.
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 from typing import Iterator, List, Tuple
 
 from .boot import BootOption
@@ -31,6 +33,78 @@ class DiscError(Exception):
 
 class DiscFormatError(DiscError):
     """Raised when disc image data is corrupt or unreadable."""
+
+
+# -----------------------------------------------------------------------
+# File classification
+# -----------------------------------------------------------------------
+
+class FileType(Enum):
+    """Classification of an extracted disc file by content and metadata.
+
+    Produced by `classifyFileType()` and carried on `ExtractedFile`
+    and `CatalogueEntry`. The `.value` of each member is the
+    historical display string used by the CLI.
+
+    Members:
+
+        BASIC     -- Valid tokenized BBC BASIC program. Exec address
+                     is a standard BASIC entry point (low word is
+                     &801F, &8023, or &802B) and the bytes parse as
+                     a complete tokenized program.
+
+        BASIC_MC  -- BASIC program with trailing machine code. The
+                     tokenized BASIC portion ends before the end of
+                     the file; the remainder is a binary payload
+                     (usually machine code that the BASIC portion
+                     acts as a loader for).
+
+        BASIC_ISH -- Looks like BASIC along one axis (metadata or
+                     content) but not the other. Two real-world
+                     cases fall into this bucket:
+
+                     1. Standard BASIC exec address, but the bytes
+                        are not tokenized. Usually a corrupt file,
+                        or a hand-authored file saved with a BASIC
+                        exec address by mistake.
+
+                     2. Non-standard exec address, but the bytes
+                        ARE valid tokenized BASIC. Usually a
+                        deliberately-marked "include" file - a
+                        BASIC snippet meant to be merged into
+                        another program via a programmatic loading mechanism 
+                        or loaded with LOAD rather than run directly.
+
+                     Case 2 cannot be produced from the BASIC
+                     prompt - SAVE always stamps a standard BASIC
+                     exec. It requires *SAVE with explicit exec
+                     and load addresses, e.g.
+
+                         *SAVE name 1900 +A3 380E7 30E00
+
+                     LOAD "name" still works on such files (LOAD
+                     ignores the exec address and streams bytes
+                     into PAGE); *RUN and CHAIN do not.
+
+        TEXT      -- Plain ASCII text file.
+
+        BINARY    -- Everything else: machine code, data, graphics,
+                     or anything the classifier does not recognise.
+    """
+    BASIC     = "BASIC"
+    BASIC_MC  = "BASIC+MC"
+    BASIC_ISH = "BASIC?"
+    TEXT      = "TEXT"
+    BINARY    = "BINARY"
+
+    def __str__(self) -> str:
+        """Return the display string (e.g. 'BASIC', 'BASIC+MC').
+
+        Overrides Enum's default `"FileType.BASIC"` repr-style
+        output so that `f"{ft}"` and `str(ft)` render the same
+        short labels the CLI and library users expect.
+        """
+        return self.value
 
 
 # -----------------------------------------------------------------------

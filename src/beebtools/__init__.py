@@ -46,7 +46,7 @@ Tier 2, types (return values and type hints):
 
     DiscImage, DiscSide, DiscEntry, DiscCatalogue, DiscFile
     ExtractedFile, CatalogueListing, CatalogueEntry
-    DiscInfo, FileAttribs, BootOption
+    DiscInfo, FileAttribs, BootOption, FileType
     DiscError, DiscFormatError
 
 Tier 3, BASIC transforms:
@@ -94,7 +94,7 @@ Modules
     codec    -- "bbc" text codec registration
     dfs      -- DFS disc image reader and writer (.ssd, .dsd)
     adfs     -- ADFS disc image reader and writer (.adf, .adl)
-    basic    -- tokenize, detokenize, classify, escape
+    basic    -- tokenize, detokenize, content sniffers, escape
     pretty   -- operator spacing and anti-listing trap handling
     image    -- format dispatch (openImage, createImage)
     disc     -- high-level orchestration
@@ -113,11 +113,14 @@ from .basic import (
     basicProgramSize, compactLine, detokenize, decodeLineRef,
     tokenize, encodeLineRef,
     prettyPrint,
-    looksLikeTokenizedBasic, looksLikePlainText, classifyFileType,
+    looksLikeTokenizedBasic, looksLikePlainText,
     escapeNonAscii, unescapeNonAscii, hasEscapes,
 )
 from .boot import BootOption
-from .entry import DiscEntry, DiscCatalogue, DiscFile, DiscError, DiscFormatError, isBasicExecAddr
+from .entry import (
+    DiscEntry, DiscCatalogue, DiscFile, DiscError, DiscFormatError,
+    FileType, isBasicExecAddr,
+)
 from .codec import registerCodec
 
 # Register the "bbc" codec so bytes.decode("bbc") / str.encode("bbc") work
@@ -155,7 +158,7 @@ from .image import openImage, createImage, DiscSide, DiscImage
 from .inf import InfData, parseInf, formatInf
 from .disc import (
     search, extractAll, buildImage, createImageFile,
-    sortCatalogueEntries,
+    sortCatalogueEntries, classifyFileType,
     readCatalogue, CatalogueListing, CatalogueEntry,
     extractFile, ExtractedFile, addFile, addFileTo, qualifyDiscPath,
     writeBasicText, readBasicText, formatEntryInf,
@@ -204,6 +207,7 @@ __all__ = [
     "DiscInfo",
     "FileAttribs",
     "BootOption",
+    "FileType",
     "DiscError",
     "DiscFormatError",
 

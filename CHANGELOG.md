@@ -28,6 +28,10 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   build-time warnings are appended to it instead of printed to stderr
   so library callers can collect them without capturing stderr.
 
+- `FileType` enum on the public API, replacing free-form strings
+  on `ExtractedFile.file_type`, `CatalogueEntry.file_type`, and the
+  return value of `classifyFileType`.
+
 ### Changed
 
 - CLI commands now route every disc operation through `disc.py` wrappers.
@@ -44,6 +48,11 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Renamed `createEmptyImage` to `createImageFile`, distinguishing the
   file-writing wrapper from the in-memory `createImage` factory.
+
+- Code comparing `file_type` against string literals
+  (`"BASIC"`, `"BASIC+MC"`, etc.) must now compare against
+  `FileType` enum members. The former `"binary"` value
+  stringifies as `"BINARY"`.
 
 ## [0.6.0] - 2026-04-06
 

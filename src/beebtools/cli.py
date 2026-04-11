@@ -15,7 +15,7 @@ from argparse import Namespace
 from typing import Optional
 
 from .boot import BootOption
-from .entry import DiscError, DiscFile
+from .entry import DiscError, DiscFile, FileType
 from .inf import parseInf
 from .disc import (
     search, extractAll, buildImage, createImageFile,
@@ -58,11 +58,12 @@ def _colour(text: str, code: str, enabled: bool) -> str:
 
 
 # Colour mapping for classified file types in the catalogue listing.
+# Keyed on FileType enum members; the label is the member's display value.
 _TAG_COLOURS = {
-    "BASIC":    (_CYAN,    "BASIC"),
-    "BASIC+MC": (_MAGENTA, "BASIC+MC"),
-    "BASIC?":   (_GREEN,   "BASIC?"),
-    "TEXT":     (_YELLOW,  "TEXT"),
+    FileType.BASIC:     (_CYAN,    FileType.BASIC.value),
+    FileType.BASIC_MC:  (_MAGENTA, FileType.BASIC_MC.value),
+    FileType.BASIC_ISH: (_GREEN,   FileType.BASIC_ISH.value),
+    FileType.TEXT:      (_YELLOW,  FileType.TEXT.value),
 }
 
 
@@ -245,7 +246,7 @@ def cmdExtract(args: Namespace) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    if result.file_type == "BASIC" and result.lines is not None:
+    if result.file_type is FileType.BASIC and result.lines is not None:
         # Pure BASIC - emit as LIST-style text.
         if args.output:
             writeBasicText(args.output, result.lines, text_mode)
@@ -259,7 +260,7 @@ def cmdExtract(args: Namespace) -> None:
             output = "\n".join(out_lines) + "\n"
             sys.stdout.write(output)
 
-    elif result.file_type == "BASIC+MC":
+    elif result.file_type is FileType.BASIC_MC:
         # Hybrid file - warn and treat as binary to preserve machine code.
         entry = result.entry
         mc_size = len(result.data) - (result.basic_size or 0)

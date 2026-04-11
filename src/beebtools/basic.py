@@ -4,13 +4,17 @@
 """BBC BASIC II facade module.
 
 Unified API for all BBC BASIC program handling: tokenization,
-detokenization, content classification, and text escaping. Higher
-layers (disc.py, cli.py) import from this module rather than reaching
-into the individual sub-modules.
+detokenization, content sniffing, and text escaping. Higher layers
+(disc.py, cli.py) import from this module rather than reaching into
+the individual sub-modules.
 
 This module contains the core tokenizer and detokenizer (merged from
 the former detokenize.py and tokenize.py), plus content-inspection
-utilities that answer questions about BASIC program data.
+primitives (`looksLikeTokenizedBasic`, `looksLikePlainText`,
+`basicProgramSize`) that answer low-level questions about BASIC
+program data. File-level classification that combines these
+primitives with catalogue metadata lives in disc.py alongside its
+consumers.
 
 The pretty-printer (pretty.py) is a separate optional display transform;
 its prettyPrint function is re-exported here for convenience so callers
@@ -21,7 +25,6 @@ import re
 from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from .tokens import TOKENS, LINE_LITERAL_TOKENS
-from .entry import DiscEntry
 from .pretty import compactLine, prettyPrint  # noqa: F401 - re-export
 
 
@@ -834,46 +837,6 @@ def looksLikePlainText(data: bytes) -> bool:
     if not data:
         return False
     return all(b in _PLAIN_TEXT_BYTES for b in data)
-
-
-def classifyFileType(entry: DiscEntry, data: bytes) -> str:
-    """Classify a disc file by inspecting its metadata and content.
-
-    Returns one of:
-        "BASIC"    - pure tokenized BASIC program
-        "BASIC+MC" - BASIC program with appended machine code
-        "BASIC?"   - has BASIC exec address but data is not tokenized
-        "TEXT"     - plain ASCII text file
-        "binary"   - everything else
-
-    Args:
-        entry: Catalogue entry with metadata (isBasic, isDirectory, etc.).
-        data:  Raw file content bytes.
-
-    Returns:
-        Classification string.
-    """
-    # Check for tokenized BASIC (by exec address or content).
-    if entry.isBasic:
-        if looksLikeTokenizedBasic(data):
-            prog_size = basicProgramSize(data)
-            if prog_size < len(data) - 16:
-                return "BASIC+MC"
-            return "BASIC"
-        return "BASIC?"
-
-    # Content-based detection for files without a BASIC exec address.
-    if looksLikeTokenizedBasic(data):
-        prog_size = basicProgramSize(data)
-        if prog_size < len(data) - 16:
-            return "BASIC+MC"
-        return "BASIC?"
-
-    # Plain text detection.
-    if looksLikePlainText(data):
-        return "TEXT"
-
-    return "binary"
 
 
 # =====================================================================

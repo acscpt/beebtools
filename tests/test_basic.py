@@ -2,18 +2,17 @@
 # SPDX-License-Identifier: MIT
 
 """
-Tests for the basic.py module - content classification, content
-detection, and non-ASCII escape round-tripping.
+Tests for the basic.py module - BASIC content sniffers and non-ASCII
+escape round-tripping.
 
 Detokenization and tokenization are covered by test_detokenize.py and
-test_tokenize.py respectively. This file tests the functions that were
-newly introduced or moved into basic.py during the refactoring.
+test_tokenize.py respectively. File-level classification
+(`classifyFileType`) lives in disc.py and is covered by test_disc.py.
 """
 
 import pytest
 
 from beebtools import (
-    classifyFileType,
     escapeNonAscii,
     looksLikeTokenizedBasic,
     looksLikePlainText,
@@ -24,42 +23,6 @@ from beebtools import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-class FakeEntry:
-    """Minimal object satisfying the DiscEntry Protocol for tests."""
-
-    def __init__(self, name: str = "TEST", load_addr: int = 0,
-                 exec_addr: int = 0, length: int = 0, locked: bool = False,
-                 is_basic: bool = False, is_directory: bool = False):
-        self.name = name
-        self.load_addr = load_addr
-        self.exec_addr = exec_addr
-        self.length = length
-        self.locked = locked
-        self._is_basic = is_basic
-        self._is_directory = is_directory
-
-    @property
-    def fullName(self) -> str:
-        return f"$.{self.name}"
-
-    @property
-    def isBasic(self) -> bool:
-        return self._is_basic
-
-    @property
-    def isDirectory(self) -> bool:
-        return self._is_directory
-
-    def __repr__(self) -> str:
-        return f"FakeEntry({self.name!r})"
-
-    def __str__(self) -> str:
-        return self.fullName
-
-    def __fspath__(self) -> str:
-        return self.name
-
 
 def makeBasicProgram(*line_contents: bytes) -> bytes:
     """Build a minimal tokenized BASIC program from line content bytes.
@@ -157,59 +120,6 @@ class TestLooksLikePlainText:
         """Every printable ASCII byte passes."""
         data = bytes(range(0x20, 0x7F))
         assert looksLikePlainText(data) is True
-
-
-# ---------------------------------------------------------------------------
-# classifyFileType
-# ---------------------------------------------------------------------------
-
-class TestClassifyFileType:
-    """Tests for file classification by metadata + content inspection."""
-
-    def testPureBasic(self) -> None:
-        """A file with BASIC exec and valid tokenized data is 'BASIC'."""
-        data = makeBasicProgram(b"\xF1\"Hi\"")
-        entry = FakeEntry(is_basic=True, length=len(data))
-        assert classifyFileType(entry, data) == "BASIC"
-
-    def testBasicPlusMachineCode(self) -> None:
-        """A file with BASIC exec but trailing binary is 'BASIC+MC'."""
-        basic = makeBasicProgram(b"\xF1\"Hi\"")
-        # Append 32 bytes of machine code (well past the 16-byte threshold).
-        data = basic + bytes(32)
-        entry = FakeEntry(is_basic=True, length=len(data))
-        assert classifyFileType(entry, data) == "BASIC+MC"
-
-    def testBasicExecButNotTokenized(self) -> None:
-        """A file with BASIC exec but non-tokenized data is 'BASIC?'."""
-        data = b"REM This is plain text\r\n"
-        entry = FakeEntry(is_basic=True, length=len(data))
-        assert classifyFileType(entry, data) == "BASIC?"
-
-    def testTokenizedWithoutBasicExec(self) -> None:
-        """A tokenized file without BASIC exec is 'BASIC?'."""
-        data = makeBasicProgram(b"\xF1\"Hi\"")
-        entry = FakeEntry(is_basic=False, length=len(data))
-        assert classifyFileType(entry, data) == "BASIC?"
-
-    def testTokenizedPlusMcWithoutBasicExec(self) -> None:
-        """A tokenized+MC file without BASIC exec is 'BASIC+MC'."""
-        basic = makeBasicProgram(b"\xF1\"Hi\"")
-        data = basic + bytes(32)
-        entry = FakeEntry(is_basic=False, length=len(data))
-        assert classifyFileType(entry, data) == "BASIC+MC"
-
-    def testPlainTextFile(self) -> None:
-        """A plain ASCII text file is 'TEXT'."""
-        data = b"Hello World\r\n"
-        entry = FakeEntry(is_basic=False, length=len(data))
-        assert classifyFileType(entry, data) == "TEXT"
-
-    def testBinaryFile(self) -> None:
-        """A file with high-bit bytes and no structure is 'binary'."""
-        data = bytes(range(256))
-        entry = FakeEntry(is_basic=False, length=len(data))
-        assert classifyFileType(entry, data) == "binary"
 
 
 # ---------------------------------------------------------------------------

@@ -26,9 +26,9 @@ from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from .boot import BootOption
-from .entry import DiscEntry, DiscFile, DiscError, isBasicExecAddr
+from .entry import DiscEntry, DiscFile, DiscError, FileType, isBasicExecAddr
 from .basic import (
-    basicProgramSize, classifyFileType, compactLine, detokenize, tokenize,
+    basicProgramSize, compactLine, detokenize, tokenize,
     escapeNonAscii, unescapeNonAscii, hasEscapes,
     looksLikeTokenizedBasic, looksLikePlainText, prettyPrint,
 )
@@ -245,6 +245,65 @@ def readBasicText(data: bytes) -> List[str]:
 
 
 # -----------------------------------------------------------------------
+# File classification
+# -----------------------------------------------------------------------
+
+def classifyFileType(entry: DiscEntry, data: bytes) -> FileType:
+    """Classify a disc file by inspecting its metadata and content.
+
+    Combines the catalogue entry's exec-address metadata
+    (`entry.isBasic`) with content sniffers from the BASIC layer
+    (`looksLikeTokenizedBasic`, `basicProgramSize`,
+    `looksLikePlainText`) to produce a file-level judgment.
+
+    Two branches can return `FileType.BASIC_ISH`, for opposite
+    reasons:
+
+        1. Standard BASIC exec address, but the bytes do not parse
+           as tokenized BASIC. Usually a corrupt file or a
+           hand-authored file with a BASIC exec by mistake.
+
+        2. Non-BASIC exec address, but the bytes ARE valid
+           tokenized BASIC. Usually a deliberately-marked
+           "include" file produced with `*SAVE` and explicit
+           addresses, meant to be loaded with `LOAD` or merged
+           into another program rather than run directly.
+
+    See the `FileType` class docstring in `entry.py` for the full
+    semantics of each classification.
+
+    Args:
+        entry: Catalogue entry with metadata (isBasic, isDirectory, etc.).
+        data:  Raw file content bytes.
+
+    Returns:
+        A FileType enum member.
+    """
+    # Branch 1: exec address says BASIC.
+    if entry.isBasic:
+        if looksLikeTokenizedBasic(data):
+            prog_size = basicProgramSize(data)
+            if prog_size < len(data) - 16:
+                return FileType.BASIC_MC
+            return FileType.BASIC
+        # Exec claims BASIC but content is not tokenized.
+        return FileType.BASIC_ISH
+
+    # Branch 2: exec address is not BASIC. Fall back to content.
+    if looksLikeTokenizedBasic(data):
+        prog_size = basicProgramSize(data)
+        if prog_size < len(data) - 16:
+            return FileType.BASIC_MC
+        # Tokenized BASIC with a non-standard exec - an "include".
+        return FileType.BASIC_ISH
+
+    if looksLikePlainText(data):
+        return FileType.TEXT
+
+    return FileType.BINARY
+
+
+# -----------------------------------------------------------------------
 # Single-file extraction
 # -----------------------------------------------------------------------
 
@@ -260,14 +319,16 @@ class ExtractedFile:
     and ExtractedFile are separate types.
 
     Attributes:
-        file_type:  Classification string ("BASIC", "BASIC+MC", "binary").
+        file_type:  FileType enum member (BASIC, BASIC_MC, BASIC_ISH,
+                    TEXT, or BINARY). See the FileType class docstring
+                    in entry.py for full semantics.
         data:       Raw file bytes (always populated).
         lines:      Detokenized BASIC lines (None for non-BASIC files).
         entry:      The matched catalogue entry.
         side:       Disc side number the file was found on.
-        basic_size: Size of the BASIC program portion (BASIC+MC only).
+        basic_size: Size of the BASIC program portion (BASIC_MC only).
     """
-    file_type: str
+    file_type: FileType
     data: bytes
     lines: Optional[List[str]]
     entry: DiscEntry
@@ -346,25 +407,25 @@ def extractFile(
     # Classify the file content.
     file_type = classifyFileType(entry, data)
 
-    if file_type == "BASIC":
+    if file_type is FileType.BASIC:
         # Pure BASIC - detokenize and optionally pretty-print.
         text_lines = detokenize(data)
         if pretty:
             text_lines = prettyPrint(text_lines)
         return ExtractedFile(
-            file_type="BASIC", data=data, lines=text_lines,
+            file_type=FileType.BASIC, data=data, lines=text_lines,
             entry=entry, side=disc.side,
         )
 
-    if file_type == "BASIC+MC":
+    if file_type is FileType.BASIC_MC:
         # Hybrid file - return raw binary to preserve machine code.
         prog_size = basicProgramSize(data)
         return ExtractedFile(
-            file_type="BASIC+MC", data=data, lines=None,
+            file_type=FileType.BASIC_MC, data=data, lines=None,
             entry=entry, side=disc.side, basic_size=prog_size,
         )
 
-    # Binary or text - return raw data.
+    # BASIC_ISH, TEXT, or BINARY - return raw data.
     return ExtractedFile(
         file_type=file_type, data=data, lines=None,
         entry=entry, side=disc.side,
@@ -465,12 +526,13 @@ class CatalogueEntry:
     """One entry in a catalogue listing, optionally classified.
 
     entry:     The underlying DiscEntry from the format engine.
-    file_type: Classification string ("BASIC", "BASIC+MC", "BASIC?",
-               "TEXT", "binary") or None when unclassified. Directories
-               always carry None here - callers check entry.isDirectory.
+    file_type: FileType enum member, or None when unclassified.
+               Directories always carry None here - callers check
+               entry.isDirectory. See the FileType class docstring
+               in entry.py for the full set of classifications.
     """
     entry: DiscEntry
-    file_type: Optional[str]
+    file_type: Optional[FileType]
 
 
 @dataclass
@@ -501,10 +563,10 @@ def readCatalogue(
     sides, read catalogues, sort entries, or classify files themselves.
 
     When inspect is True, each non-directory file is read and run
-    through classifyFileType() so the result carries content-based
-    classification (BASIC, BASIC+MC, TEXT, binary). When inspect is
-    False, the cheaper metadata-only BASIC detection via entry.isBasic
-    is used and all other files report None.
+    through classifyFileType() so the result carries a content-based
+    FileType enum member. When inspect is False, the cheaper
+    metadata-only BASIC detection via entry.isBasic is used and all
+    other files report None.
 
     Args:
         image_path: Path to a disc image file.
@@ -540,7 +602,7 @@ def readCatalogue(
                 continue
 
             # Metadata-only: trust the BASIC exec address.
-            tag = "BASIC" if e.isBasic else None
+            tag = FileType.BASIC if e.isBasic else None
             classified.append(CatalogueEntry(entry=e, file_type=tag))
 
         listings.append(CatalogueListing(
