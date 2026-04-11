@@ -223,21 +223,44 @@ class DiscSide(ABC):
         """
         raise DiscError("Compaction is not supported on this disc format")
 
-    @abstractmethod
     def __iter__(self) -> Iterator[DiscEntry]:
-        """Yield catalogue entries for this side."""
+        """Yield catalogue entries for this side.
 
-    @abstractmethod
+        Default implementation iterates the tuple returned by
+        `readCatalogue()`.
+        """
+        return iter(self.readCatalogue().entries)
+
     def __len__(self) -> int:
-        """Number of catalogue entries on this side."""
+        """Number of catalogue entries on this side.
 
-    @abstractmethod
+        Default implementation returns the length of the tuple
+        returned by `readCatalogue()`.
+        """
+        return len(self.readCatalogue().entries)
+
     def __getitem__(self, key: str) -> DiscEntry:
-        """Look up a catalogue entry by full path."""
+        """Look up a catalogue entry by full path.
 
-    @abstractmethod
+        Default implementation scans `readCatalogue().entries` and
+        raises `KeyError` if no entry matches.
+        """
+        for entry in self.readCatalogue().entries:
+            if entry.fullName == key:
+                return entry
+
+        raise KeyError(key)
+
     def __contains__(self, key: object) -> bool:
-        """True if an entry with the given full path exists."""
+        """True if an entry with the given full path exists.
+
+        Default implementation scans `readCatalogue().entries`.
+        Non-string keys always return False.
+        """
+        if not isinstance(key, str):
+            return False
+
+        return any(e.fullName == key for e in self.readCatalogue().entries)
 
 
 # -----------------------------------------------------------------------
@@ -277,17 +300,26 @@ class DiscImage(ABC):
 
         return len(data)
 
-    @abstractmethod
     def __iter__(self) -> Iterator[DiscSide]:
-        """Yield each side of the disc image."""
+        """Yield each side of the disc image.
 
-    @abstractmethod
+        Default implementation iterates `self.sides`.
+        """
+        return iter(self.sides)
+
     def __len__(self) -> int:
-        """Number of sides (1 for SSD/ADFS, 2 for DSD/ADL)."""
+        """Number of sides (1 for SSD/ADFS, 2 for DSD/ADL).
 
-    @abstractmethod
+        Default implementation returns the length of `self.sides`.
+        """
+        return len(self.sides)
+
     def __getitem__(self, index: int) -> DiscSide:
-        """Return the side at the given index."""
+        """Return the side at the given index.
+
+        Default implementation indexes into `self.sides`.
+        """
+        return self.sides[index]
 
     def __enter__(self) -> "DiscImage":
         """Enter a context manager block. Returns self."""

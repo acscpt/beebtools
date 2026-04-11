@@ -21,7 +21,7 @@ Exceptions:
 """
 
 from dataclasses import dataclass, replace
-from typing import Iterator, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from .boot import BootOption
 from .entry import (
@@ -164,27 +164,6 @@ class DFSSide(DiscSide):
         return (f"DFSSide(title='{cat.title}', "
                 f"{len(cat.entries)} entries, "
                 f"{self.freeSpace()} sectors free)")
-
-    def __iter__(self) -> Iterator[DFSEntry]:
-        """Yield catalogue entries for this side."""
-        return iter(self.readCatalogue().entries)
-
-    def __len__(self) -> int:
-        """Number of catalogue entries on this side."""
-        return len(self.readCatalogue().entries)
-
-    def __getitem__(self, key: str) -> DFSEntry:
-        """Look up a catalogue entry by full path (e.g. 'T.MYPROG')."""
-        for entry in self.readCatalogue().entries:
-            if entry.fullName == key:
-                return entry
-        raise KeyError(key)
-
-    def __contains__(self, key: object) -> bool:
-        """True if an entry with the given full path exists."""
-        if not isinstance(key, str):
-            return False
-        return any(e.fullName == key for e in self.readCatalogue().entries)
 
     # -------------------------------------------------------------------
     # Sector access
@@ -953,18 +932,6 @@ class DFSImage(DiscImage):
         """Show class name, disc format (SSD/DSD), and side count."""
         fmt = "DSD" if self._is_dsd else "SSD"
         return f"DFSImage({fmt}, {len(self._sides)} sides)"
-
-    def __iter__(self) -> Iterator[DFSSide]:
-        """Yield each side of the disc image."""
-        return iter(self._sides)
-
-    def __len__(self) -> int:
-        """Number of sides (1 for SSD, 2 for DSD)."""
-        return len(self._sides)
-
-    def __getitem__(self, index: int) -> DFSSide:
-        """Return the side at the given index."""
-        return self._sides[index]
 
 
 # -----------------------------------------------------------------------
