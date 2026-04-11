@@ -168,8 +168,7 @@ entry = addFileTo(
 )
 print(f"Added {entry.fullName} ({entry.length} bytes)")
 
-with open("mydisc.ssd", "wb") as f:
-    f.write(image.serialize())
+image.save("mydisc.ssd")
 ```
 
 ## Non-ASCII round-tripping
@@ -205,7 +204,7 @@ image = createDiscImage(tracks=80, title="DEMO", boot_option=BootOption.EXEC)
 side = image[0]
 side.addFile(DiscFile(path="$.HELLO", data=b"...",
                       load_addr=0x1900, exec_addr=0x8023))
-raw = image.serialize()
+image.save("demo.ssd")
 
 # Or build from a directory of files with .inf sidecars
 raw = buildImage(source_dir="extracted/", output_path="rebuilt.ssd",
@@ -263,8 +262,7 @@ side.addFile(DiscFile(path="$.BOOT", data=b"*RUN GAMES.ELITE\r"))
 side.deleteFile("$.GAMES.ELITE")
 
 # Write the image to a file
-with open("mydisc.adf", "wb") as f:
-    f.write(image.serialize())
+image.save("mydisc.adf")
 ```
 
 Build an ADFS image from an extracted directory tree:

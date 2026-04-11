@@ -20,6 +20,10 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `hasEscapes` and `formatEntryInf` convenience helpers in the public
   API.
 
+- `DiscImage.save(path)` method that serializes the image and writes
+  it to disk in one call, removing the `open(..., "wb")` + `write()`
+  boilerplate from the mutate-then-save flow.
+
 - Optional `warnings` parameter on `buildImage`. When a list is passed,
   build-time warnings are appended to it instead of printed to stderr
   so library callers can collect them without capturing stderr.

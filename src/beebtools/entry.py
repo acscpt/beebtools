@@ -95,7 +95,7 @@ class DiscCatalogue(ABC):
 
     Carries the disc title, catalogue cycle number, boot option,
     total disc size in sectors, and the tuple of catalogue entries.
-    Exposes a tracks count computed from the sector count.
+    Exposes a tracks count derived from the sector count.
     """
 
     title: str
@@ -103,7 +103,17 @@ class DiscCatalogue(ABC):
     boot_option: BootOption
     disc_size: int
     entries: Tuple[DiscEntry, ...]
-    tracks: int
+
+    @property
+    @abstractmethod
+    def tracks(self) -> int:
+        """Number of tracks represented by disc_size.
+
+        Computed as `disc_size // sectors_per_track`, where
+        sectors_per_track is a format-specific constant. For example,
+        a format laid out as 10 sectors per track returns
+        `disc_size // 10`.
+        """
 
 
 # -----------------------------------------------------------------------
@@ -252,6 +262,20 @@ class DiscImage(ABC):
     @abstractmethod
     def serialize(self) -> bytes:
         """Return the disc image as immutable bytes for writing to a file."""
+
+    def save(self, path: str) -> int:
+        """Serialize the disc image and write it to disk.
+
+        Default implementation calls serialize() and writes the
+        resulting bytes to the given path. Returns the number of
+        bytes written.
+        """
+        data = self.serialize()
+
+        with open(path, "wb") as f:
+            f.write(data)
+
+        return len(data)
 
     @abstractmethod
     def __iter__(self) -> Iterator[DiscSide]:
