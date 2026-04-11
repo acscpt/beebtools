@@ -7,6 +7,21 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `strictMode()` context manager and `isStrict()` accessor on the public
+  API, backed by `contextvars.ContextVar`. Scopes spec-compliance checks
+  to a block of code so validators can consult the current setting
+  without threading a `strict` parameter through every call site.
+
+### Changed
+
+- `validateDfsName()` default behaviour relaxed to accept any printable
+  byte (0x20-0x7F) in filenames and directory characters, including
+  `. : " # *` and space. Wrap a call in `with strictMode():` to opt in
+  to the historical spec-compliance check which rejects those
+  characters and narrows the byte range to 0x21-0x7E.
+
 ## [0.7.0] - 2026-04-11
 
 This release focuses on making the library half of beebtools a

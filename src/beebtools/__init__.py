@@ -48,6 +48,7 @@ Tier 2, types (return values and type hints):
     ExtractedFile, CatalogueListing, CatalogueEntry
     DiscInfo, FileAttribs, BootOption, FileType
     DiscError, DiscFormatError
+    strictMode, isStrict
 
 Tier 3, BASIC transforms:
 
@@ -121,6 +122,7 @@ from .entry import (
     DiscEntry, DiscCatalogue, DiscFile, DiscError, DiscFormatError,
     FileType, isBasicExecAddr,
 )
+from .validation import strictMode, isStrict
 from .codec import registerCodec
 
 # Register the "bbc" codec so bytes.decode("bbc") / str.encode("bbc") work
@@ -211,6 +213,8 @@ __all__ = [
     "FileType",
     "DiscError",
     "DiscFormatError",
+    "strictMode",
+    "isStrict",
 
     # -------------------------------------------------------------------
     # Tier 3: BASIC transforms

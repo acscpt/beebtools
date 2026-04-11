@@ -19,7 +19,7 @@ import pytest
 from beebtools import (
     DiscFile,
     openDiscImage, looksLikeTokenizedBasic, looksLikePlainText, detokenize,
-    validateDfsName, DFSError,
+    validateDfsName, DFSError, strictMode,
 )
 
 # Discover all disc images in the resources directory.
@@ -765,7 +765,15 @@ class TestWriteReadRoundTrip:
 
 
 class TestValidateDfsName:
-    """Tests for the validateDfsName function."""
+    """Tests for the validateDfsName function.
+
+    The default mode is ROM-faithful: any byte in 0x20-0x7F is accepted
+    in filenames, matching the behaviour of real Acorn DFS ROMs which
+    byte-push filenames without enforcing the spec. Strict mode
+    (opt-in via strictMode()) narrows the byte range to 0x21-0x7E and
+    additionally rejects the spec-forbidden characters . : " # * and
+    space.
+    """
 
     def testValidNameAccepted(self):
         """A standard '$.PROG' style DFS name should pass validation without raising an error."""
@@ -793,6 +801,10 @@ class TestValidateDfsName:
         # 0x21, the lowest valid directory character.
         validateDfsName("!", "BOOT")
 
+    # ------------------------------------------------------------------
+    # Always-enforced structural rules (directory length, name length).
+    # ------------------------------------------------------------------
+
     def testEmptyDirectoryRejected(self):
         """A zero-length directory component should be rejected."""
         with pytest.raises(DFSError):
@@ -803,21 +815,10 @@ class TestValidateDfsName:
         with pytest.raises(DFSError):
             validateDfsName("AB", "FILE")
 
-    def testSpaceDirectoryRejected(self):
-        """A space character as the directory component should be rejected."""
-        with pytest.raises(DFSError):
-            validateDfsName(" ", "FILE")
-
     def testControlCharDirectoryRejected(self):
         """A control character as the directory should be rejected."""
         with pytest.raises(DFSError):
             validateDfsName("\x01", "FILE")
-
-    def testDelDirectoryRejected(self):
-        """The DEL character (0x7F) is not a valid DFS directory character and should be rejected."""
-        # 0x7F is DEL, just above printable range.
-        with pytest.raises(DFSError):
-            validateDfsName("\x7F", "FILE")
 
     def testEmptyNameRejected(self):
         """An empty filename part should be rejected."""
@@ -840,46 +841,132 @@ class TestValidateDfsName:
         with pytest.raises(DFSError):
             validateDfsName("$", "A\x80B")
 
-    def testNameWithSpaceRejected(self):
-        """A filename containing a space should be rejected."""
-        # Space is forbidden in DFS filenames per the spec.
-        with pytest.raises(DFSError):
-            validateDfsName("$", "A B")
+    # ------------------------------------------------------------------
+    # ROM-faithful default mode: spec-forbidden chars are accepted.
+    # Real Acorn DFS ROMs byte-push these in real-world discs, so
+    # beebtools accepts them too by default. See manual_tests.md for
+    # the B2 emulator evidence collected from BoredOfTheRings.ssd,
+    # AnarchyZone.ssd, 8BS18.DSD and Phantom.ssd.
+    # ------------------------------------------------------------------
 
-    def testNameWithDotRejected(self):
-        """A filename containing '.' should be rejected; the dot is reserved for directory separation."""
-        with pytest.raises(DFSError):
-            validateDfsName("$", "A.B")
+    def testNameWithSpaceAcceptedByDefault(self):
+        """Real DFS accepts space in filenames (see Phantom.ssd '  KL')."""
+        validateDfsName("$", "A B")
 
-    def testNameWithColonRejected(self):
-        """A filename containing ':' should be rejected."""
-        with pytest.raises(DFSError):
-            validateDfsName("$", "A:B")
+    def testNameWithDotAcceptedByDefault(self):
+        """Real DFS accepts '.' in filenames (see BoredOfTheRings.ssd 'B1.1')."""
+        validateDfsName("$", "B1.1")
 
-    def testNameWithQuoteRejected(self):
-        """A filename containing a double-quote should be rejected."""
-        with pytest.raises(DFSError):
-            validateDfsName("$", 'A"B')
+    def testNameWithColonAcceptedByDefault(self):
+        """Real DFS byte-pushes ':' in filenames without complaint."""
+        validateDfsName("$", "A:B")
 
-    def testNameWithHashRejected(self):
-        """A filename containing '#' should be rejected."""
-        with pytest.raises(DFSError):
-            validateDfsName("$", "A#B")
+    def testNameWithQuoteAcceptedByDefault(self):
+        """Real DFS byte-pushes '\"' in filenames without complaint."""
+        validateDfsName("$", 'A"B')
 
-    def testNameWithStarRejected(self):
-        """A filename containing '*' (a DFS wildcard) should be rejected."""
-        with pytest.raises(DFSError):
-            validateDfsName("$", "A*B")
+    def testNameWithHashAcceptedByDefault(self):
+        """Real DFS accepts '#' in filenames (see AnarchyZone.ssd)."""
+        validateDfsName("$", "A#B")
 
-    def testForbiddenDirectoryDotRejected(self):
-        """The '.' character is forbidden as a directory component even though it is printable ASCII."""
-        with pytest.raises(DFSError):
-            validateDfsName(".", "FILE")
+    def testNameWithStarAcceptedByDefault(self):
+        """Real DFS byte-pushes '*' in filenames without complaint."""
+        validateDfsName("$", "A*B")
 
-    def testForbiddenDirectoryHashRejected(self):
-        """The '#' character is forbidden as a directory component."""
-        with pytest.raises(DFSError):
-            validateDfsName("#", "FILE")
+    def testDelDirectoryAcceptedByDefault(self):
+        """The DEL byte (0x7F) is used as a directory character on real discs.
+
+        See TheVikingCollection.ssd in manual_tests.md: the disc boots
+        fine in B2 and the DEL-prefixed directory is readable, it is
+        just hidden from the default *. catalogue listing.
+        """
+        validateDfsName("\x7F", "FILE")
+
+    def testSpaceDirectoryAcceptedByDefault(self):
+        """A space (0x20) is a valid directory byte in ROM-faithful mode."""
+        validateDfsName(" ", "FILE")
+
+    def testForbiddenDirectoryDotAcceptedByDefault(self):
+        """The '.' character is tolerated as a directory byte by default."""
+        validateDfsName(".", "FILE")
+
+    def testForbiddenDirectoryHashAcceptedByDefault(self):
+        """The '#' character is tolerated as a directory byte by default."""
+        validateDfsName("#", "FILE")
+
+    # ------------------------------------------------------------------
+    # Strict mode: opt-in spec compliance. Narrows the byte range and
+    # rejects the spec-forbidden characters.
+    # ------------------------------------------------------------------
+
+    def testNameWithSpaceRejectedInStrict(self):
+        """Strict mode rejects space in filenames per the DFS spec."""
+        with strictMode():
+            with pytest.raises(DFSError):
+                validateDfsName("$", "A B")
+
+    def testNameWithDotRejectedInStrict(self):
+        """Strict mode rejects '.' in filenames per the DFS spec."""
+        with strictMode():
+            with pytest.raises(DFSError):
+                validateDfsName("$", "A.B")
+
+    def testNameWithColonRejectedInStrict(self):
+        """Strict mode rejects ':' in filenames per the DFS spec."""
+        with strictMode():
+            with pytest.raises(DFSError):
+                validateDfsName("$", "A:B")
+
+    def testNameWithQuoteRejectedInStrict(self):
+        """Strict mode rejects '\"' in filenames per the DFS spec."""
+        with strictMode():
+            with pytest.raises(DFSError):
+                validateDfsName("$", 'A"B')
+
+    def testNameWithHashRejectedInStrict(self):
+        """Strict mode rejects '#' in filenames per the DFS spec."""
+        with strictMode():
+            with pytest.raises(DFSError):
+                validateDfsName("$", "A#B")
+
+    def testNameWithStarRejectedInStrict(self):
+        """Strict mode rejects '*' (DFS wildcard) in filenames per the spec."""
+        with strictMode():
+            with pytest.raises(DFSError):
+                validateDfsName("$", "A*B")
+
+    def testDelDirectoryRejectedInStrict(self):
+        """Strict mode rejects 0x7F as a directory character per the spec."""
+        with strictMode():
+            with pytest.raises(DFSError):
+                validateDfsName("\x7F", "FILE")
+
+    def testSpaceDirectoryRejectedInStrict(self):
+        """Strict mode rejects space (0x20) as a directory character per the spec."""
+        with strictMode():
+            with pytest.raises(DFSError):
+                validateDfsName(" ", "FILE")
+
+    def testForbiddenDirectoryDotRejectedInStrict(self):
+        """Strict mode rejects '.' as a directory character per the spec."""
+        with strictMode():
+            with pytest.raises(DFSError):
+                validateDfsName(".", "FILE")
+
+    def testForbiddenDirectoryHashRejectedInStrict(self):
+        """Strict mode rejects '#' as a directory character per the spec."""
+        with strictMode():
+            with pytest.raises(DFSError):
+                validateDfsName("#", "FILE")
+
+    def testStrictModeResetsCleanly(self):
+        """After strictMode() exits, validation returns to ROM-faithful default."""
+        with strictMode():
+            with pytest.raises(DFSError):
+                validateDfsName("$", "A.B")
+
+        # Back in default context, the same input must succeed.
+        validateDfsName("$", "A.B")
 
 
 # ---------------------------------------------------------------------------

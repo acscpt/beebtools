@@ -28,6 +28,7 @@ from .entry import (
     DiscCatalogue, DiscEntry, DiscError, DiscFile, DiscFormatError,
     DiscImage, DiscSide, isBasicExecAddr,
 )
+from .validation import isStrict
 
 
 SECTOR_SIZE = 256
@@ -1052,9 +1053,17 @@ def validateDfsName(directory: str, name: str) -> None:
     """Validate a DFS directory character and filename.
 
     DFS filenames consist of a single-character directory prefix and a
-    name of 1-7 characters. Both must be printable ASCII (0x21-0x7E)
-    excluding the characters . : " # * and space, per the Acorn DFS
-    disc format specification.
+    name of 1-7 characters. In the default (ROM-faithful) mode every
+    byte in the printable range 0x20-0x7F is accepted, matching the
+    behaviour of real Acorn DFS ROMs which byte-push filenames without
+    enforcing the spec restrictions.
+
+    Under strictMode() the stricter spec rules apply: directory and
+    name must be in 0x21-0x7E and must not contain any of the
+    spec-forbidden characters . : " # * or space. Use strict mode when
+    authoring a disc and you want to avoid creating filenames that
+    break the official DFS spec, even though real ROMs would accept
+    them.
 
     Args:
         directory: Single-character DFS directory (e.g. '$', 'T').
@@ -1063,8 +1072,9 @@ def validateDfsName(directory: str, name: str) -> None:
     Raises:
         DFSError: If directory or name violates DFS naming rules.
     """
-    # Characters forbidden by the DFS spec.
-    forbidden = set('.:"#* ')
+    # Characters the Acorn DFS spec forbids. Real ROMs accept them;
+    # we only reject them under strictMode().
+    spec_forbidden = set('.:"#* ')
 
     # Directory must be exactly one character.
     if len(directory) != 1:
@@ -1072,20 +1082,28 @@ def validateDfsName(directory: str, name: str) -> None:
             f"DFS directory must be a single character, got {len(directory)}"
         )
 
-    # Directory must be printable ASCII but not a space or forbidden char.
+    # Directory byte range. Default mode accepts 0x20-0x7F (matches ROM),
+    # strict mode narrows to 0x21-0x7E per the spec.
     d = ord(directory)
-    if d < 0x21 or d > 0x7E:
-        raise DFSError(
-            f"DFS directory must be printable ASCII (0x21-0x7E), "
-            f"got 0x{d:02X}"
-        )
+    if isStrict():
+        if d < 0x21 or d > 0x7E:
+            raise DFSError(
+                f"DFS directory must be printable ASCII (0x21-0x7E), "
+                f"got 0x{d:02X}"
+            )
+        if directory in spec_forbidden:
+            raise DFSError(
+                f"DFS directory character '{directory}' is forbidden by "
+                f"the DFS spec"
+            )
+    else:
+        if d < 0x20 or d > 0x7F:
+            raise DFSError(
+                f"DFS directory must be a printable byte (0x20-0x7F), "
+                f"got 0x{d:02X}"
+            )
 
-    if directory in forbidden:
-        raise DFSError(
-            f"DFS directory character '{directory}' is not allowed"
-        )
-
-    # Name must be 1-7 characters.
+    # Name length. 1-7 bytes regardless of mode.
     if not name:
         raise DFSError("DFS filename must not be empty")
     if len(name) > 7:
@@ -1093,18 +1111,27 @@ def validateDfsName(directory: str, name: str) -> None:
             f"DFS filename must be 1-7 characters, got {len(name)}"
         )
 
-    # Every character must be printable ASCII (0x21-0x7E) and not forbidden.
+    # Name byte range check. Default mode accepts 0x20-0x7F, strict mode
+    # narrows to 0x21-0x7E and also rejects spec-forbidden chars.
+    strict = isStrict()
+
     for ch in name:
         c = ord(ch)
-        if c < 0x21 or c > 0x7E:
-            raise DFSError(
-                f"DFS filename contains invalid character 0x{c:02X}"
-            )
 
-        if ch in forbidden:
-            raise DFSError(
-                f"DFS filename contains forbidden character '{ch}'"
-            )
+        if strict:
+            if c < 0x21 or c > 0x7E:
+                raise DFSError(
+                    f"DFS filename contains invalid character 0x{c:02X}"
+                )
+            if ch in spec_forbidden:
+                raise DFSError(
+                    f"DFS filename contains spec-forbidden character '{ch}'"
+                )
+        else:
+            if c < 0x20 or c > 0x7F:
+                raise DFSError(
+                    f"DFS filename contains non-printable byte 0x{c:02X}"
+                )
 
 
 # -----------------------------------------------------------------------
