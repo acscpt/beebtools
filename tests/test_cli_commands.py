@@ -1044,7 +1044,9 @@ class TestBuildAdfsImage:
         with open(os.path.join(subdir, "ELITE.bin"), "wb") as f:
             f.write(b"\xFF" * 300)
         with open(os.path.join(subdir, "ELITE.bin.inf"), "w") as f:
-            f.write(formatInf("$", "GAMES.ELITE", 0x1000, 0x2000, 300) + "\n")
+            f.write(
+                formatInf("$.GAMES", "ELITE", 0x1000, 0x2000, 300) + "\n"
+            )
 
         image_bytes = buildImage(source_dir=src, output_path="games.adf", title="GAMES")
 

@@ -1,7 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Heisenberg (acscpt)
 # SPDX-License-Identifier: MIT
 
-"""Tests for the .inf sidecar format parser and formatter."""
+"""Tests for the .inf sidecar format parser and formatter.
+
+Covers the stardot inf_format spec: syntax 1/2/3 forms, quoted strings
+with RFC 3986 percent-encoding, 6- and 8-digit hex with sign extension,
+DFS and ADFS access shorthand, and preservation of KEY=value extra info.
+"""
 
 import pytest
 
@@ -9,238 +14,435 @@ from beebtools.inf import InfData, parseInf, formatInf
 
 
 # =======================================================================
-# parseInf
+# parseInf - syntax 1 (name load exec length access)
 # =======================================================================
 
-class TestParseInf:
-    """Tests for parsing .inf sidecar lines."""
+class TestParseSyntax1:
+    """Spec-preferred form: name + 4 hex fields + optional extras."""
 
-    def testStandardFormat(self) -> None:
-        """Standard DIR.NAME with 6-digit hex addresses."""
-        result = parseInf("$.BOOT  FF1900 FF8023 000A00")
+    def testEightDigitHex(self) -> None:
+        """Standard syntax 1 with 8-digit hex and 2-digit access byte."""
+        result = parseInf("$.BOOT FFFF1900 FFFF8023 00000A00 00")
 
         assert result.directory == "$"
         assert result.name == "BOOT"
-        assert result.load_addr == 0xFF1900
-        assert result.exec_addr == 0xFF8023
-        assert result.length == 0x000A00
+        assert result.load_addr == 0xFFFF1900
+        assert result.exec_addr == 0xFFFF8023
+        assert result.length == 0x00000A00
         assert result.locked is False
-        assert result.crc is None
 
-    def testLockedFile(self) -> None:
-        """Lock flag appended after the length field."""
-        result = parseInf("$.BOOT  FF1900 FF8023 000A00 L")
-
-        assert result.locked is True
-        assert result.name == "BOOT"
-        assert result.load_addr == 0xFF1900
-
-    def testLowercaseLockFlag(self) -> None:
-        """Lock flag is case-insensitive."""
-        result = parseInf("$.BOOT  000000 000000 000100 l")
+    def testLockedAccessBit(self) -> None:
+        """Bit 3 of the access byte sets the locked flag."""
+        result = parseInf("$.BOOT FFFF1900 FFFF8023 00000A00 08")
 
         assert result.locked is True
 
-    def testCrcField(self) -> None:
-        """CRC=XXXX field is parsed when present."""
-        result = parseInf("$.BOOT  FF1900 FF8023 000A00 CRC=1A2B")
+    def testLockedCombinedWithOtherBits(self) -> None:
+        """Other access bits are ignored for locked but do not block parsing."""
+        result = parseInf("$.BOOT FFFF1900 FFFF8023 00000A00 1B")
 
+        assert result.locked is True
+        assert result.length == 0x00000A00
+
+    def testExtraInfoFields(self) -> None:
+        """KEY=value tokens after the hex region are kept as extra_info."""
+        result = parseInf(
+            "$.BOOT FFFF1900 FFFF8023 00000A00 00 CRC=1A2B OPT4=3"
+        )
+
+        assert result.extra_info == {"CRC": "1A2B", "OPT4": "3"}
         assert result.crc == 0x1A2B
-        assert result.locked is False
 
-    def testLockedWithCrc(self) -> None:
-        """Both lock flag and CRC can appear together."""
-        result = parseInf("$.BOOT  FF1900 FF8023 000A00 L CRC=ABCD")
+
+# =======================================================================
+# parseInf - syntax 2 (name load exec [dfs_access])
+# =======================================================================
+
+class TestParseSyntax2:
+    """Historical TubeHost/BeebLink form: 3 hex fields plus optional L."""
+
+    def testSixDigitWithSignExtension(self) -> None:
+        """6-digit FFxxxx addresses are sign-extended to 32 bits."""
+        result = parseInf("$.BOOT FF1900 FF8023 000A00")
+
+        assert result.load_addr == 0xFFFF1900
+        assert result.exec_addr == 0xFFFF8023
+        assert result.length == 0x000A00
+
+    def testShortAddressNotExtended(self) -> None:
+        """Addresses that do not start with FF are left unchanged."""
+        result = parseInf("$.BOOT 001900 008023 000A00")
+
+        assert result.load_addr == 0x001900
+        assert result.exec_addr == 0x008023
+
+    def testLockFlagSetsLocked(self) -> None:
+        """Bare L token after the hex region sets the locked flag."""
+        result = parseInf("$.BOOT FF1900 FF8023 000A00 L")
 
         assert result.locked is True
-        assert result.crc == 0xABCD
+
+    def testLockedKeywordVariants(self) -> None:
+        """LOCKED and Locked are also accepted."""
+        for keyword in ("Locked", "LOCKED"):
+            result = parseInf(f"$.BOOT 001900 008023 000100 {keyword}")
+            assert result.locked is True, keyword
 
     def testCrcBeforeLock(self) -> None:
-        """CRC and lock flag can appear in either order."""
-        result = parseInf("$.BOOT  FF1900 FF8023 000A00 CRC=ABCD L")
+        """Extra info and L can appear in either order."""
+        result = parseInf("$.BOOT FF1900 FF8023 000A00 CRC=ABCD L")
 
         assert result.locked is True
         assert result.crc == 0xABCD
 
-    def testNonDefaultDirectory(self) -> None:
-        """Directory characters other than $ are parsed correctly."""
-        result = parseInf("T.MYPROG  000E00 008023 001400")
+    def testLockBeforeCrc(self) -> None:
+        """L followed by CRC= is still parsed."""
+        result = parseInf("$.BOOT FF1900 FF8023 000A00 L CRC=ABCD")
+
+        assert result.locked is True
+        assert result.crc == 0xABCD
+
+
+# =======================================================================
+# parseInf - syntax 3 (name access) - ADFS Explorer directory form
+# =======================================================================
+
+class TestParseSyntax3:
+    """ADFS Explorer directory form: name + symbolic access string."""
+
+    def testSymbolicAccessOnly(self) -> None:
+        """Name followed by symbolic access produces zero load/exec."""
+        result = parseInf("$.GAMES WR")
+
+        assert result.directory == "$"
+        assert result.name == "GAMES"
+        assert result.load_addr == 0
+        assert result.exec_addr == 0
+        assert result.length is None
+        assert result.locked is False
+
+    def testSymbolicAccessWithLocked(self) -> None:
+        """Symbolic L flag in the access string sets locked."""
+        result = parseInf("$.GAMES LWR")
+
+        assert result.locked is True
+
+
+# =======================================================================
+# parseInf - name field splitting
+# =======================================================================
+
+class TestParseNameSplit:
+    """Tests for dotted-name splitting into (directory, leaf)."""
+
+    def testDfsSingleCharDirectory(self) -> None:
+        """A single-character directory prefix is split at offset 1."""
+        result = parseInf("T.MYPROG 000E00 008023 001400")
 
         assert result.directory == "T"
         assert result.name == "MYPROG"
 
-    def testBareNameDefaultsToDefault(self) -> None:
+    def testAdfsDottedPath(self) -> None:
+        """An ADFS dotted path splits at the last dot."""
+        result = parseInf("$.GAMES.ACTION.ELITE 001900 008023 002000")
+
+        assert result.directory == "$.GAMES.ACTION"
+        assert result.name == "ELITE"
+
+    def testBareNameDefaultsToDollar(self) -> None:
         """A bare filename with no directory prefix defaults to $."""
-        result = parseInf("BOOT  FF1900 FF8023 000A00")
+        result = parseInf("BOOT 001900 008023 000A00")
 
         assert result.directory == "$"
         assert result.name == "BOOT"
-        assert result.load_addr == 0xFF1900
 
-    def testEightDigitHex(self) -> None:
-        """8-digit hex addresses are accepted (e.g. BBC BASIC for Windows)."""
-        result = parseInf("$.FILE  FFFF1900 FFFF8023 00000A00")
-
-        assert result.load_addr == 0xFFFF1900
-        assert result.exec_addr == 0xFFFF8023
-        assert result.length == 0x00000A00
-
-    def testExtraWhitespace(self) -> None:
-        """Multiple spaces and tabs between fields are tolerated."""
-        result = parseInf("$.BOOT    FF1900\tFF8023\t\t000A00")
-
-        assert result.directory == "$"
-        assert result.name == "BOOT"
-        assert result.load_addr == 0xFF1900
-
-    def testLeadingTrailingWhitespace(self) -> None:
-        """Leading and trailing whitespace is stripped by split()."""
-        result = parseInf("  $.BOOT  FF1900 FF8023 000A00  ")
-
-        assert result.name == "BOOT"
-        assert result.length == 0x000A00
-
-    def testZeroAddresses(self) -> None:
-        """All-zero addresses are valid."""
-        result = parseInf("$.DATA  000000 000000 000100")
-
-        assert result.load_addr == 0
-        assert result.exec_addr == 0
-        assert result.length == 0x100
-
-    def testLowercaseHex(self) -> None:
-        """Lowercase hex digits are accepted."""
-        result = parseInf("$.BOOT  ff1900 ff8023 000a00")
-
-        assert result.load_addr == 0xFF1900
-        assert result.exec_addr == 0xFF8023
-        assert result.length == 0x000A00
-
-    def testFullName(self) -> None:
-        """The fullName property returns DIR.NAME format."""
-        result = parseInf("T.MYPROG  000E00 008023 001400")
+    def testFullNameProperty(self) -> None:
+        """fullName reconstructs the original directory.name form."""
+        result = parseInf("T.MYPROG 001400 008023 000100")
 
         assert result.fullName == "T.MYPROG"
 
-    def testTooFewFields(self) -> None:
-        """Fewer than 4 fields raises ValueError."""
-        with pytest.raises(ValueError, match="at least 4 fields"):
-            parseInf("$.BOOT FF1900")
 
-    def testEmptyLine(self) -> None:
-        """Empty line raises ValueError."""
-        with pytest.raises(ValueError, match="at least 4 fields"):
+# =======================================================================
+# parseInf - quoted strings with percent-encoding
+# =======================================================================
+
+class TestParseQuotedNames:
+    """Quoted name fields allow any byte via percent-encoding."""
+
+    def testQuotedNameWithSpace(self) -> None:
+        """A name containing a space must be quoted in the source line."""
+        result = parseInf('"$.HELLO WORLD" 001900 008023 000100')
+
+        assert result.directory == "$"
+        assert result.name == "HELLO WORLD"
+
+    def testQuotedNameWithPercentEscape(self) -> None:
+        """%XX sequences inside quoted strings decode to byte values."""
+        result = parseInf('"$.NAME%20WITH%20SPACES" 000000 000000 000100')
+
+        assert result.name == "NAME WITH SPACES"
+
+    def testQuotedNameWithControlByte(self) -> None:
+        """Percent-encoded 0x06 appears as the literal byte in the name."""
+        result = parseInf('"$.BLANK%06" 000000 000000 000100')
+
+        assert result.name == "BLANK\x06"
+
+    def testQuotedNameWithLiteralQuote(self) -> None:
+        """A percent-encoded DQUOTE survives the round-trip through parsing."""
+        result = parseInf('"$.SAY%22HI%22" 000000 000000 000100')
+
+        assert result.name == 'SAY"HI"'
+
+    def testUnterminatedQuoteRaises(self) -> None:
+        """A quoted string with no closing DQUOTE raises ValueError."""
+        with pytest.raises(ValueError, match="[Uu]nterminated"):
+            parseInf('"$.BOOT 000000 000000 000100')
+
+
+# =======================================================================
+# parseInf - miscellaneous
+# =======================================================================
+
+class TestParseMisc:
+    """Whitespace handling, tape markers, empty input, extra_info."""
+
+    def testMixedWhitespace(self) -> None:
+        """Tabs and multiple spaces between fields are tolerated."""
+        result = parseInf("$.BOOT\tFF1900  FF8023\t\t000A00")
+
+        assert result.load_addr == 0xFFFF1900
+        assert result.length == 0x000A00
+
+    def testLowercaseHex(self) -> None:
+        """Lowercase hex digits are accepted."""
+        result = parseInf("$.BOOT ff1900 ff8023 000a00")
+
+        assert result.load_addr == 0xFFFF1900
+        assert result.exec_addr == 0xFFFF8023
+        assert result.length == 0x000A00
+
+    def testTapePrefixSkipped(self) -> None:
+        """The deprecated TAPE prefix is skipped and the rest parses."""
+        result = parseInf("TAPE $.BOOT FF1900 FF8023 000A00")
+
+        assert result.name == "BOOT"
+        assert result.load_addr == 0xFFFF1900
+
+    def testNextTapeMarkerStopsParsing(self) -> None:
+        """The NEXT tape marker ends parsing before remaining tokens."""
+        result = parseInf("$.BOOT FF1900 FF8023 000A00 NEXT $.NEXTFILE")
+
+        assert result.length == 0x000A00
+
+    def testEmptyLineRaises(self) -> None:
+        """An empty line raises ValueError."""
+        with pytest.raises(ValueError, match="[Ee]mpty"):
             parseInf("")
 
-    def testInvalidHex(self) -> None:
-        """Non-hex value in an address field raises ValueError."""
-        with pytest.raises(ValueError):
-            parseInf("$.BOOT  ZZZZZZ FF8023 000A00")
+    def testTrailingWhitespace(self) -> None:
+        """Trailing whitespace and end-of-line characters are harmless."""
+        result = parseInf("$.BOOT FF1900 FF8023 000A00\r\n")
 
-    def testSingleCharName(self) -> None:
-        """Single-character filename is valid in DFS."""
-        result = parseInf("$.A  000000 000000 000010")
-
-        assert result.name == "A"
-        assert result.directory == "$"
-
-    def testLongName(self) -> None:
-        """7-character filename (DFS maximum) parses correctly."""
-        result = parseInf("$.ABCDEFG  000000 000000 000010")
-
-        assert result.name == "ABCDEFG"
+        assert result.name == "BOOT"
+        assert result.length == 0x000A00
 
 
 # =======================================================================
-# formatInf
+# formatInf - syntax 1 output
 # =======================================================================
 
-class TestFormatInf:
-    """Tests for formatting .inf sidecar lines."""
+class TestFormatSyntax1:
+    """Writer emits syntax 1 with 8-digit hex and a hex access byte."""
 
     def testBasicFormat(self) -> None:
-        """Standard output with 6-digit uppercase hex."""
-        line = formatInf("$", "BOOT", 0xFF1900, 0xFF8023, 0x000A00)
+        """Unlocked entry: 8-digit hex, zero access byte."""
+        line = formatInf("$", "BOOT", 0xFFFF1900, 0xFFFF8023, 0x00000A00)
 
-        assert line == "$.BOOT  FF1900 FF8023 000A00"
+        assert line == "$.BOOT FFFF1900 FFFF8023 00000A00 00"
 
-    def testLockedFormat(self) -> None:
-        """Lock flag is appended after the length."""
-        line = formatInf("$", "BOOT", 0xFF1900, 0xFF8023, 0x000A00, locked=True)
+    def testLockedSetsAccessBit(self) -> None:
+        """Locked true emits 08 as the access byte."""
+        line = formatInf(
+            "$", "BOOT",
+            0xFFFF1900, 0xFFFF8023, 0x00000A00,
+            locked=True,
+        )
 
-        assert line == "$.BOOT  FF1900 FF8023 000A00 L"
+        assert line == "$.BOOT FFFF1900 FFFF8023 00000A00 08"
 
     def testZeroAddresses(self) -> None:
-        """Zero addresses are zero-padded to 6 digits."""
+        """All-zero values pad to 8 digits."""
         line = formatInf("$", "DATA", 0, 0, 0x100)
 
-        assert line == "$.DATA  000000 000000 000100"
+        assert line == "$.DATA 00000000 00000000 00000100 00"
 
-    def testNonDefaultDirectory(self) -> None:
-        """Non-default directory character appears in output."""
-        line = formatInf("T", "MYPROG", 0x0E00, 0x8023, 0x1400)
+    def testAdfsDottedDirectory(self) -> None:
+        """Nested ADFS directories emit the full dotted path."""
+        line = formatInf("$.GAMES", "ELITE", 0x1900, 0x8023, 0x2000)
 
-        assert line == "T.MYPROG  000E00 008023 001400"
+        assert line == "$.GAMES.ELITE 00001900 00008023 00002000 00"
 
-    def testSmallValues(self) -> None:
-        """Small values are zero-padded correctly."""
-        line = formatInf("$", "X", 1, 2, 3)
+    def testExtraInfoPassThrough(self) -> None:
+        """extra_info dict is appended after the access byte."""
+        line = formatInf(
+            "$", "BOOT",
+            0xFFFF1900, 0xFFFF8023, 0x00000A00,
+            extra_info={"CRC": "1A2B", "OPT4": "3"},
+        )
 
-        assert line == "$.X  000001 000002 000003"
-
-    def testMaxDfsAddress(self) -> None:
-        """Maximum 18-bit DFS address (0x3FFFF) fits in 6 hex digits."""
-        line = formatInf("$", "MAX", 0x3FFFF, 0x3FFFF, 0x3FFFF)
-
-        assert line == "$.MAX  03FFFF 03FFFF 03FFFF"
+        assert line == (
+            "$.BOOT FFFF1900 FFFF8023 00000A00 00 CRC=1A2B OPT4=3"
+        )
 
 
 # =======================================================================
-# Round-trip
+# formatInf - name quoting
 # =======================================================================
 
-class TestInfRoundTrip:
-    """Round-trip tests: format then parse back."""
+class TestFormatNameQuoting:
+    """Names with non-safe bytes are quoted and percent-encoded."""
 
-    def testRoundTripUnlocked(self) -> None:
-        """Format and parse produces identical metadata."""
-        line = formatInf("$", "BOOT", 0xFF1900, 0xFF8023, 0x0A00)
+    def testSpaceTriggersQuoting(self) -> None:
+        """A space in the name forces a quoted output (literal space OK)."""
+        line = formatInf("$", "HELLO WORLD", 0, 0, 0)
+
+        # Per spec, space is a legal literal byte inside a quoted string.
+        # The important invariant is that the name field is wrapped in
+        # DQUOTE so the space is not interpreted as a field separator.
+        assert line.startswith('"$.HELLO WORLD"')
+
+    def testControlByteEncoded(self) -> None:
+        """A 0x06 byte in the name is percent-encoded inside quotes."""
+        line = formatInf("$", "BLANK\x06", 0, 0, 0)
+
+        assert line.startswith('"$.BLANK%06"')
+
+    def testLiteralPercentEncoded(self) -> None:
+        """A literal '%' in a name is encoded so round-trip is unambiguous."""
+        line = formatInf("$", "50%OFF", 0, 0, 0)
+
+        assert line.startswith('"$.50%25OFF"')
+
+    def testLiteralQuoteEncoded(self) -> None:
+        """A literal DQUOTE in a name becomes %22."""
+        line = formatInf("$", 'SAY"HI', 0, 0, 0)
+
+        assert line.startswith('"$.SAY%22HI"')
+
+    def testSafeNameNotQuoted(self) -> None:
+        """A printable-only name is emitted unquoted."""
+        line = formatInf("$", "BOOT", 0, 0, 0)
+
+        assert line.startswith("$.BOOT ")
+
+
+# =======================================================================
+# Round-trip: format -> parse -> compare
+# =======================================================================
+
+class TestRoundTrip:
+    """Format then parse should recover the original fields."""
+
+    def testUnlockedBasic(self) -> None:
+        """A plain name round-trips through format and parse."""
+        line = formatInf("$", "BOOT", 0xFFFF1900, 0xFFFF8023, 0x0A00)
         result = parseInf(line)
 
         assert result.directory == "$"
         assert result.name == "BOOT"
-        assert result.load_addr == 0xFF1900
-        assert result.exec_addr == 0xFF8023
+        assert result.load_addr == 0xFFFF1900
+        assert result.exec_addr == 0xFFFF8023
         assert result.length == 0x0A00
         assert result.locked is False
 
-    def testRoundTripLocked(self) -> None:
-        """Locked flag survives a format-parse cycle."""
+    def testLockedEntry(self) -> None:
+        """The locked flag survives a format-parse cycle."""
         line = formatInf("T", "PROG", 0x0E00, 0x8023, 0x1400, locked=True)
         result = parseInf(line)
 
         assert result.directory == "T"
         assert result.name == "PROG"
-        assert result.load_addr == 0x0E00
-        assert result.exec_addr == 0x8023
-        assert result.length == 0x1400
         assert result.locked is True
 
-    def testRoundTripZero(self) -> None:
-        """Zero-address file survives a format-parse cycle."""
-        line = formatInf("$", "EMPTY", 0, 0, 0)
+    def testNameWithSpace(self) -> None:
+        """A space in the name round-trips via quoted+percent-encoded form."""
+        line = formatInf("$", "HELLO WORLD", 0, 0, 0x100)
         result = parseInf(line)
 
-        assert result.load_addr == 0
-        assert result.exec_addr == 0
-        assert result.length == 0
+        assert result.directory == "$"
+        assert result.name == "HELLO WORLD"
 
-    def testRoundTripAllDirectories(self) -> None:
-        """Every printable ASCII directory character round-trips."""
+    def testNameWithControlByte(self) -> None:
+        """A 0x06 byte in the name round-trips losslessly."""
+        line = formatInf("$", "BLANK\x06", 0, 0, 0x100)
+        result = parseInf(line)
+
+        assert result.name == "BLANK\x06"
+        assert result.nameBytes == b"BLANK\x06"
+
+    def testNameWithQuoteAndPercent(self) -> None:
+        """DQUOTE and % bytes in a name both round-trip."""
+        line = formatInf("$", 'A"B%C', 0, 0, 0x10)
+        result = parseInf(line)
+
+        assert result.name == 'A"B%C'
+
+    def testExtraInfoRoundTrip(self) -> None:
+        """Extra KEY=value fields survive a format-parse cycle."""
+        extra = {"CRC": "1A2B", "OPT4": "3"}
+        line = formatInf("$", "BOOT", 0xFFFF1900, 0xFFFF8023, 0x0A00,
+                         extra_info=extra)
+        result = parseInf(line)
+
+        assert result.extra_info == extra
+        assert result.crc == 0x1A2B
+
+    def testDfsNameWithDotsRoundTrip(self) -> None:
+        """A DFS name containing literal dots stays together on round-trip."""
+        line = formatInf("$", "B1.1", 0xFFFF1900, 0xFFFF8023, 0x100)
+        result = parseInf(line)
+
+        assert result.directory == "$"
+        assert result.name == "B1.1"
+        assert result.fullName == "$.B1.1"
+
+    def testDfsNameWithDotsNotAmbiguousWithAdfs(self) -> None:
+        """A DFS '$.B1.1' round-trip does not collapse into ADFS '$.B1' dir."""
+        line = formatInf("$", "FOO.BAR", 0, 0, 0x10)
+
+        # The leaf dot must have been escaped so the reader cannot
+        # mistake it for an ADFS directory boundary.
+        assert "%2E" in line or '"' in line
+
+        result = parseInf(line)
+        assert result.directory == "$"
+        assert result.name == "FOO.BAR"
+
+    def testAdfsDottedPathRoundTrip(self) -> None:
+        """Nested ADFS directory path survives round-trip."""
+        line = formatInf("$.GAMES.ACTION", "ELITE", 0x1900, 0x8023, 0x2000)
+        result = parseInf(line)
+
+        assert result.directory == "$.GAMES.ACTION"
+        assert result.name == "ELITE"
+        assert result.fullName == "$.GAMES.ACTION.ELITE"
+
+    def testAllPrintableDirectoryChars(self) -> None:
+        """Every printable ASCII directory byte 0x21-0x7E round-trips."""
         for code in range(0x21, 0x7F):
             d = chr(code)
+
+            # '.' as a directory byte would be ambiguous with the
+            # separator; skip it.
+            if d == ".":
+                continue
+
             line = formatInf(d, "FILE", 0x1000, 0x2000, 0x100)
             result = parseInf(line)
 
-            assert result.directory == d, f"Failed for directory 0x{code:02X}"
+            assert result.directory == d, (
+                f"Directory byte 0x{code:02X} did not round-trip"
+            )
             assert result.name == "FILE"
