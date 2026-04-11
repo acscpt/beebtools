@@ -24,7 +24,7 @@ from beebtools.disc import (
 )
 from beebtools.boot import BootOption
 from beebtools.adfs import openAdfsImage
-from beebtools.inf import formatInf, parseInf
+from beebtools.inf import formatInf, parseInf, INF_X_START_SECTOR
 from beebtools.cli import (
     cmdCreate, cmdAdd, cmdDelete, cmdBuild,
     cmdTitle, cmdBoot, cmdDisc, cmdAttrib, cmdRename,
@@ -654,6 +654,98 @@ class TestBuildImage:
         # (or very close - the tokenizer produces identical output for
         # the same program).
         assert len(rebuilt_data) == len(basic_bytes)
+
+    def testBuildHonoursStartSectorHint(self, tmp_path) -> None:
+        """X_START_SECTOR in an .inf sidecar places the file at that sector.
+
+        The orchestration layer routes the hint through to the format
+        engine so byte-exact rebuilds land files at their original
+        positions. Without the hint, DFS would pick a different sector
+        based on free-space allocation.
+        """
+        src = str(tmp_path / "src")
+        d = os.path.join(src, "$")
+        os.makedirs(d)
+
+        data = b"\xAA" * 256
+        with open(os.path.join(d, "PLACED.bin"), "wb") as f:
+            f.write(data)
+        with open(os.path.join(d, "PLACED.bin.inf"), "w") as f:
+            f.write(
+                formatInf(
+                    "$", "PLACED", 0, 0, len(data), False,
+                    extra_info={INF_X_START_SECTOR: "123"},
+                ) + "\n"
+            )
+
+        rebuilt_bytes = buildImage(src, "placed.ssd", tracks=80)
+
+        rebuilt_path = str(tmp_path / "placed.ssd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        entry = next(
+            e for e in rebuilt.sides[0].readCatalogue().entries
+            if e.fullName == "$.PLACED"
+        )
+
+        assert entry.start_sector == 123
+        assert rebuilt.sides[0].readFile(entry) == data
+
+    def testBuildHandlesLevel9OverlapWriteOrder(self, tmp_path) -> None:
+        """Two placed files with overlapping sectors write in end-sector order.
+
+        The orchestration sorts placed records by end sector ascending
+        so that the outer (full-coverage) file writes last and its
+        data is authoritative in the overlap region. Mirrors the
+        Level 9 copy-protection layout where two catalogue entries
+        legitimately share sectors but the content is byte-consistent.
+        """
+        src = str(tmp_path / "src")
+        d = os.path.join(src, "$")
+        os.makedirs(d)
+
+        # FULL occupies sectors 200..202, HALF sits inside it at 201.
+        shared_sector = b"\xCC" * 256
+        full_data = b"\xAA" * 256 + shared_sector + b"\xBB" * 256
+        half_data = shared_sector
+
+        with open(os.path.join(d, "FULL.bin"), "wb") as f:
+            f.write(full_data)
+        with open(os.path.join(d, "FULL.bin.inf"), "w") as f:
+            f.write(
+                formatInf(
+                    "$", "FULL", 0, 0, len(full_data), False,
+                    extra_info={INF_X_START_SECTOR: "200"},
+                ) + "\n"
+            )
+
+        with open(os.path.join(d, "HALF.bin"), "wb") as f:
+            f.write(half_data)
+        with open(os.path.join(d, "HALF.bin.inf"), "w") as f:
+            f.write(
+                formatInf(
+                    "$", "HALF", 0, 0, len(half_data), False,
+                    extra_info={INF_X_START_SECTOR: "201"},
+                ) + "\n"
+            )
+
+        rebuilt_bytes = buildImage(src, "level9.ssd", tracks=80)
+
+        rebuilt_path = str(tmp_path / "level9.ssd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        entries = {
+            e.fullName: e for e in rebuilt.sides[0].readCatalogue().entries
+        }
+
+        assert entries["$.FULL"].start_sector == 200
+        assert entries["$.HALF"].start_sector == 201
+        assert rebuilt.sides[0].readFile(entries["$.FULL"]) == full_data
+        assert rebuilt.sides[0].readFile(entries["$.HALF"]) == half_data
 
     def testBuildRetokenizePreservesNonBasicFiles(self, tmp_path) -> None:
         """Binary files with .bas-like names but non-BASIC exec addresses

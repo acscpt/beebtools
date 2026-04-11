@@ -19,6 +19,24 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   symbolic ADFS access strings, and `KEY=value` extra-info pass-through.
 - `InfData` gains `fullName`, `nameBytes`, `directoryBytes`, `access`,
   `crc` properties plus an `extra_info` dict for arbitrary sidecar keys.
+- Experimental `X_START_SECTOR` extra-info key on `.inf` sidecars, read
+  via `InfData.startSector`. Carries the source disc's start sector so
+  a rebuild can place the file at its original location instead of
+  picking a fresh slot from the free-space map. The plain
+  `START_SECTOR` form is also accepted and preferred when both keys
+  are present (a dual-keyed sidecar emits a `UserWarning` but still
+  uses the plain value). Invalid or negative values emit a
+  `UserWarning` and fall back to normal allocation. Extract writes
+  `X_START_SECTOR` on every sidecar so extract-and-rebuild cycles are
+  byte-exact, which closes the last round-trip gap for Level 9
+  copy-protected discs whose catalogue entries legitimately declare
+  overlapping sector ranges.
+- `DiscFile.start_sector` placement hint on the transport dataclass.
+  DFS `addFile` honours the hint and writes the file at the exact
+  sector, rejecting values inside the catalogue area or past the end
+  of the disc. ADFS `addFile` honours the hint when the requested
+  range is wholly free in the FSM and falls back silently to normal
+  allocation when it would overlap a directory or another file.
 
 ### Changed
 

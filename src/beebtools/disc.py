@@ -33,7 +33,7 @@ from .basic import (
     looksLikeTokenizedBasic, looksLikePlainText, prettyPrint,
 )
 from .image import DiscImage, DiscSide, createImage, openImage
-from .inf import formatInf, parseInf, InfData
+from .inf import formatInf, parseInf, InfData, INF_X_START_SECTOR
 
 
 # Characters that are illegal in Windows filenames, used when building
@@ -168,11 +168,24 @@ def formatEntryInf(entry: DiscEntry) -> str:
     into the positional arguments formatInf() expects. Lives in disc.py
     rather than inf.py because inf.py is a Contracts-layer leaf module
     and must not know about DiscEntry.
+
+    Writes the experimental ``X_START_SECTOR=<n>`` extra field when the
+    entry carries a start sector. This is the mechanism that lets
+    ``buildImage`` later rebuild the disc with byte-exact on-disc file
+    placement, which is required for round-tripping copy-protected
+    discs that declare overlapping sector allocations.
     """
+
+    extras = {}
+
+    if entry.start_sector is not None:
+        extras[INF_X_START_SECTOR] = str(entry.start_sector)
+
     return formatInf(
         entry.directory, entry.name,
         entry.load_addr, entry.exec_addr,
         entry.length, entry.locked,
+        extra_info=extras if extras else None,
     )
 
 
@@ -1098,17 +1111,27 @@ def _walkSourceTree(
 ) -> None:
     """Build a disc side from a filesystem tree of data + .inf sidecars.
 
-    File metadata (disc path, load/exec addresses, lock flag) comes from
-    the .inf sidecar next to each data file. The filesystem directory
-    names are irrelevant - the disc layout is reconstructed entirely
-    from the .inf records, so sanitised filesystem names like
-    ``T_x3E_D`` correctly map back to the original disc name ``T>D``.
+    File metadata (disc path, load/exec addresses, lock flag, and
+    optional on-disc start sector) comes from the .inf sidecar next to
+    each data file. The filesystem directory names are irrelevant -
+    the disc layout is reconstructed entirely from the .inf records,
+    so sanitised filesystem names like ``T_x3E_D`` correctly map back
+    to the original disc name ``T>D``.
 
-    Processing happens in two passes:
+    Processing happens in several passes:
 
     1. Collect every (data file, .inf record) pair from the filesystem.
     2. Auto-create any ADFS directories referenced by the collected
-       records, then add each file using its .inf-supplied disc path.
+       records.
+    3. Split the records into placed (those whose .inf sidecar carries
+       an ``X_START_SECTOR`` / ``START_SECTOR`` hint) and unplaced.
+    4. Write the placed records first, ordered by end sector ascending
+       so that any last-writer-wins conflict at a shared sector lands
+       on the file that fully covers the sector. This preserves
+       byte-exact round-tripping of copy-protected discs that declare
+       overlapping sector allocations (Level 9 games).
+    5. Write the unplaced records using the format engine's normal
+       free-space allocator.
 
     DFS directories (e.g. ``$``, ``T``, ``+``) are implicit - the
     directory letter is stored as metadata in each file's catalogue
@@ -1128,8 +1151,38 @@ def _walkSourceTree(
     # Auto-create every ADFS parent directory referenced by the records.
     _ensureAdfsDirs(side, [rec[2].directory for rec in records])
 
-    # Pass 2: add each file to the disc side using the .inf disc path.
+    # Split into placed and unplaced, preserving the original order
+    # for the unplaced bucket. Placed records are sorted by end
+    # sector ascending so that the file whose footprint extends
+    # furthest writes last and its bytes win in any overlap region.
+    SECTOR_SIZE = 256
+    placed: List[Tuple[str, str, InfData, int, int]] = []
+    unplaced: List[Tuple[str, str, InfData]] = []
+
     for path, fs_leaf, inf in records:
+        start = inf.startSector
+
+        if start is None:
+            unplaced.append((path, fs_leaf, inf))
+            continue
+
+        length = (
+            inf.length if inf.length is not None else os.path.getsize(path)
+        )
+        sectors = max(1, (length + SECTOR_SIZE - 1) // SECTOR_SIZE)
+        end_sector = start + sectors - 1
+        placed.append((path, fs_leaf, inf, start, end_sector))
+
+    placed.sort(key=lambda item: (item[4], -item[3]))
+
+    def addOne(
+        path: str,
+        fs_leaf: str,
+        inf: InfData,
+        start_sector: Optional[int],
+    ) -> None:
+        """Load one source file and add it to the disc side."""
+
         with open(path, "rb") as handle:
             data = handle.read()
 
@@ -1172,7 +1225,16 @@ def _walkSourceTree(
             load_addr=inf.load_addr,
             exec_addr=inf.exec_addr,
             locked=inf.locked,
+            start_sector=start_sector,
         ))
+
+    # Pass 4: write placed files in end-sector ascending order.
+    for path, fs_leaf, inf, _start, _end in placed:
+        addOne(path, fs_leaf, inf, inf.startSector)
+
+    # Pass 5: write unplaced files using normal allocation.
+    for path, fs_leaf, inf in unplaced:
+        addOne(path, fs_leaf, inf, None)
 
 
 # ===================================================================
