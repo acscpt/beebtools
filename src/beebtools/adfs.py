@@ -571,6 +571,86 @@ class ADFSSide(DiscSide):
             f"{max((l for _, l in blocks), default=0)} sectors"
         )
 
+    def _reserveBlock(self, start_sector: int, sectors_needed: int) -> bool:
+        """Reserve an exact sector range that was requested by a placed write.
+
+        Walks the free space map, finds the free block that contains
+        the requested range, and splits it so the range is removed
+        from the map. Returns True when the reservation succeeded (the
+        range was wholly free), False when the range overlaps sectors
+        that are already allocated (for example a directory or an
+        earlier file), in which case the FSM is left unchanged and the
+        caller should fall back to normal allocation.
+
+        Args:
+            start_sector:     First sector to reserve.
+            sectors_needed:   Number of contiguous sectors to reserve.
+
+        Returns:
+            True if the range was wholly free and has been reserved,
+            False if the range overlaps any already-allocated sectors.
+        """
+
+        if sectors_needed <= 0:
+            return True
+
+        fsm = self.readFreeSpaceMap()
+        blocks = list(fsm.blocks)
+
+        end_sector = start_sector + sectors_needed
+
+        # Confirm the entire requested range is covered by free blocks
+        # before mutating anything. Any gap means the range collides
+        # with an already-allocated sector and the reservation fails.
+        cursor = start_sector
+
+        for (b_start, b_length) in blocks:
+            if cursor >= end_sector:
+                break
+
+            b_end = b_start + b_length
+
+            if b_end <= cursor:
+                continue
+
+            if b_start > cursor:
+                return False
+
+            cursor = b_end
+
+        if cursor < end_sector:
+            return False
+
+        new_blocks: List[Tuple[int, int]] = []
+
+        for (b_start, b_length) in blocks:
+            b_end = b_start + b_length
+
+            # Block entirely outside the requested range: keep as-is.
+            if b_end <= start_sector or b_start >= end_sector:
+                new_blocks.append((b_start, b_length))
+                continue
+
+            # Keep the portion of the free block before the reservation.
+            if b_start < start_sector:
+                new_blocks.append((b_start, start_sector - b_start))
+
+            # Keep the portion of the free block after the reservation.
+            if b_end > end_sector:
+                new_blocks.append((end_sector, b_end - end_sector))
+
+        new_blocks.sort(key=lambda item: item[0])
+
+        updated = ADFSFreeSpaceMap(
+            blocks=tuple(new_blocks),
+            total_sectors=fsm.total_sectors,
+            disc_id=fsm.disc_id,
+            boot_option=fsm.boot_option,
+        )
+        self.writeFreeSpaceMap(updated)
+
+        return True
+
     def _freeBlock(self, start_sector: int, length: int) -> None:
         """Return a block of sectors to the free space map.
 
@@ -1106,13 +1186,26 @@ class ADFSSide(DiscSide):
 
         validateAdfsName(leaf_name)
 
-        # Allocate sectors for the file data.
+        # Allocate sectors for the file data, or honour an explicit
+        # placement hint when the caller has supplied one. Placed
+        # writes are the mechanism used to preserve the on-disc
+        # layout of copy-protected discs that declare overlapping
+        # sector allocations; byte-consistency in the overlap region
+        # is the caller's responsibility. The FSM is carved where it
+        # can be and the call tolerates already-reserved ranges from
+        # a prior placed write.
         data = spec.data
         if len(data) > 0:
             sectors_needed = (
                 (len(data) + ADFS_SECTOR_SIZE - 1) // ADFS_SECTOR_SIZE
             )
-            start_sector = self._allocateBlock(sectors_needed)
+
+            if spec.start_sector is not None and self._reserveBlock(
+                spec.start_sector, sectors_needed
+            ):
+                start_sector = spec.start_sector
+            else:
+                start_sector = self._allocateBlock(sectors_needed)
         else:
             start_sector = 0
 

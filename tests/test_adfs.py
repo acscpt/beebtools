@@ -1407,6 +1407,75 @@ class TestAddFile:
         assert before - after == 2
 
 
+class TestAddFilePlaced:
+    """ADFS addFile honours an explicit start_sector when the range is free."""
+
+    def testPlacedAtExactSectorCarvesFreeMap(self):
+        """A placement in free sectors lands at the requested location."""
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        data = b"\xAA" * (ADFS_SECTOR_SIZE * 3)
+        entry = side.addFile(
+            DiscFile("$.PLACED", data, start_sector=50)
+        )
+
+        assert entry.start_sector == 50
+        assert side.readFile(entry) == data
+
+        # The free space map no longer covers sectors 50..52.
+        fsm = side.readFreeSpaceMap()
+        for (start, length) in fsm.blocks:
+            end = start + length
+            assert not (start < 53 and end > 50), (
+                f"free block ({start}, {length}) still covers placed range"
+            )
+
+    def testPlacedFallsBackWhenRangeAlreadyAllocated(self):
+        """Placement over already-allocated sectors falls back to auto-allocation.
+
+        The root directory occupies fixed sectors in a fresh ADFS
+        image. Asking for a placement that starts inside those sectors
+        cannot succeed as a byte-exact placement without clobbering
+        the directory, so the engine falls back to normal allocation
+        and the file is still written correctly.
+        """
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        data = b"\xBB" * (ADFS_SECTOR_SIZE * 2)
+        # Sector 2 is the root directory in a fresh ADFS image.
+        entry = side.addFile(
+            DiscFile("$.FALLBACK", data, start_sector=2)
+        )
+
+        # Fell back: start sector is not the requested 2.
+        assert entry.start_sector != 2
+        assert side.readFile(entry) == data
+
+    def testPlacedRangeOverlappingPriorFileFallsBack(self):
+        """Placement into sectors occupied by another file is rejected cleanly."""
+        image = createAdfsImage()
+        side = image.sides[0]
+
+        first = side.addFile(
+            DiscFile("$.FIRST", b"\xCC" * (ADFS_SECTOR_SIZE * 4),
+                     start_sector=60)
+        )
+
+        # Request an overlap starting in the middle of FIRST.
+        second = side.addFile(
+            DiscFile("$.SECOND", b"\xDD" * (ADFS_SECTOR_SIZE * 2),
+                     start_sector=62)
+        )
+
+        assert first.start_sector == 60
+        # Second fell back rather than clobbering FIRST.
+        assert second.start_sector != 62
+        assert side.readFile(first) == b"\xCC" * (ADFS_SECTOR_SIZE * 4)
+        assert side.readFile(second) == b"\xDD" * (ADFS_SECTOR_SIZE * 2)
+
+
 class TestDeleteFile:
 
     def testDeleteAndVerifyGone(self):

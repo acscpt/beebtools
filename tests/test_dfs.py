@@ -1237,6 +1237,87 @@ class TestAddFile:
 
 
 # ---------------------------------------------------------------------------
+# Placed addFile tests (X_START_SECTOR round-tripping)
+# ---------------------------------------------------------------------------
+
+class TestAddFilePlaced:
+    """DFS addFile with an explicit start_sector honours the placement."""
+
+    def testPlacedAtExactSectorWritesData(self):
+        """The file lands at the requested sector and reads back cleanly."""
+        image = createDiscImage(tracks=80)
+        side = image.sides[0]
+
+        data = b"\xAA" * 512
+        entry = side.addFile(
+            DiscFile("$.DATA", data, start_sector=100)
+        )
+
+        assert entry.start_sector == 100
+        assert side.readFile(entry) == data
+
+    def testPlacedRejectsCatalogueSectors(self):
+        """Placement below sector 2 (catalogue area) is refused."""
+        image = createDiscImage(tracks=80)
+        side = image.sides[0]
+
+        with pytest.raises(DFSError, match="catalogue area"):
+            side.addFile(
+                DiscFile("$.BAD", b"\xAA" * 256, start_sector=1)
+            )
+
+    def testPlacedRejectsPastEndOfDisc(self):
+        """Placement that would run off the end of the disc is refused."""
+        image = createDiscImage(tracks=40)
+        side = image.sides[0]
+
+        # 40-track = 400 sectors; anything whose end sector >= 400 fails.
+        with pytest.raises(DFSError, match="past the end"):
+            side.addFile(
+                DiscFile("$.BAD", b"\xAA" * 512, start_sector=399)
+            )
+
+    def testPlacedLevel9OverlapRoundTrip(self):
+        """Two placed writes with overlapping sectors cooperate.
+
+        Mirrors the Level 9 copy-protection trick: two catalogue
+        entries declare ranges that share sectors, but the file data
+        is byte-consistent in the overlap. The later (smaller) write
+        covers the shared tail of the first file exactly.
+        """
+        image = createDiscImage(tracks=80)
+        side = image.sides[0]
+
+        shared = b"\xCC" * 256
+        data_large = b"\xAA" * 256 + shared  # 2 sectors at 100
+        data_small = shared                   # 1 sector at 101
+
+        entry_large = side.addFile(
+            DiscFile("$.BIG", data_large, start_sector=100)
+        )
+        entry_small = side.addFile(
+            DiscFile("$.SMALL", data_small, start_sector=101)
+        )
+
+        assert entry_large.start_sector == 100
+        assert entry_small.start_sector == 101
+        assert side.readFile(entry_large) == data_large
+        assert side.readFile(entry_small) == data_small
+
+    def testUnplacedAllocatesFromTop(self):
+        """Without start_sector, allocation still happens top-down as before."""
+        image = createDiscImage(tracks=80)
+        side = image.sides[0]
+
+        entry = side.addFile(DiscFile("$.NORMAL", b"\xBB" * 256))
+
+        # Top-down allocation on an empty 80-track disc puts the
+        # first file at the highest sector that fits.
+        assert entry.start_sector > 2
+        assert side.readFile(entry) == b"\xBB" * 256
+
+
+# ---------------------------------------------------------------------------
 # deleteFile tests
 # ---------------------------------------------------------------------------
 

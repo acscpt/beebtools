@@ -626,22 +626,47 @@ class DFSSide(DiscSide):
         if len(cat.entries) >= 31:
             raise DFSError("Catalogue is full (31 files maximum)")
 
-        # Allocate sectors from the top of free space downward.
+        # Allocate sectors from the top of free space downward, unless
+        # the caller has supplied an explicit placement hint in which
+        # case we write the file at that exact sector and skip the
+        # free-space check. Placed writes are used for round-tripping
+        # copy-protected discs (Level 9 games) where two catalogue
+        # entries legitimately claim overlapping sector ranges. Byte
+        # consistency in the overlap region is the caller's
+        # responsibility; this method does not validate it.
         data = spec.data
         if len(data) == 0:
             sectors_needed = 0
         else:
             sectors_needed = (len(data) + SECTOR_SIZE - 1) // SECTOR_SIZE
 
-        lowest = self._lowestUsedSector(cat)
-        start_sector = lowest - sectors_needed
+        if spec.start_sector is not None:
+            start_sector = spec.start_sector
 
-        if start_sector < 2:
-            available = (lowest - 2) * SECTOR_SIZE
-            raise DFSError(
-                f"Not enough free space for {len(data)} bytes "
-                f"({available} bytes available)"
-            )
+            if start_sector < 2:
+                raise DFSError(
+                    f"Placed start sector {start_sector} is inside the "
+                    f"catalogue area (sectors 0-1 are reserved)"
+                )
+
+            end_sector = start_sector + sectors_needed - 1
+
+            if end_sector >= cat.disc_size:
+                raise DFSError(
+                    f"Placed file would extend past the end of the "
+                    f"disc (end sector {end_sector}, disc sectors "
+                    f"{cat.disc_size})"
+                )
+        else:
+            lowest = self._lowestUsedSector(cat)
+            start_sector = lowest - sectors_needed
+
+            if start_sector < 2:
+                available = (lowest - 2) * SECTOR_SIZE
+                raise DFSError(
+                    f"Not enough free space for {len(data)} bytes "
+                    f"({available} bytes available)"
+                )
 
         # Build the catalogue entry.
         entry = DFSEntry(
