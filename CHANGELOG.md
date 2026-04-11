@@ -7,6 +7,27 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-11
+
+This release focuses on making the library half of beebtools a
+first-class citizen: a tiered public API, abstract base classes for
+the core contracts, one-call wrappers for every CLI operation, and a
+full review of `docs/library.md`. Two small source-level breaking
+changes; see "Upgrading" below.
+
+### Upgrading from 0.6.0
+
+- **`createEmptyImage` has been renamed to `createImageFile`.**
+  Update call sites accordingly. The new name distinguishes the
+  file-writing wrapper from the in-memory `createImage` factory.
+
+- **`ExtractedFile.file_type`, `CatalogueEntry.file_type`, and
+  `classifyFileType()` now return a `FileType` enum** rather than a
+  free-form string. Replace `result.file_type == "BASIC"` with
+  `result.file_type is FileType.BASIC`. Stringifying an enum member
+  (`str(ft)` or `f"{ft}"`) still yields the historical short label,
+  except that the former `"binary"` value is now `"BINARY"`.
+
 ### Added
 
 - Library functions `readCatalogue`, `deleteFile`, `addFile`, and
@@ -41,25 +62,34 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **BREAKING:** Renamed `createEmptyImage` to `createImageFile`,
+  distinguishing the file-writing wrapper from the in-memory
+  `createImage` factory.
+
+- **BREAKING:** Code comparing `file_type` against string literals
+  (`"BASIC"`, `"BASIC+MC"`, etc.) must now compare against `FileType`
+  enum members. The former `"binary"` value stringifies as `"BINARY"`.
+
 - CLI commands now route every disc operation through `disc.py` wrappers.
   `cmdCat`, `cmdDelete`, `cmdAdd`, and `cmdCreate` no longer open
   images, read catalogues, or serialize bytes directly.
 
-
-- Detection of BASIC with escaped characters now goes through the new 
+- Detection of BASIC with escaped characters now goes through the new
   `basic.hasEscapes()` helper.
 
 - Migrated the internal `DiscEntry`, `DiscCatalogue`, `DiscSide`, and
   `DiscImage` contracts from structural Protocols to abstract base
-  classes. Formats now inherit behaviour. The public API is unchanged, `isinstance()` still works and existing imports still resolve.
+  classes. Formats now inherit behaviour. The public API is unchanged;
+  `isinstance()` still works and existing imports still resolve.
 
-- Renamed `createEmptyImage` to `createImageFile`, distinguishing the
-  file-writing wrapper from the in-memory `createImage` factory.
+- Tiered `__all__` and module docstring group the public API into
+  high-level operations, types, BASIC transforms, and format-specific
+  entry points.
 
-- Code comparing `file_type` against string literals
-  (`"BASIC"`, `"BASIC+MC"`, etc.) must now compare against
-  `FileType` enum members. The former `"binary"` value
-  stringifies as `"BINARY"`.
+- `docs/library.md` reworked: every example uses `with openImage(...)`
+  context managers, Section 9 leads with the format-dispatching
+  factories, and the add-file example uses `side.addFile(spec)` with
+  `tokenize([...])` payloads.
 
 ## [0.6.0] - 2026-04-06
 
