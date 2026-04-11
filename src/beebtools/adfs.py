@@ -27,7 +27,10 @@ from dataclasses import dataclass, replace
 from typing import Iterator, List, Optional, Tuple
 
 from .boot import BootOption
-from .entry import DiscError, DiscFormatError, DiscFile, isBasicExecAddr
+from .entry import (
+    DiscCatalogue, DiscEntry, DiscError, DiscFile, DiscFormatError,
+    DiscImage, DiscSide, isBasicExecAddr,
+)
 
 
 # -----------------------------------------------------------------------
@@ -69,7 +72,7 @@ class ADFSFormatError(ADFSError, DiscFormatError):
 # -----------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class ADFSEntry:
+class ADFSEntry(DiscEntry):
     """One file or directory entry from an ADFS directory.
 
     All numeric fields are decoded from the packed directory entry
@@ -158,8 +161,8 @@ class ADFSFreeSpaceMap:
 
 
 @dataclass(frozen=True)
-class ADFSCatalogue:
-    """Flattened catalogue for duck-typing compatibility with DFSCatalogue.
+class ADFSCatalogue(DiscCatalogue):
+    """Flattened catalogue for one ADFS disc.
 
     Entries from the entire directory tree are flattened into a single
     tuple with full paths in each entry's directory field.
@@ -294,7 +297,7 @@ def _encodeEntry(entry: ADFSEntry) -> bytes:
 # ADFSSide - sector I/O and directory parsing
 # -----------------------------------------------------------------------
 
-class ADFSSide:
+class ADFSSide(DiscSide):
     """Reader for an ADFS disc image filesystem.
 
     ADFS uses a single flat logical sector space regardless of whether
@@ -1377,19 +1380,11 @@ class ADFSSide:
         updated_dir = self._insertEntry(parent_dir, dir_entry)
         self.writeDirectory(parent_sector, updated_dir)
 
-    def compact(self) -> int:
-        """ADFS images do not support compaction.
-
-        Raises ADFSError unconditionally.
-        """
-        raise ADFSError("ADFS images do not support compaction")
-
-
 # -----------------------------------------------------------------------
 # ADFSImage - disc image container
 # -----------------------------------------------------------------------
 
-class ADFSImage:
+class ADFSImage(DiscImage):
     """Read-only ADFS disc image container.
 
     Owns the bytearray backing store and provides an ADFSSide view
@@ -1447,14 +1442,6 @@ class ADFSImage:
     def __getitem__(self, index: int) -> ADFSSide:
         """Return the side at the given index."""
         return self._sides[index]
-
-    def __enter__(self) -> "ADFSImage":
-        """Enter a context manager block. Returns self."""
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        """Exit a context manager block. No-op for in-memory images."""
-        pass
 
 
 # -----------------------------------------------------------------------

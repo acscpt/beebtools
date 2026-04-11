@@ -30,11 +30,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `cmdCat`, `cmdDelete`, `cmdAdd`, and `cmdCreate` no longer open
   images, read catalogues, or serialize bytes directly.
 
-- Deduplicated the format-label dictionary shared by `create` and
-  `build` into a single `_formatLabel` helper in `cli.py`.
 
-- Removed the duplicated `_ESCAPE_RE` regex in `disc.py`; escape
-  detection now goes through the new `basic.hasEscapes()` helper.
+- Detection of BASIC with escaped characters now goes through the new 
+  `basic.hasEscapes()` helper.
+
+- Migrated the internal `DiscEntry`, `DiscCatalogue`, `DiscSide`, and
+  `DiscImage` contracts from structural Protocols to abstract base
+  classes. Formats now inherit behaviour. The public API is unchanged, `isinstance()` still works and existing imports still resolve.
 
 ## [0.6.0] - 2026-04-06
 

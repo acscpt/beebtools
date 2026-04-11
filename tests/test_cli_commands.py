@@ -2034,7 +2034,7 @@ class TestCmdCompact:
         with contextlib.redirect_stdout(buf):
             cmdCreate(args)
 
-        with pytest.raises(Exception, match="do not support compaction"):
+        with pytest.raises(DiscError, match="Compaction is not supported"):
             compactDisc(out)
 
 
@@ -2100,7 +2100,7 @@ class TestCmdMkdir:
         with open(out, "wb") as f:
             f.write(image.serialize())
 
-        with pytest.raises(DFSError):
+        with pytest.raises(DiscError, match="Subdirectories are not supported"):
             makeDirectory(out, "$.GAMES")
 
     def testMkdirViaLibrary(self, tmp_path) -> None:

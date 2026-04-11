@@ -24,7 +24,10 @@ from dataclasses import dataclass, replace
 from typing import Iterator, List, Optional, Tuple
 
 from .boot import BootOption
-from .entry import DiscError, DiscFormatError, DiscFile, isBasicExecAddr
+from .entry import (
+    DiscCatalogue, DiscEntry, DiscError, DiscFile, DiscFormatError,
+    DiscImage, DiscSide, isBasicExecAddr,
+)
 
 
 SECTOR_SIZE = 256
@@ -48,7 +51,7 @@ class DFSFormatError(DFSError, DiscFormatError):
 # -----------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class DFSEntry:
+class DFSEntry(DiscEntry):
     """One file entry from a DFS catalogue.
 
     All numeric fields are decoded from the packed catalogue format
@@ -99,7 +102,7 @@ class DFSEntry:
 
 
 @dataclass(frozen=True)
-class DFSCatalogue:
+class DFSCatalogue(DiscCatalogue):
     """Parsed catalogue for one side of a DFS disc.
 
     The entries tuple preserves on-disc catalogue order (descending start
@@ -122,7 +125,7 @@ class DFSCatalogue:
 # DFSSide - sector I/O and catalogue parsing for one disc side
 # -----------------------------------------------------------------------
 
-class DFSSide:
+class DFSSide(DiscSide):
     """Reader for one side of a DFS disc image.
 
     Provides sector-level access, catalogue parsing with validation, and
@@ -150,13 +153,6 @@ class DFSSide:
     def maxTitleLength(self) -> int:
         """Maximum disc title length for DFS (12 characters)."""
         return 12
-
-    def mkdir(self, path: str) -> None:
-        """DFS does not support subdirectories.
-
-        Raises DFSError unconditionally.
-        """
-        raise DFSError("DFS does not support subdirectories")
 
     # -------------------------------------------------------------------
     # Python data model
@@ -907,7 +903,7 @@ class DFSSide:
 # DFSImage - mutable disc image container
 # -----------------------------------------------------------------------
 
-class DFSImage:
+class DFSImage(DiscImage):
     """Mutable DFS disc image container.
 
     Owns the bytearray backing store and provides DFSSide views for each
@@ -969,14 +965,6 @@ class DFSImage:
     def __getitem__(self, index: int) -> DFSSide:
         """Return the side at the given index."""
         return self._sides[index]
-
-    def __enter__(self) -> "DFSImage":
-        """Enter a context manager block. Returns self."""
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        """Exit a context manager block. No-op for in-memory images."""
-        pass
 
 
 # -----------------------------------------------------------------------

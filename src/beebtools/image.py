@@ -1,18 +1,15 @@
 # SPDX-FileCopyrightText: 2026 Heisenberg (acscpt)
 # SPDX-License-Identifier: MIT
 
-"""Disc image protocols and format auto-detection.
+"""Disc image format dispatch.
 
-Defines the DiscSide and DiscImage structural typing Protocols that
-DFSSide/ADFSSide and DFSImage/ADFSImage satisfy without inheriting.
-Upper layers (disc.py, cli.py) type-hint against these Protocols to
-work uniformly with either format.
+Routes an input path or an output path to the appropriate format
+engine by inspecting its file extension, then delegates to the
+format-specific opener or creator. This keeps the individual
+format engines independent of each other.
 
-Also provides openImage() which detects the filing system format from
-the file extension and delegates to the appropriate format-specific
-opener, and createImage() which creates a blank formatted disc image
-from the extension. This keeps the DFS and ADFS modules independent of
-each other.
+DiscSide and DiscImage are re-exported here for callers that
+historically imported them from this module.
 
 Supported formats:
     .ssd  -- DFS single-sided
@@ -21,146 +18,21 @@ Supported formats:
     .adl  -- ADFS double-sided (old map, small directory)
 """
 
-from typing import Any, Iterator, List, Optional, Protocol, runtime_checkable
-
-from .entry import DiscCatalogue, DiscEntry, DiscFile
-
 from .adfs import (
-    ADFSImage, ADFSFormatError, openAdfsImage,
-    createAdfsImage, ADFS_S_SECTORS, ADFS_M_SECTORS, ADFS_L_SECTORS,
+    ADFS_L_SECTORS, ADFS_M_SECTORS, ADFS_S_SECTORS,
+    createAdfsImage, openAdfsImage,
 )
 from .boot import BootOption
-from .dfs import DFSImage, DFSFormatError, openDiscImage, createDiscImage
+from .dfs import DFSFormatError, createDiscImage, openDiscImage
+from .entry import DiscImage, DiscSide
 
 
-# -----------------------------------------------------------------------
-# Protocols
-# -----------------------------------------------------------------------
-
-@runtime_checkable
-class DiscSide(Protocol):
-    """Structural Protocol for one side of a disc image.
-
-    Both DFSSide and ADFSSide satisfy this Protocol. Upper layers
-    can type-hint against DiscSide to work uniformly with either
-    format without importing the concrete classes.
-    """
-
-    @property
-    def side(self) -> int:
-        """Side number (0 or 1)."""
-        ...
-
-    def readCatalogue(self) -> DiscCatalogue:
-        """Parse and return the disc catalogue.
-
-        Returns a catalogue with title, cycle, boot_option, disc_size,
-        and entries attributes.
-        """
-        ...
-
-    def writeCatalogue(self, catalogue: DiscCatalogue) -> None:
-        """Write a modified catalogue back to the disc image.
-
-        Encodes the catalogue fields and writes them to the appropriate
-        sectors. Clears any cached catalogue so the next read re-parses.
-        """
-        ...
-
-    def readFile(self, entry: DiscEntry) -> bytes:
-        """Read the contents of a file from disc."""
-        ...
-
-    def writeFile(self, entry: DiscEntry, data: bytes) -> None:
-        """Write file data to the sectors allocated for an entry."""
-        ...
-
-    def freeSpace(self) -> int:
-        """Return the amount of free space on this side."""
-        ...
-
-    def addFile(self, spec: DiscFile) -> DiscEntry:
-        """Add a file to this disc side.
-
-        Returns the catalogue entry created for the new file.
-        """
-        ...
-
-    def deleteFile(self, path: str) -> None:
-        """Remove a file from the catalogue by its full path."""
-        ...
-
-    def updateEntry(self, path: str, updated: DiscEntry) -> None:
-        """Replace a catalogue entry with an updated version."""
-        ...
-
-    def renameFile(self, old_path: str, new_path: str) -> None:
-        """Rename a file in the catalogue.
-
-        Both paths must be fully qualified. The file data is not moved.
-        """
-        ...
-
-    def mkdir(self, path: str) -> None:
-        """Create a subdirectory at the given path.
-
-        Raises DiscError on formats that do not support subdirectories.
-        """
-        ...
-
-    def compact(self) -> int:
-        """Defragment file storage by closing gaps between files.
-
-        Returns the number of bytes freed by compaction (zero if
-        already packed). Raises DiscError on formats that do not
-        support compaction.
-        """
-        ...
-
-    @property
-    def maxTitleLength(self) -> int:
-        """Maximum number of characters allowed in a disc title."""
-        ...
-
-    def __iter__(self) -> Iterator[DiscEntry]: ...
-
-    def __len__(self) -> int: ...
-
-    def __getitem__(self, key: str) -> DiscEntry: ...
-
-    def __contains__(self, key: object) -> bool: ...
-
-    def __repr__(self) -> str: ...
-
-
-@runtime_checkable
-class DiscImage(Protocol):
-    """Structural Protocol for a complete disc image.
-
-    Both DFSImage and ADFSImage satisfy this Protocol. Provides
-    access to the per-side readers and serialization.
-    """
-
-    @property
-    def sides(self) -> List[DiscSide]:
-        """List of side readers, one per available disc side."""
-        ...
-
-    def serialize(self) -> bytes:
-        """Return the disc image as immutable bytes."""
-        ...
-
-    def __iter__(self) -> Iterator[Any]: ...
-
-    def __len__(self) -> int: ...
-
-    def __getitem__(self, index: int) -> DiscSide: ...
-
-    def __enter__(self) -> "DiscImage": ...
-
-    def __exit__(self, *exc: object) -> None: ...
-
-    def __repr__(self) -> str: ...
+__all__ = [
+    "DiscImage",
+    "DiscSide",
+    "openImage",
+    "createImage",
+]
 
 
 # Extension-to-format mapping. Extensions are matched case-insensitively.
@@ -179,7 +51,7 @@ def openImage(path: str) -> DiscImage:
         path: Path to a disc image file.
 
     Returns:
-        A DFSImage or ADFSImage depending on the detected format.
+        A disc image of the detected format.
 
     Raises:
         DFSFormatError: If the image format cannot be determined.
@@ -238,7 +110,7 @@ def createImage(
         boot_option: Boot option (0-3).
 
     Returns:
-        A blank DFSImage or ADFSImage depending on the extension.
+        A blank disc image of the format implied by the extension.
 
     Raises:
         DFSFormatError: If the extension is unrecognised.
