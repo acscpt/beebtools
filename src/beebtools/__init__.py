@@ -1,6 +1,106 @@
 # SPDX-FileCopyrightText: 2026 Heisenberg (acscpt)
 # SPDX-License-Identifier: MIT
 
+"""beebtools - BBC Micro DFS and ADFS disc image toolkit.
+
+Supports DFS (.ssd, .dsd) and ADFS (.adf, .adl) disc image formats
+with full read and write support. BBC BASIC programs are detokenized
+to produce LIST-style plain text output, with an optional
+pretty-printer that adds operator spacing and handles copy-protection
+anti-listing traps.
+
+
+Quick start (library)
+---------------------
+
+    from beebtools import extractAll, search, buildImage, readCatalogue
+
+    # List the catalogue of a disc image
+    listings = readCatalogue("mydisc.ssd", inspect=True)
+    for listing in listings:
+        for ce in listing.entries:
+            print(f"{ce.entry.fullName}  {ce.file_type}")
+
+    # Extract every file, writing .inf sidecars and pretty-printed BASIC
+    extractAll("elite.ssd", "output/", pretty=True, inf=True)
+
+    # Search all BASIC programs on a disc for a substring
+    matches = search("games.ssd", "GOTO", ignore_case=True)
+
+    # Build a disc image from a directory of files and .inf sidecars
+    image_bytes = buildImage("src/", "output.ssd", title="MY DISC")
+
+
+Public API tiers
+----------------
+
+Tier 1, high-level operations (start here):
+
+    openImage, createImage, createImageFile
+    readCatalogue, extractFile, extractAll, search, buildImage
+    addFile, deleteFile, renameFile, compactDisc, makeDirectory
+    getTitle, setTitle, getBoot, setBoot, discInfo
+    getFileAttribs, setFileAttribs
+
+Tier 2, types (return values and type hints):
+
+    DiscImage, DiscSide, DiscEntry, DiscCatalogue, DiscFile
+    ExtractedFile, CatalogueListing, CatalogueEntry
+    DiscInfo, FileAttribs, BootOption
+    DiscError, DiscFormatError
+
+Tier 3, BASIC transforms:
+
+    tokenize, detokenize, prettyPrint
+    classifyFileType, looksLikeTokenizedBasic, looksLikePlainText
+    escapeNonAscii, unescapeNonAscii, hasEscapes
+    compactLine, encodeLineRef, decodeLineRef
+
+Tier 4, format-specific:
+
+    DFSEntry, DFSCatalogue, DFSSide, DFSImage
+    DFSError, DFSFormatError
+    openDiscImage, createDiscImage, validateDfsName, splitDfsPath
+
+    ADFSEntry, ADFSCatalogue, ADFSDirectory, ADFSFreeSpaceMap
+    ADFSSide, ADFSImage
+    ADFSError, ADFSFormatError
+    openAdfsImage, createAdfsImage, validateAdfsName
+    ADFS_S_SECTORS, ADFS_M_SECTORS, ADFS_L_SECTORS
+
+    parseInf, formatInf, formatEntryInf, InfData
+    addFileTo, qualifyDiscPath, sortCatalogueEntries
+    writeBasicText, readBasicText
+    isBasicExecAddr, registerCodec
+
+
+CLI usage
+---------
+
+    beebtools cat | search | extract | create | add | delete |
+              rename | build | title | boot | disc | attrib |
+              compact | mkdir
+
+Run `beebtools <command> --help` for the full argument list of each
+subcommand.
+
+
+Modules
+-------
+    entry    -- shared contracts (DiscEntry, DiscSide, DiscImage, ...)
+    boot     -- BootOption enum
+    tokens   -- BBC BASIC II token table and constants
+    inf      -- .inf sidecar file parser and formatter
+    codec    -- "bbc" text codec registration
+    dfs      -- DFS disc image reader and writer (.ssd, .dsd)
+    adfs     -- ADFS disc image reader and writer (.adf, .adl)
+    basic    -- tokenize, detokenize, classify, escape
+    pretty   -- operator spacing and anti-listing trap handling
+    image    -- format dispatch (openImage, createImage)
+    disc     -- high-level orchestration
+    cli      -- command-line interface
+"""
+
 from importlib.metadata import version, PackageNotFoundError
 
 try:
@@ -8,45 +108,6 @@ try:
 except PackageNotFoundError:
     # Package is not installed (e.g. running directly from source tree)
     __version__ = "unknown"
-
-"""
-beebtools - BBC Micro DFS and ADFS disc image tool.
-
-Supports DFS (.ssd, .dsd) and ADFS (.adf, .adl) disc image formats with
-full read and write support. BBC BASIC programs are detokenized to produce
-LIST-style plain text output, with an optional pretty-printer that adds
-operator spacing and handles copy-protection anti-listing traps.
-
-Usage as a library:
-    from beebtools import openImage, detokenize, prettyPrint
-
-    with openImage("mydisc.adf") as image:
-        for side in image:
-            for entry in side.readCatalogue():
-                data = side.readFile(entry)
-                lines = detokenize(data)
-                print("\\n".join(prettyPrint(lines)))
-
-Usage as a CLI tool:
-    beebtools cat     <image>
-    beebtools search  <image> <pattern> [-i] [--pretty]
-    beebtools extract <image> <filename> [-o FILE] [--pretty]
-    beebtools extract <image> -a [-d DIR] [--pretty] [--inf]
-    beebtools create  <output> [--title TITLE] [--boot OPTION]
-    beebtools add     <image> <file> [--name N] [--load L] [--exec E]
-    beebtools delete  <image> <filename>
-    beebtools build   <dir> <output> [--title TITLE] [--boot OPTION]
-
-Modules:
-    tokens        -- BBC BASIC II token table and constants
-    basic         -- BASIC facade: tokenize, detokenize, classify, escape
-    pretty        -- operator spacing and anti-listing trap handling
-    dfs           -- DFS disc image reader and writer (.ssd and .dsd)
-    adfs          -- ADFS disc image reader and writer (.adf and .adl)
-    inf           -- .inf sidecar file parser and formatter
-    disc          -- high-level disc operations (extract, search, build)
-    cli           -- command-line interface
-"""
 
 from .basic import (
     basicProgramSize, compactLine, detokenize, decodeLineRef,
@@ -105,43 +166,84 @@ from .disc import (
 from .cli import main
 
 __all__ = [
-    "detokenize",
-    "decodeLineRef",
-    "tokenize",
-    "encodeLineRef",
-    "compactLine",
-    "prettyPrint",
-    # New DFS types
-    "DFSEntry",
-    "DFSCatalogue",
-    "DFSImage",
-    "DFSSide",
-    "DFSError",
-    "DFSFormatError",
-    "BootOption",
-    # Shared contracts (entry.py)
+    # -------------------------------------------------------------------
+    # Tier 1: high-level operations
+    # -------------------------------------------------------------------
+    "openImage",
+    "createImage",
+    "createImageFile",
+    "readCatalogue",
+    "extractFile",
+    "extractAll",
+    "search",
+    "buildImage",
+    "addFile",
+    "deleteFile",
+    "renameFile",
+    "compactDisc",
+    "makeDirectory",
+    "getTitle",
+    "setTitle",
+    "getBoot",
+    "setBoot",
+    "discInfo",
+    "getFileAttribs",
+    "setFileAttribs",
+
+    # -------------------------------------------------------------------
+    # Tier 2: types
+    # -------------------------------------------------------------------
+    "DiscImage",
+    "DiscSide",
     "DiscEntry",
     "DiscCatalogue",
     "DiscFile",
+    "ExtractedFile",
+    "CatalogueListing",
+    "CatalogueEntry",
+    "DiscInfo",
+    "FileAttribs",
+    "BootOption",
     "DiscError",
     "DiscFormatError",
-    "isBasicExecAddr",
-    "registerCodec",
+
+    # -------------------------------------------------------------------
+    # Tier 3: BASIC transforms
+    # -------------------------------------------------------------------
+    "tokenize",
+    "detokenize",
+    "prettyPrint",
+    "classifyFileType",
+    "looksLikeTokenizedBasic",
+    "looksLikePlainText",
+    "escapeNonAscii",
+    "unescapeNonAscii",
+    "hasEscapes",
+    "compactLine",
+    "encodeLineRef",
+    "decodeLineRef",
+
+    # -------------------------------------------------------------------
+    # Tier 4: format-specific
+    # -------------------------------------------------------------------
+    # DFS
+    "DFSEntry",
+    "DFSCatalogue",
+    "DFSSide",
+    "DFSImage",
+    "DFSError",
+    "DFSFormatError",
     "openDiscImage",
     "createDiscImage",
     "validateDfsName",
     "splitDfsPath",
-    # .inf sidecar format
-    "InfData",
-    "parseInf",
-    "formatInf",
-    # ADFS types
+    # ADFS
     "ADFSEntry",
     "ADFSCatalogue",
     "ADFSDirectory",
     "ADFSFreeSpaceMap",
-    "ADFSImage",
     "ADFSSide",
+    "ADFSImage",
     "ADFSError",
     "ADFSFormatError",
     "openAdfsImage",
@@ -150,49 +252,22 @@ __all__ = [
     "ADFS_S_SECTORS",
     "ADFS_M_SECTORS",
     "ADFS_L_SECTORS",
-    # Image dispatcher
-    "openImage",
-    "createImage",
-    "DiscSide",
-    "DiscImage",
-    # Orchestration (disc.py)
-    "search",
-    "extractAll",
-    "buildImage",
-    "createImageFile",
-    "sortCatalogueEntries",
-    "readCatalogue",
-    "CatalogueListing",
-    "CatalogueEntry",
-    "extractFile",
-    "ExtractedFile",
-    "addFile",
+    # .inf sidecars
+    "parseInf",
+    "formatInf",
+    "formatEntryInf",
+    "InfData",
+    # Low-level disc helpers
     "addFileTo",
     "qualifyDiscPath",
+    "sortCatalogueEntries",
     "writeBasicText",
     "readBasicText",
-    "formatEntryInf",
-    # Disc mutation (disc.py)
-    "getTitle",
-    "setTitle",
-    "getBoot",
-    "setBoot",
-    "discInfo",
-    "DiscInfo",
-    "getFileAttribs",
-    "setFileAttribs",
-    "FileAttribs",
-    "deleteFile",
-    "renameFile",
-    "compactDisc",
-    "makeDirectory",
-    # BASIC facade (basic.py)
-    "looksLikeTokenizedBasic",
-    "looksLikePlainText",
-    "classifyFileType",
-    "escapeNonAscii",
-    "unescapeNonAscii",
-    "hasEscapes",
+    "isBasicExecAddr",
+    "registerCodec",
+
+    # -------------------------------------------------------------------
+    # CLI entry point
+    # -------------------------------------------------------------------
     "main",
 ]
-

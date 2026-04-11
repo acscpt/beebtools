@@ -38,6 +38,9 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `DiscImage` contracts from structural Protocols to abstract base
   classes. Formats now inherit behaviour. The public API is unchanged, `isinstance()` still works and existing imports still resolve.
 
+- Renamed `createEmptyImage` to `createImageFile`, distinguishing the
+  file-writing wrapper from the in-memory `createImage` factory.
+
 ## [0.6.0] - 2026-04-06
 
 ### Added
