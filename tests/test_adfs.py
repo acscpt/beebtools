@@ -2229,7 +2229,7 @@ class TestFormatDetection:
 
 DISCS_DIR = os.path.join(os.path.dirname(__file__), "resources", "discs")
 ALL_ADFS = sorted(
-    glob.glob(os.path.join(DISCS_DIR, "*.[aA][dD][fFlL]"))
+    glob.glob(os.path.join(DISCS_DIR, "**", "*.[aA][dD][fFlL]"), recursive=True)
 )
 adfs_ids = [os.path.basename(p) for p in ALL_ADFS]
 

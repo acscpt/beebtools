@@ -35,11 +35,37 @@ def pytest_addoption(parser: Any) -> None:
 
 
 def pytest_configure(config: Any) -> None:
-    """Attach the report collector when --report is active."""
+    """Generate synthetic test images, then attach the report collector.
+
+    Image generation runs before test collection so that module-level
+    glob calls in the test files find the freshly created images.
+    """
+    _generateSyntheticImages()
+
     if config.getoption("--report", default=False):
         plugin = ReportCollector(config)
         config._report_collector = plugin
         config.pluginmanager.register(plugin, "report_collector")
+
+
+def _generateSyntheticImages() -> None:
+    """Run the synthetic image generator if images are absent."""
+    output_dir = os.path.join(
+        os.path.dirname(__file__), "resources", "discs", "synthetic",
+    )
+
+    marker = os.path.join(output_dir, "standard.ssd")
+    if os.path.exists(marker):
+        return
+
+    import subprocess
+    import sys
+
+    script = os.path.join(os.path.dirname(__file__), "scripts", "create_test_images.py")
+    subprocess.check_call(
+        [sys.executable, script, "--path", output_dir],
+        stdout=subprocess.DEVNULL,
+    )
 
 
 # -----------------------------------------------------------------------
