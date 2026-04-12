@@ -168,7 +168,7 @@ Two archives proved invaluable:
 Together, **2441** disc images spanning decades of BBC Micro software:
 games, utilities, demos, magazines, educational software, and more.
 
-Truly a comprehensive test corpus.
+Truly a comprehensive collection to test against.
 
 ## 4. We did not fail, we just found 41 ways that did not work
 
