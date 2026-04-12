@@ -23,8 +23,8 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `crc` properties plus an `extra_info` dict for arbitrary sidecar keys.
 
 - Experimental `X_START_SECTOR` extra-info key on `.inf` sidecars, read
-  via `InfData.startSector`. Carries the source disc's start sector so
-  a rebuild can place the file at its original location instead of
+  via `InfData.startSector`. Carries the start sector of the file so
+  a rebuild can place it at its original location instead of
   picking a fresh slot from the free-space map. The plain
   `START_SECTOR` form is also accepted and preferred when both keys
   are present (a dual-keyed sidecar emits a `UserWarning` but still
