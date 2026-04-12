@@ -1,8 +1,8 @@
 # add - Add a file to a disc image
 
 ```bash
-beebtools add <image> <file> --name <NAME> [--basic] [--load HEX] [--exec HEX] [--locked]
-beebtools add <image> <file> --inf [--side 0|1]
+beebtools add <image> <file> --name <NAME> [--basic] [--load HEX] [--exec HEX] [--locked] [--strict]
+beebtools add <image> <file> --inf [--side 0|1] [--strict]
 ```
 
 Adds a file to a DFS or ADFS disc image. The format is detected from the image
@@ -34,6 +34,10 @@ already exist - use `beebtools build` or the library `mkdir()` to create them.
 - `--inf` - read metadata from a `.inf` sidecar file instead
 
 - `--side` - disc side for DFS DSD images (default: 0; ignored for ADFS)
+
+- `--strict` - enforce DFS spec-compliance on the filename. Rejects non-printable
+  bytes, `.`, `#`, `*`, `:`, `"`, and space. Default behaviour accepts any 7-bit
+  byte, matching the real Acorn ROM.
 
 ## Examples
 

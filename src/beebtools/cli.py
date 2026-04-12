@@ -8,6 +8,7 @@ and 'build' subcommands and the main() entry point.
 """
 
 import argparse
+import contextlib
 import os
 import re
 import sys
@@ -17,6 +18,7 @@ from typing import Optional
 from .boot import BootOption
 from .entry import DiscError, DiscFile, FileType
 from .inf import parseInf
+from .validation import strictMode
 from .disc import (
     search, extractAll, buildImage, createImageFile,
     readCatalogue,
@@ -387,16 +389,18 @@ def cmdAdd(args: Namespace) -> None:
     original_size = len(data)
 
     try:
-        entry = addFile(
-            args.image,
-            DiscFile(
-                path=disc_path, data=data,
-                load_addr=load_addr, exec_addr=exec_addr,
-                locked=locked,
-            ),
-            side=args.side,
-            retokenize=args.basic,
-        )
+        ctx = strictMode() if getattr(args, "strict", False) else contextlib.nullcontext()
+        with ctx:
+            entry = addFile(
+                args.image,
+                DiscFile(
+                    path=disc_path, data=data,
+                    load_addr=load_addr, exec_addr=exec_addr,
+                    locked=locked,
+                ),
+                side=args.side,
+                retokenize=args.basic,
+            )
     except DiscError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -434,14 +438,16 @@ def cmdBuild(args: Namespace) -> None:
         args: Parsed argparse namespace for the 'build' subcommand.
     """
     try:
-        image_bytes = buildImage(
-            source_dir=args.dir,
-            output_path=args.output,
-            tracks=args.tracks,
-            title=args.title or "",
-            boot_option=args.boot,
-            save=True,
-        )
+        ctx = strictMode() if getattr(args, "strict", False) else contextlib.nullcontext()
+        with ctx:
+            image_bytes = buildImage(
+                source_dir=args.dir,
+                output_path=args.output,
+                tracks=args.tracks,
+                title=args.title or "",
+                boot_option=args.boot,
+                save=True,
+            )
     except DiscError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -731,6 +737,8 @@ def main() -> None:
     p_add.add_argument("--side", type=int, default=0,
                        choices=[0, 1],
                        help="Disc side for DFS (default: 0; ignored for ADFS)")
+    p_add.add_argument("--strict", action="store_true",
+                       help="Enforce DFS spec-compliance on the filename")
 
     # -- delete subcommand --
     p_delete = sub.add_parser("delete", help="Delete a file from a disc image")
@@ -760,6 +768,10 @@ def main() -> None:
     p_build.add_argument("--boot", type=_parseBootOption,
                          default=BootOption.OFF,
                          help="Boot option: OFF, LOAD, RUN, EXEC (or 0-3)")
+    p_build.add_argument("--strict", action="store_true",
+                         help="Enforce DFS spec-compliance on filenames "
+                              "(rejects non-printable bytes, '.', '#', '*', "
+                              "':', '\"', and space)")
 
     # -- title subcommand --
     p_title = sub.add_parser(

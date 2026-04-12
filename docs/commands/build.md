@@ -1,7 +1,7 @@
 # build - Build a disc image from files
 
 ```bash
-beebtools build <dir> <output> [-t 40|80] [--title TITLE] [--boot OFF|LOAD|RUN|EXEC]
+beebtools build <dir> <output> [-t 40|80] [--title TITLE] [--boot OFF|LOAD|RUN|EXEC] [--strict]
 ```
 
 Assembles a disc image from a directory of files with `.inf` sidecars. The
@@ -107,6 +107,20 @@ echo '$.GAMES.ELITE  FFFF0E00 FFFF802B 004000' > working/\$/GAMES/ELITE.inf
 beebtools build working/ mydisc.adf --title "MY DISC"
 ```
 
+## Sector placement hints
+
+When a `.inf` sidecar contains an `X_START_SECTOR` (or `START_SECTOR`) key,
+the builder places the file at that exact sector instead of allocating a fresh
+range. This enables byte-exact round-trips on discs whose catalogue entries
+share sectors (notably Level 9 copy-protected games).
+
+`extract -a --inf` writes `X_START_SECTOR` on every sidecar automatically, so
+the default extract-and-rebuild cycle preserves original sector positions without
+any extra flags.
+
+See [A Field Guide to Non-standard BBC Micro Disc Images](../inf-and-nonstandard-discs.md)
+for the full story.
+
 ## Options
 
 - `-t` / `--tracks` - 40 or 80 tracks (default: 80). For ADFS: 40-track
@@ -116,3 +130,8 @@ beebtools build working/ mydisc.adf --title "MY DISC"
 - `--title` - disc title
 
 - `--boot` - boot option: OFF, LOAD, RUN, or EXEC (numbers 0-3 also accepted)
+
+- `--strict` - enforce DFS spec-compliance on filenames. Rejects non-printable
+  bytes, `.`, `#`, `*`, `:`, `"`, and space. Use when authoring new discs where
+  spec conformance matters. Default behaviour accepts any 7-bit byte, matching
+  the real Acorn ROM.

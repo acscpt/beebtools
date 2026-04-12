@@ -283,6 +283,21 @@ raw = buildImage(source_dir="extracted/", output_path="rebuilt.ssd",
                  tracks=80, boot_option=BootOption.RUN)
 ```
 
+#### Sector placement hints
+
+When a `.inf` sidecar contains an `X_START_SECTOR` (or `START_SECTOR`)
+key, `buildImage()` passes the value through to the format engine as a
+placement hint. DFS honours the hint unconditionally; ADFS honours it
+only when the requested range is wholly free in the free-space map.
+
+This enables byte-exact round-trips on discs whose catalogue entries
+share sectors (notably Level 9 copy-protected games). `extract -a --inf`
+writes `X_START_SECTOR` on every sidecar automatically, so the default
+extract-and-rebuild cycle preserves original sector positions.
+
+See [A Field Guide to Non-standard BBC Micro Disc Images](inf-and-nonstandard-discs.md)
+for the full story on non-standard discs and the `.inf` extension.
+
 ## Creating and building ADFS disc images
 
 ADFS images support hierarchical directories. Files are addressed by full
@@ -397,6 +412,32 @@ renameFile("mydisc.ssd", "$.MYPROG", "T.MYPROG")
 
 On DFS, the directory prefix can change. On ADFS, both names must be in the
 same parent directory.
+
+## Strict validation mode
+
+By default, `beebtools` accepts any 7-bit byte in DFS filenames and
+directory characters, matching the permissive behaviour of real Acorn
+ROMs. This allows round-tripping of disc images that use spec-forbidden
+characters (dots, hashes, control bytes) in filenames.
+
+When authoring new disc images where spec compliance matters, wrap the
+operation in `strictMode()` to enforce the DFS spec range (`0x21-0x7E`)
+and reject `. : " # *` and space.
+
+```python
+from beebtools import strictMode, buildImage
+
+# Default: ROM-faithful, accepts any 7-bit byte in filenames
+buildImage("src/", "out.ssd", save=True)
+
+# Strict: enforce spec-compliance, raises on forbidden characters
+with strictMode():
+    buildImage("src/", "out.ssd", save=True)
+```
+
+`strictMode()` is a context manager backed by `contextvars.ContextVar`,
+so it is thread-safe and async-safe. Every validator in the stack
+consults `isStrict()` when deciding whether to apply spec-only rules.
 
 ## Working with .inf sidecar files
 
