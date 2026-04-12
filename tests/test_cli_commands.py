@@ -18,7 +18,7 @@ from beebtools import BeebToolsWarning
 from beebtools.dfs import createDiscImage, openDiscImage, DFSError
 from beebtools.entry import DiscFile, DiscError
 from beebtools.disc import (
-    extractAll, buildImage,
+    extractAll, buildImage, formatDirectoryInf,
     getTitle, setTitle, getBoot, setBoot, discInfo,
     getFileAttribs, setFileAttribs,
     renameFile, compactDisc, makeDirectory,
@@ -467,6 +467,259 @@ class TestExtractInf:
         for root, dirs, files in os.walk(out_dir):
             for fname in files:
                 assert not fname.endswith(".inf"), f"Unexpected .inf: {fname}"
+
+
+# =======================================================================
+# Directory-level .inf ($.inf)
+# =======================================================================
+
+class TestDirectoryInf:
+
+    def testExtractWritesDollarInf(self, tmp_path) -> None:
+        """extract --inf writes a $.inf alongside the $ directory."""
+        image = createDiscImage(tracks=80, title="MYTITLE", boot_option=BootOption.RUN)
+        side = image.sides[0]
+        side.addFile(DiscFile("$.DATA", b"\x00" * 10))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, write_inf=True)
+
+        inf_path = os.path.join(out_dir, "$.inf")
+        assert os.path.isfile(inf_path)
+
+        with open(inf_path, "r") as f:
+            inf = parseInf(f.readline().strip())
+
+        assert inf.extra_info.get("TITLE") == "MYTITLE"
+        assert inf.extra_info.get("OPT") == "2"
+
+    def testNoDollarInfWithoutFlag(self, tmp_path) -> None:
+        """Without write_inf, no $.inf is written."""
+        image = createDiscImage(tracks=80, title="TEST")
+        side = image.sides[0]
+        side.addFile(DiscFile("$.DATA", b"\x00" * 10))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, write_inf=False)
+
+        assert not os.path.isfile(os.path.join(out_dir, "$.inf"))
+
+    def testBuildReadsDollarInf(self, tmp_path) -> None:
+        """buildImage reads $.inf and applies title and boot option."""
+        image = createDiscImage(tracks=80, title="ORIGINAL", boot_option=BootOption.EXEC)
+        side = image.sides[0]
+        side.addFile(DiscFile("$.DATA", b"\x00" * 10))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        # Rebuild without explicit title/boot -- $.inf is source of truth.
+        rebuilt_bytes = buildImage(
+            source_dir=extract_dir,
+            output_path="rebuilt.ssd",
+            tracks=80,
+        )
+
+        rebuilt_path = str(tmp_path / "rebuilt.ssd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        cat = rebuilt.sides[0].readCatalogue()
+
+        assert cat.title == "ORIGINAL"
+        assert cat.boot_option == BootOption.EXEC
+
+    def testBuildWithExplicitTitleWarns(self, tmp_path) -> None:
+        """Explicit title + $.inf emits a warning; .inf wins."""
+        image = createDiscImage(tracks=80, title="INFVALUE")
+        side = image.sides[0]
+        side.addFile(DiscFile("$.DATA", b"\x00" * 10))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        with pytest.warns(BeebToolsWarning, match="using TITLE from .inf"):
+            rebuilt_bytes = buildImage(
+                source_dir=extract_dir,
+                output_path="rebuilt.ssd",
+                tracks=80,
+                title="OVERRIDE",
+            )
+
+        rebuilt_path = str(tmp_path / "rebuilt.ssd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        cat = rebuilt.sides[0].readCatalogue()
+
+        assert cat.title == "INFVALUE"
+
+    def testBuildForceOverridesInf(self, tmp_path) -> None:
+        """force=True makes explicit title/boot override $.inf."""
+        image = createDiscImage(tracks=80, title="INFVALUE", boot_option=BootOption.LOAD)
+        side = image.sides[0]
+        side.addFile(DiscFile("$.DATA", b"\x00" * 10))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        rebuilt_bytes = buildImage(
+            source_dir=extract_dir,
+            output_path="rebuilt.ssd",
+            tracks=80,
+            title="FORCED",
+            boot_option=BootOption.EXEC,
+            force=True,
+        )
+
+        rebuilt_path = str(tmp_path / "rebuilt.ssd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        cat = rebuilt.sides[0].readCatalogue()
+
+        assert cat.title == "FORCED"
+        assert cat.boot_option == BootOption.EXEC
+
+    def testBuildWithoutDollarInfUsesExplicit(self, tmp_path) -> None:
+        """When no $.inf exists, explicit title/boot are used."""
+        # Create source tree manually with a file .inf but no $.inf.
+        src = str(tmp_path / "src")
+        dollar = os.path.join(src, "$")
+        os.makedirs(dollar)
+
+        with open(os.path.join(dollar, "DATA.bin"), "wb") as f:
+            f.write(b"\x00" * 10)
+
+        inf_line = formatInf("$", "DATA", 0, 0, 10)
+        with open(os.path.join(dollar, "DATA.bin.inf"), "w") as f:
+            f.write(inf_line + "\n")
+
+        rebuilt_bytes = buildImage(
+            source_dir=src,
+            output_path="rebuilt.ssd",
+            tracks=80,
+            title="EXPLICIT",
+            boot_option=BootOption.RUN,
+        )
+
+        rebuilt_path = str(tmp_path / "rebuilt.ssd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        cat = rebuilt.sides[0].readCatalogue()
+
+        assert cat.title == "EXPLICIT"
+        assert cat.boot_option == BootOption.RUN
+
+    def testDsdPerSideDollarInf(self, tmp_path) -> None:
+        """DSD extract writes $.inf per side; rebuild reads both."""
+        from dataclasses import replace as dc_replace
+        from beebtools.image import createImage
+
+        image = createImage("test.dsd", tracks=80, title="SIDE0T")
+        image.sides[0].addFile(DiscFile("$.F0", b"\x00" * 10))
+        image.sides[1].addFile(DiscFile("$.F1", b"\xFF" * 10))
+
+        # Set side 1 title differently.
+        cat1 = image.sides[1].readCatalogue()
+        image.sides[1].writeCatalogue(dc_replace(cat1, title="SIDE1T"))
+
+        img_path = str(tmp_path / "test.dsd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        # Verify per-side $.inf files exist.
+        assert os.path.isfile(os.path.join(extract_dir, "side0", "$.inf"))
+        assert os.path.isfile(os.path.join(extract_dir, "side1", "$.inf"))
+
+        # Rebuild and check per-side titles survived.
+        rebuilt_bytes = buildImage(
+            source_dir=extract_dir,
+            output_path="rebuilt.dsd",
+            tracks=80,
+        )
+
+        rebuilt_path = str(tmp_path / "rebuilt.dsd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        assert rebuilt.sides[0].readCatalogue().title == "SIDE0T"
+        assert rebuilt.sides[1].readCatalogue().title == "SIDE1T"
+
+    def testFormatDirectoryInfSyntax1(self) -> None:
+        """formatDirectoryInf emits syntax 1 with zeroed hex fields."""
+        line = formatDirectoryInf("MY DISC", BootOption.RUN)
+
+        inf = parseInf(line)
+        assert inf.load_addr == 0
+        assert inf.exec_addr == 0
+        assert inf.length == 0
+        assert inf.extra_info["TITLE"] == "MY DISC"
+        assert inf.extra_info["OPT"] == "2"
+
+    def testFormatDirectoryInfEmptyTitle(self) -> None:
+        """Empty title omits the TITLE key."""
+        line = formatDirectoryInf("", BootOption.OFF)
+
+        inf = parseInf(line)
+        assert "TITLE" not in inf.extra_info
+        assert inf.extra_info["OPT"] == "0"
+
+    def testAdfsDirectoryInfWritten(self, tmp_path) -> None:
+        """ADFS extract writes .inf sidecars for subdirectory entries."""
+        from beebtools.image import createImage
+
+        image = createImage("test.adf", tracks=80, title="ADFSTEST")
+        side = image.sides[0]
+        side.mkdir("$.GAMES")
+        side.addFile(DiscFile("$.GAMES.ELITE", b"\xFF" * 100,
+                     load_addr=0x1900, exec_addr=0x1900))
+
+        img_path = str(tmp_path / "test.adf")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, write_inf=True)
+
+        # The GAMES directory should have a .inf alongside it.
+        dir_inf_path = os.path.join(out_dir, "$", "GAMES.inf")
+        assert os.path.isfile(dir_inf_path)
+
+        with open(dir_inf_path, "r") as f:
+            inf = parseInf(f.readline().strip())
+
+        assert inf.directory == "$"
+        assert inf.name == "GAMES"
 
 
 # =======================================================================

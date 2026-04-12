@@ -446,9 +446,10 @@ def cmdBuild(args: Namespace) -> None:
                 source_dir=args.dir,
                 output_path=args.output,
                 tracks=args.tracks,
-                title=args.title or "",
+                title=args.title,
                 boot_option=args.boot,
                 save=True,
+                force=getattr(args, "force", False),
             )
     except DiscError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -784,10 +785,15 @@ def main() -> None:
                          help="Track count (default: 80). "
                               "For ADFS: 40t .adf=160K, 80t .adf=320K, "
                               ".adl=640K")
-    p_build.add_argument("--title", help="Disc title")
+    p_build.add_argument("--title", default=None,
+                         help="Disc title (overrides $.inf when --force is set)")
     p_build.add_argument("--boot", type=_parseBootOption,
-                         default=BootOption.OFF,
-                         help="Boot option: OFF, LOAD, RUN, EXEC (or 0-3)")
+                         default=None,
+                         help="Boot option: OFF, LOAD, RUN, EXEC (or 0-3) "
+                              "(overrides $.inf when --force is set)")
+    p_build.add_argument("--force", action="store_true",
+                         help="Override $.inf disc metadata with "
+                              "explicit --title/--boot values")
     p_build.add_argument("--strict", action="store_true",
                          help="Enforce DFS spec-compliance on filenames "
                               "(rejects non-printable bytes, '.', '#', '*', "

@@ -407,6 +407,25 @@ class TestRoundTrip:
         assert result.extra_info == extra
         assert result.crc == 0x1A2B
 
+    def testExtraInfoValueWithSpaceRoundTrip(self) -> None:
+        """Extra info values containing spaces round-trip via %20 encoding."""
+        extra = {"TITLE": "MY DISC"}
+        line = formatInf("$", "BOOT", 0xFFFF1900, 0xFFFF8023, 0x0A00,
+                         extra_info=extra)
+
+        assert "MY%20DISC" in line
+
+        result = parseInf(line)
+        assert result.extra_info["TITLE"] == "MY DISC"
+
+    def testExtraInfoValueWithPercentRoundTrip(self) -> None:
+        """A literal % in an extra info value round-trips via %25 encoding."""
+        extra = {"TITLE": "100%"}
+        line = formatInf("$", "BOOT", 0, 0, 0x100, extra_info=extra)
+
+        result = parseInf(line)
+        assert result.extra_info["TITLE"] == "100%"
+
     def testDfsNameWithDotsRoundTrip(self) -> None:
         """A DFS name containing literal dots stays together on round-trip."""
         line = formatInf("$", "B1.1", 0xFFFF1900, 0xFFFF8023, 0x100)

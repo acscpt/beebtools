@@ -477,7 +477,7 @@ def parseInf(line: str) -> InfData:
         # can contain an '='.
         if _isExtraInfoToken(token):
             key, _, value = token.partition("=")
-            extra_info[key] = value
+            extra_info[key] = _decodePercentEscapes(value)
             idx += 1
 
             # After an extra info field, everything else must be
@@ -812,6 +812,9 @@ def formatInf(
 
     if extra_info:
         for key, value in extra_info.items():
-            parts.append(f"{key}={value}")
+            # Percent-encode any bytes in the value that would break
+            # whitespace-delimited tokenization on re-parse (space,
+            # control chars, DQUOTE, percent itself).
+            parts.append(f"{key}={_percentEncode(value, always_encode=' ')}")
 
     return " ".join(parts)
