@@ -275,7 +275,7 @@ class TestFormatSyntax1:
         line = formatInf(
             "$", "BOOT",
             0xFFFF1900, 0xFFFF8023, 0x00000A00,
-            locked=True,
+            access_byte=0x08,
         )
 
         assert line == "$.BOOT FFFF1900 FFFF8023 00000A00 08"
@@ -367,7 +367,7 @@ class TestRoundTrip:
 
     def testLockedEntry(self) -> None:
         """The locked flag survives a format-parse cycle."""
-        line = formatInf("T", "PROG", 0x0E00, 0x8023, 0x1400, locked=True)
+        line = formatInf("T", "PROG", 0x0E00, 0x8023, 0x1400, access_byte=0x08)
         result = parseInf(line)
 
         assert result.directory == "T"
@@ -454,6 +454,107 @@ class TestRoundTrip:
                 f"Directory byte 0x{code:02X} did not round-trip"
             )
             assert result.name == "FILE"
+
+
+# =======================================================================
+# Access byte (full 8-bit support)
+# =======================================================================
+
+class TestAccessByte:
+    """Full 8-bit access byte through parse, format, and InfData."""
+
+    def testParseHexAccessBytePreservesAllBits(self) -> None:
+        """Syntax 1 hex access byte preserves all 8 bits, not just bit 3."""
+        result = parseInf("$.FILE FFFF1900 FFFF8023 00000A00 FF")
+
+        assert result.access_byte == 0xFF
+
+    def testParseAdfsSymbolicAccess(self) -> None:
+        """Syntax 3 ADFS symbolic access sets correct bits."""
+        result = parseInf("$.FILE RWL")
+
+        assert result.access_byte == 0x0B  # R=01 | W=02 | L=08
+
+    def testParseAdfsFullSymbolicAccess(self) -> None:
+        """All eight ADFS symbolic bits are decoded correctly."""
+        result = parseInf("$.FILE RWELrwel")
+
+        assert result.access_byte == 0xFF
+
+    def testParseDfsLockedSetsOnlyBit3(self) -> None:
+        """DFS 'L' shorthand sets only bit 3 of the access byte."""
+        result = parseInf("$.BOOT FFFF1900 FFFF8023 L")
+
+        assert result.access_byte == 0x08
+
+    def testParseUnlockedAccessByteIsZero(self) -> None:
+        """An unlocked syntax 1 entry has access_byte 0."""
+        result = parseInf("$.BOOT FFFF1900 FFFF8023 00000A00 00")
+
+        assert result.access_byte == 0x00
+
+    def testLockedPropertyReadsBit3(self) -> None:
+        """The locked property returns True when bit 3 is set."""
+        result = parseInf("$.FILE FFFF1900 FFFF8023 00000A00 3F")
+
+        assert result.locked is True
+        assert result.access_byte == 0x3F
+
+    def testLockedPropertyFalseWhenBit3Clear(self) -> None:
+        """The locked property returns False even with other bits set."""
+        result = parseInf("$.FILE FFFF1900 FFFF8023 00000A00 37")
+
+        assert result.locked is False
+        assert result.access_byte == 0x37
+
+    def testFormatEmitsFullAccessByte(self) -> None:
+        """formatInf emits all 8 bits as a 2-digit hex field."""
+        line = formatInf("$", "FILE", 0x1900, 0x8023, 0x100, access_byte=0xFF)
+
+        assert line.endswith("FF")
+
+    def testFormatEmitsAdfsOwnerBits(self) -> None:
+        """ADFS owner RWE bits (no lock) emit as 07."""
+        line = formatInf("$", "FILE", 0x1900, 0x8023, 0x100, access_byte=0x07)
+
+        assert "07" in line
+
+    def testRoundTripAdfsAccessByte(self) -> None:
+        """A full ADFS access byte survives format -> parse."""
+        original_access = 0xB7  # RWE owner + rwe others + L (bit 4 clear)
+        line = formatInf("$", "FILE", 0x1900, 0x8023, 0x100,
+                         access_byte=original_access)
+        result = parseInf(line)
+
+        assert result.access_byte == original_access
+
+    def testRoundTripDfsLockedAccessByte(self) -> None:
+        """DFS locked (0x08) survives format -> parse."""
+        line = formatInf("$", "BOOT", 0xFFFF1900, 0xFFFF8023, 0x0A00,
+                         access_byte=0x08)
+        result = parseInf(line)
+
+        assert result.access_byte == 0x08
+        assert result.locked is True
+
+    def testRoundTripDfsUnlockedAccessByte(self) -> None:
+        """DFS unlocked (0x00) survives format -> parse."""
+        line = formatInf("$", "BOOT", 0xFFFF1900, 0xFFFF8023, 0x0A00,
+                         access_byte=0x00)
+        result = parseInf(line)
+
+        assert result.access_byte == 0x00
+        assert result.locked is False
+
+    def testRoundTripEveryBitPattern(self) -> None:
+        """All 256 possible access byte values round-trip correctly."""
+        for access in range(256):
+            line = formatInf("$", "FILE", 0, 0, 0x100, access_byte=access)
+            result = parseInf(line)
+
+            assert result.access_byte == access, (
+                f"Access byte 0x{access:02X} did not round-trip"
+            )
 
 
 # =======================================================================

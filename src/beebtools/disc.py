@@ -185,7 +185,7 @@ def formatEntryInf(entry: DiscEntry) -> str:
     return formatInf(
         entry.directory, entry.name,
         entry.load_addr, entry.exec_addr,
-        entry.length, entry.locked,
+        entry.length, access_byte=entry.accessByte,
         extra_info=extras if extras else None,
     )
 

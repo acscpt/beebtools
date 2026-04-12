@@ -142,6 +142,17 @@ class DiscEntry(ABC):
     start_sector: int
 
     @property
+    def accessByte(self) -> int:
+        """Return the 8-bit access byte for this entry.
+
+        Default implementation returns 0x08 if locked, 0x00 otherwise.
+        Format engines with richer access bits (ADFS) override this
+        to return the full access byte from the directory entry.
+        """
+
+        return 0x08 if self.locked else 0x00
+
+    @property
     @abstractmethod
     def fullName(self) -> str:
         """Return the full path (directory + name) for this entry."""
