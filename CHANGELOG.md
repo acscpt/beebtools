@@ -9,6 +9,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `BeebToolsWarning` warning category in the new `shared.py`
+  cross-cutting module. All library diagnostics (missing `.inf`
+  sidecars, malformed catalogue fields, BASIC line compaction) are
+  emitted as `BeebToolsWarning` via Python's standard `warnings`
+  module. Callers capture them with `warnings.catch_warnings()`.
+
 - `strictMode()` context manager and `isStrict()` accessor on the public
   API, backed by `contextvars.ContextVar`. Scopes spec-compliance checks
   to a block of code so validators can consult the current setting
@@ -43,6 +49,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   allocation when it would overlap a directory or another file.
 
 ### Changed
+
+- **BREAKING**: `buildImage()` no longer accepts the `warnings`
+  parameter. Threading a mutable list through the call stack was an
+  anti-pattern that polluted the public API. Diagnostics are now emitted
+  as `BeebToolsWarning` via the standard `warnings` module. Callers that
+  previously passed a list should use `warnings.catch_warnings(record=True)`
+  instead.
 
 - `validateDfsName()` default behaviour relaxed to accept any 7-bit byte
   in filenames and directory characters, including control bytes and

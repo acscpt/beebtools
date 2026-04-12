@@ -439,6 +439,25 @@ with strictMode():
 so it is thread-safe and async-safe. Every validator in the stack
 consults `isStrict()` when deciding whether to apply spec-only rules.
 
+## Capturing warnings
+
+`beebtools` emits diagnostics (missing `.inf` sidecars, malformed
+catalogue fields, BASIC line compaction) as `BeebToolsWarning` via
+Python's standard `warnings` module. By default these print to stderr.
+To capture them programmatically, use `warnings.catch_warnings()`:
+
+```python
+import warnings
+from beebtools import buildImage, BeebToolsWarning
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always", BeebToolsWarning)
+    raw = buildImage("src/", "out.ssd", save=True)
+
+for w in caught:
+    print(w.message)
+```
+
 ## Working with .inf sidecar files
 
 The `.inf` format is the standard BBC Micro community interchange format for

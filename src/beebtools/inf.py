@@ -30,6 +30,8 @@ reading and writing the actual `.inf` files on disc.
 """
 
 import warnings as _warnings
+
+from .shared import BeebToolsWarning
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -156,7 +158,10 @@ class InfData:
                 f"{self.extra_info[INF_START_SECTOR]!r} and "
                 f"{INF_X_START_SECTOR}="
                 f"{self.extra_info[INF_X_START_SECTOR]!r}; "
-                f"only one should be present, using the plain form",
+                f"only one should be present, using "
+                f"{INF_START_SECTOR}="
+                f"{self.extra_info[INF_START_SECTOR]!r}",
+                BeebToolsWarning,
                 stacklevel=2,
             )
 
@@ -176,6 +181,7 @@ class InfData:
                 f".inf {key}={value!r} for {self.fullName!r} is not a "
                 f"valid integer, ignoring and falling back to "
                 f"auto-allocation",
+                BeebToolsWarning,
                 stacklevel=2,
             )
             return None
@@ -185,6 +191,7 @@ class InfData:
                 f".inf {key}={value!r} for {self.fullName!r} is "
                 f"negative, ignoring and falling back to "
                 f"auto-allocation",
+                BeebToolsWarning,
                 stacklevel=2,
             )
             return None

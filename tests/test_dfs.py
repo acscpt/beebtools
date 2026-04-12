@@ -204,7 +204,7 @@ def _blankSsd(tracks: int = 80) -> bytearray:
 
     Writes a valid disc_size into the sector 1 descriptor and byte 7
     so that DFSSide.readCatalogue() does not reconcile the metadata
-    against the backing length and emit a UserWarning. Tests that
+    against the backing length and emit a BeebToolsWarning. Tests that
     want to simulate a malformed disc_size field can overwrite those
     bytes explicitly.
     """

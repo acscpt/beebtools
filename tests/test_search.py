@@ -55,7 +55,7 @@ def _makeSector1(file_data_len: int, exec_addr: int = 0x00008023, start_sector: 
     buf = bytearray(SECTOR_SIZE)
     buf[5] = 1 * 8  # one file
     # disc_size: 800 sectors (80-track SSD) so DFSSide._reconcileDiscSize
-    # does not trigger a UserWarning on this synthetic image.
+    # does not trigger a BeebToolsWarning on this synthetic image.
     buf[6] = (800 >> 8) & 0x03
     buf[7] = 800 & 0xFF
     length_lo = file_data_len & 0xFFFF

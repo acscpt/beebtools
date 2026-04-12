@@ -84,7 +84,7 @@ def _makeSsdImage(filename: str, file_data: bytes, directory: str = "$") -> byte
 
     # Descriptor: disc_size = 800 sectors (80 tracks) in bits 0-1 and
     # sec1[7]. Needed so DFSSide.readCatalogue() does not reconcile
-    # the metadata against the backing length and emit a UserWarning.
+    # the metadata against the backing length and emit a BeebToolsWarning.
     image[off + 6] = 0x03
     image[off + 7] = 0x20
 

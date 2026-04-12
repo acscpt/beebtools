@@ -10,6 +10,7 @@ DFS and ADFS access shorthand, and preservation of KEY=value extra info.
 
 import pytest
 
+from beebtools import BeebToolsWarning
 from beebtools.inf import InfData, parseInf, formatInf
 
 
@@ -484,7 +485,7 @@ class TestStartSector:
             "START_SECTOR=7 X_START_SECTOR=99"
         )
 
-        with pytest.warns(UserWarning, match="both"):
+        with pytest.warns(BeebToolsWarning, match="both"):
             value = result.startSector
 
         assert value == 7
@@ -495,7 +496,7 @@ class TestStartSector:
             "$.BOOT FFFF1900 FFFF8023 00000A00 00 X_START_SECTOR=notanumber"
         )
 
-        with pytest.warns(UserWarning, match="not a.*valid integer"):
+        with pytest.warns(BeebToolsWarning, match="not a.*valid integer"):
             value = result.startSector
 
         assert value is None
@@ -506,7 +507,7 @@ class TestStartSector:
             "$.BOOT FFFF1900 FFFF8023 00000A00 00 X_START_SECTOR=-5"
         )
 
-        with pytest.warns(UserWarning, match="negative"):
+        with pytest.warns(BeebToolsWarning, match="negative"):
             value = result.startSector
 
         assert value is None

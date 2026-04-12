@@ -21,12 +21,13 @@ All operations that span more than one of these belong here.
 
 import os
 import re
-import sys
+import warnings as _warnings
 from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from .boot import BootOption
 from .entry import DiscEntry, DiscFile, DiscError, FileType, isBasicExecAddr
+from .shared import BeebToolsWarning
 from .basic import (
     basicProgramSize, compactLine, detokenize, tokenize,
     escapeNonAscii, unescapeNonAscii, hasEscapes,
@@ -904,7 +905,6 @@ def buildImage(
     tracks: int = 80,
     title: str = "",
     boot_option: BootOption = BootOption.OFF,
-    warnings: Optional[List[str]] = None,
     save: bool = False,
 ) -> bytes:
     """Build a disc image from a directory of files with .inf sidecars.
@@ -922,9 +922,9 @@ def buildImage(
 
     Files without a .inf sidecar are skipped with a warning. BASIC
     programs compacted to fit the 255-byte line limit also emit
-    warnings. If the caller passes a warnings list, every warning is
-    appended to it silently; otherwise warnings are printed to stderr
-    (the pre-existing behaviour).
+    warnings. Warnings are emitted via the standard warnings module
+    as BeebToolsWarning. Callers who need to capture them
+    programmatically can use warnings.catch_warnings(record=True).
 
     Args:
         source_dir:  Path to the root directory of extracted files.
@@ -933,8 +933,6 @@ def buildImage(
         tracks:      Number of tracks (40 or 80).
         title:       Disc title (up to 12 characters).
         boot_option: Boot option (0-3).
-        warnings:    Optional list. When provided, build-time warnings
-                     are appended to it instead of printed to stderr.
         save:        When True, the assembled image is also written to
                      output_path. Default False, in which case no file
                      is written and the caller is responsible for
@@ -954,13 +952,11 @@ def buildImage(
     )
 
     if len(image) > 1:
-        # Double-sided: expect side0/ and side1/ subdirectories.
         for i, side in enumerate(image):
             side_path = os.path.join(source_dir, f"side{i}")
-            _walkSourceTree(side, side_path, warnings=warnings)
+            _walkSourceTree(side, side_path)
     else:
-        # Single-sided: the source_dir itself holds the directory tree.
-        _walkSourceTree(image[0], source_dir, warnings=warnings)
+        _walkSourceTree(image[0], source_dir)
 
     image_bytes = image.serialize()
 
@@ -971,22 +967,8 @@ def buildImage(
     return image_bytes
 
 
-def _emitWarning(message: str, warnings: Optional[List[str]]) -> None:
-    """Route a build warning to the caller's list or to stderr.
-
-    Library callers who pass a warnings list get every message
-    appended to it; callers who pass None get the historical
-    stderr-printing behaviour.
-    """
-    if warnings is not None:
-        warnings.append(message)
-    else:
-        print(f"Warning: {message}", file=sys.stderr)
-
-
 def _collectSourceFiles(
     fs_dir: str,
-    warnings: Optional[List[str]] = None,
 ) -> List[Tuple[str, str, InfData]]:
     """Walk a filesystem tree and collect (fs_path, fs_leaf, inf) tuples.
 
@@ -998,9 +980,7 @@ def _collectSourceFiles(
     from the (possibly sanitised) filesystem names.
 
     Args:
-        fs_dir:   Root filesystem directory to walk.
-        warnings: Optional list of warnings to append to when a .inf
-                  sidecar is missing.
+        fs_dir: Root filesystem directory to walk.
 
     Returns:
         List of (fs_path, fs_leaf_name, InfData) tuples, sorted by
@@ -1030,8 +1010,10 @@ def _collectSourceFiles(
 
             inf_path = path + ".inf"
             if not os.path.isfile(inf_path):
-                _emitWarning(
-                    f"no .inf sidecar for {path}, skipping", warnings,
+                _warnings.warn(
+                    f"no .inf sidecar for {path}, skipping",
+                    BeebToolsWarning,
+                    stacklevel=4,
                 )
                 continue
 
@@ -1041,8 +1023,10 @@ def _collectSourceFiles(
             try:
                 inf = parseInf(inf_line)
             except ValueError as exc:
-                _emitWarning(
-                    f"bad .inf sidecar {inf_path}: {exc}", warnings,
+                _warnings.warn(
+                    f"bad .inf sidecar {inf_path}: {exc}",
+                    BeebToolsWarning,
+                    stacklevel=4,
                 )
                 continue
 
@@ -1107,7 +1091,6 @@ def _walkSourceTree(
     side: DiscSide,
     fs_dir: str,
     disc_parent: str = "",
-    warnings: Optional[List[str]] = None,
 ) -> None:
     """Build a disc side from a filesystem tree of data + .inf sidecars.
 
@@ -1142,11 +1125,10 @@ def _walkSourceTree(
         fs_dir:      Filesystem directory to walk.
         disc_parent: Unused; retained for backward compatibility with
                      the previous recursive signature.
-        warnings:    Optional list that collects build warnings.
     """
 
     # Pass 1: collect every source file with its .inf metadata.
-    records = _collectSourceFiles(fs_dir, warnings=warnings)
+    records = _collectSourceFiles(fs_dir)
 
     # Auto-create every ADFS parent directory referenced by the records.
     _ensureAdfsDirs(side, [rec[2].directory for rec in records])
@@ -1213,10 +1195,11 @@ def _walkSourceTree(
                 ) from exc
 
             for w in compact_warnings:
-                _emitWarning(
+                _warnings.warn(
                     f"side {side.side} {inf.fullName}: "
                     f"compacted to fit ({w})",
-                    warnings,
+                    BeebToolsWarning,
+                    stacklevel=2,
                 )
 
         side.addFile(DiscFile(

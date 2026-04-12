@@ -12,12 +12,14 @@ import contextlib
 import os
 import re
 import sys
+import warnings
 from argparse import Namespace
 from typing import Optional
 
 from .boot import BootOption
 from .entry import DiscError, DiscFile, FileType
 from .inf import parseInf
+from .shared import BeebToolsWarning
 from .validation import strictMode
 from .disc import (
     search, extractAll, buildImage, createImageFile,
@@ -641,8 +643,26 @@ def cmdMkdir(args: Namespace) -> None:
     print(f"Created directory {args.path}")
 
 
+_default_formatwarning = warnings.formatwarning
+
+
+def _formatWarning(
+    message: object,
+    category: type,
+    filename: str,
+    lineno: int,
+    line: Optional[str] = None,
+) -> str:
+    """Format BeebToolsWarning for clean CLI output."""
+    if issubclass(category, BeebToolsWarning):
+        return f"Warning: {message}\n"
+    return _default_formatwarning(message, category, filename, lineno, line)
+
+
 def main() -> None:
     """CLI entry point."""
+    warnings.formatwarning = _formatWarning
+
     parser = argparse.ArgumentParser(
         description=(
             "BBC Micro disc image tool. "

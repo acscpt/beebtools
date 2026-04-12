@@ -14,6 +14,7 @@ from argparse import Namespace
 
 import pytest
 
+from beebtools import BeebToolsWarning
 from beebtools.dfs import createDiscImage, openDiscImage, DFSError
 from beebtools.entry import DiscFile, DiscError
 from beebtools.disc import (
@@ -562,13 +563,8 @@ class TestBuildImage:
         with open(os.path.join(d, "ORPHAN.bin"), "wb") as f:
             f.write(b"\x00" * 10)
 
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
+        with pytest.warns(BeebToolsWarning, match="ORPHAN"):
             rebuilt_bytes = buildImage(src, "empty.ssd", tracks=80)
-
-        # Should warn about missing .inf.
-        assert "Warning" in err.getvalue()
-        assert "ORPHAN" in err.getvalue()
 
         # Image should have no files.
         rebuilt_path = str(tmp_path / "empty.ssd")
@@ -1179,12 +1175,8 @@ class TestBuildAdfsImage:
         with open(os.path.join(d, "ORPHAN.bin"), "wb") as f:
             f.write(b"\x00" * 50)
 
-        buf = io.StringIO()
-        with contextlib.redirect_stderr(buf):
+        with pytest.warns(BeebToolsWarning, match="skipping"):
             image_bytes = buildImage(source_dir=src, output_path="skip.adf")
-
-        assert "Warning" in buf.getvalue()
-        assert "skipping" in buf.getvalue()
 
         # Image should still be valid with no files.
         out = str(tmp_path / "skip.adf")

@@ -29,6 +29,7 @@ from .entry import (
     DiscCatalogue, DiscEntry, DiscError, DiscFile, DiscFormatError,
     DiscImage, DiscSide, isBasicExecAddr,
 )
+from .shared import BeebToolsWarning
 from .validation import isStrict
 
 
@@ -352,6 +353,7 @@ class DFSSide(DiscSide):
             f"a 40- or 80-track sector count; trusting the physical "
             f"image length and using {derived} sectors "
             f"({derived_tracks} tracks) instead",
+            BeebToolsWarning,
             stacklevel=3,
         )
 

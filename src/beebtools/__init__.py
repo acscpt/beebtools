@@ -122,6 +122,7 @@ from .entry import (
     DiscEntry, DiscCatalogue, DiscFile, DiscError, DiscFormatError,
     FileType, isBasicExecAddr,
 )
+from .shared import BeebToolsWarning
 from .validation import strictMode, isStrict
 from .codec import registerCodec
 
@@ -213,6 +214,7 @@ __all__ = [
     "FileType",
     "DiscError",
     "DiscFormatError",
+    "BeebToolsWarning",
     "strictMode",
     "isStrict",
 
