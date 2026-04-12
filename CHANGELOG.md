@@ -13,12 +13,15 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   API, backed by `contextvars.ContextVar`. Scopes spec-compliance checks
   to a block of code so validators can consult the current setting
   without threading a `strict` parameter through every call site.
+
 - `.inf` sidecar parser and formatter now implement the full stardot
   `inf_format` spec: quoted string fields with RFC 3986 percent-encoding,
   syntax 1/2/3 forms, 6- and 8-digit hex with `FF`-prefix sign extension,
   symbolic ADFS access strings, and `KEY=value` extra-info pass-through.
+
 - `InfData` gains `fullName`, `nameBytes`, `directoryBytes`, `access`,
   `crc` properties plus an `extra_info` dict for arbitrary sidecar keys.
+
 - Experimental `X_START_SECTOR` extra-info key on `.inf` sidecars, read
   via `InfData.startSector`. Carries the source disc's start sector so
   a rebuild can place the file at its original location instead of
@@ -31,6 +34,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   byte-exact, which closes the last round-trip gap for Level 9
   copy-protected discs whose catalogue entries legitimately declare
   overlapping sector ranges.
+
 - `DiscFile.start_sector` placement hint on the transport dataclass.
   DFS `addFile` honours the hint and writes the file at the exact
   sector, rejecting values inside the catalogue area or past the end
@@ -45,20 +49,24 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spec-forbidden punctuation. Wrap a call in `with strictMode():` to
   opt in to the spec-compliance check which narrows the byte range to
   0x21-0x7E and rejects `. : " # *` and space.
+
 - DFS catalogue reader now preserves degenerate all-space filenames as
   a single-space name instead of collapsing them to the empty string,
   so such entries survive extract-and-rebuild cycles.
+
 - `formatInf()` emits syntax 1 with 8-digit hex addresses and a 2-digit
   hex access byte, quotes and percent-encodes the name field when any
   byte would otherwise be ambiguous, and always escapes `.` inside the
   leaf name so filenames containing dots do not collide with ADFS
   nested path separators on parse.
+
 - DFS catalogue reader reconciles the stored `disc_size` field against
   the backing image length. When the sector count is not a valid 40-
   or 80-track value (as on `LordOfTheRings-GameDiscSide1.ssd`, which
   stores zero) the library emits a `UserWarning` and trusts the
   physical image size instead, so malformed catalogues no longer
   break iteration or rebuild.
+
 - `buildImage()` now treats the `.inf` sidecar as the sole source of
   truth for every disc-side name (DFS directory letter, DFS filename,
   and ADFS nested path alike). The filesystem layout is only used to
