@@ -103,6 +103,13 @@ class TestParseSyntax2:
         assert result.locked is True
         assert result.crc == 0xABCD
 
+    def testDeprecatedCrcSeparatedValue(self) -> None:
+        """Deprecated CRC= with a space before the value is accepted."""
+        result = parseInf("$.BOOT FF1900 FF8023 000A00 CRC= 1A2B")
+
+        assert result.crc == 0x1A2B
+        assert result.extra_info["CRC"] == "1A2B"
+
 
 # =======================================================================
 # parseInf - syntax 3 (name access) - ADFS Explorer directory form

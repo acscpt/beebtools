@@ -491,7 +491,7 @@ def parseInf(line: str) -> InfData:
         # A single "CRC=" token is handled above; the deprecated form
         # shows up as two tokens: "CRC=" and a hex field. We only
         # honour this when the "CRC=" key has no value attached.
-        if "CRC=" in extra_info and extra_info.get("CRC") == "":
+        if "CRC" in extra_info and extra_info.get("CRC") == "":
             extra_info["CRC"] = token
             idx += 1
             continue
