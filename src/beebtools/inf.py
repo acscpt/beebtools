@@ -120,7 +120,11 @@ class InfData:
 
     @property
     def crc(self) -> Optional[int]:
-        """Return the 16-bit CRC from the extra_info dict if present."""
+        """Return the 16-bit CRC from the extra_info dict if present.
+
+        Emits a ``BeebToolsWarning`` if the value is present but not
+        valid hex, consistent with the ``startSector`` property.
+        """
 
         value = self.extra_info.get("CRC")
         if value is None:
@@ -129,6 +133,36 @@ class InfData:
         try:
             return int(value, 16)
         except ValueError:
+            _warnings.warn(
+                f".inf CRC={value!r} for {self.fullName!r} is not "
+                f"valid hex, ignoring",
+                BeebToolsWarning,
+                stacklevel=2,
+            )
+            return None
+
+    @property
+    def crc32(self) -> Optional[int]:
+        """Return the 32-bit CRC from the extra_info dict if present.
+
+        Emits a ``BeebToolsWarning`` if the value is present but not
+        valid hex, consistent with the ``crc`` and ``startSector``
+        properties.
+        """
+
+        value = self.extra_info.get("CRC32")
+        if value is None:
+            return None
+
+        try:
+            return int(value, 16)
+        except ValueError:
+            _warnings.warn(
+                f".inf CRC32={value!r} for {self.fullName!r} is not "
+                f"valid hex, ignoring",
+                BeebToolsWarning,
+                stacklevel=2,
+            )
             return None
 
     @property
@@ -210,8 +244,9 @@ def _decodePercentEscapes(raw: str) -> str:
 
     Each ``%XX`` sequence with two hex digits becomes the single code
     point whose value is the decoded byte. Any ``%`` that is not
-    followed by two hex digits is left as a literal character, which
-    matches the tokenizer's historical tolerant behaviour.
+    followed by two valid hex digits is left as a literal character
+    and a ``BeebToolsWarning`` is emitted so the caller knows the
+    input was not cleanly encoded.
     """
 
     out: List[str] = []
@@ -228,7 +263,20 @@ def _decodePercentEscapes(raw: str) -> str:
                 i += 3
                 continue
             except ValueError:
-                pass
+                _warnings.warn(
+                    f"Invalid percent-escape '%{raw[i + 1:i + 3]}' "
+                    f"in .inf field, treating as literal",
+                    BeebToolsWarning,
+                    stacklevel=3,
+                )
+
+        if ch == '%' and i + 2 >= n:
+            _warnings.warn(
+                f"Truncated percent-escape at end of .inf field, "
+                f"treating as literal",
+                BeebToolsWarning,
+                stacklevel=3,
+            )
 
         out.append(ch)
         i += 1
@@ -517,9 +565,16 @@ def parseInf(line: str) -> InfData:
             idx += 1
             continue
 
-        # Unknown token type. Stop parsing defensively rather than
-        # silently misinterpreting it.
-        break
+        # Unknown token type. Warn and skip so that any valid tokens
+        # further along the line are still captured.
+        _warnings.warn(
+            f".inf for {directory}.{name}: unrecognised token "
+            f"{token!r} at position {idx}, skipping",
+            BeebToolsWarning,
+            stacklevel=2,
+        )
+        idx += 1
+        continue
 
     # -- Extract addresses, length, and access byte from hex fields. --
     load_addr = hex_fields[0] if len(hex_fields) > 0 else 0
@@ -576,6 +631,12 @@ def _splitDirAndName(decoded: str, raw: str) -> Tuple[str, str]:
 
     Both halves are then percent-decoded before returning.
     """
+
+    # A bare '$' with no dot is unambiguously the root directory
+    # itself (used by Disc Image Manager and other tools for the
+    # root directory .inf). Return it as directory='$', name=''.
+    if decoded == "$" and "." not in raw:
+        return "$", ""
 
     dot_positions = _unescapedDotPositions(raw)
 

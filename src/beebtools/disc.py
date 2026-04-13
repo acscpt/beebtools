@@ -1490,22 +1490,18 @@ def _walkSourceTree(
                     stacklevel=2,
                 )
 
-        expected_crc32 = inf.extra_info.get("CRC32")
+        expected_crc32 = inf.crc32
 
         if expected_crc32 is not None:
-            try:
-                expected_val = int(expected_crc32, 16)
-                actual_val = binascii.crc32(data) & 0xFFFFFFFF
+            actual_val = binascii.crc32(data) & 0xFFFFFFFF
 
-                if actual_val != expected_val:
-                    _warnings.warn(
-                        f"{inf.fullName}: CRC32 mismatch "
-                        f"(expected {expected_val:08X}, got {actual_val:08X})",
-                        BeebToolsWarning,
-                        stacklevel=2,
-                    )
-            except ValueError:
-                pass
+            if actual_val != expected_crc32:
+                _warnings.warn(
+                    f"{inf.fullName}: CRC32 mismatch "
+                    f"(expected {expected_crc32:08X}, got {actual_val:08X})",
+                    BeebToolsWarning,
+                    stacklevel=2,
+                )
 
         side.addFile(DiscFile(
             path=inf.fullName,
