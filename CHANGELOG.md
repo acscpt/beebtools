@@ -7,6 +7,8 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-04-13
+
 ### Added
 
 - Directory-level `.inf` sidecars on extract. `extractAll` now writes a
@@ -70,6 +72,24 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   explicit empty/OFF value. New `force` parameter.
 
 ### Fixed
+
+- `.inf` parser now warns on unrecognised tokens instead of silently
+  discarding remaining fields. Malformed tokens are skipped so that
+  valid fields further along the line are still captured.
+
+- `InfData.crc` property now emits `BeebToolsWarning` on unparseable
+  hex, consistent with `startSector`. Previously returned `None`
+  silently.
+
+- New `InfData.crc32` property with the same warn-on-bad-value
+  pattern. Replaces inline `try/except` in build validation.
+
+- `_decodePercentEscapes` warns on invalid or truncated `%XX`
+  sequences instead of silently treating them as literals.
+
+- Bare `$` in root directory `.inf` (Disc Image Manager format) now
+  correctly parses as `directory="$", name=""` instead of
+  `name="$"`.
 
 - Extra-info values containing spaces were silently truncated on
   round-trip because `formatInf` emitted them unencoded and the
