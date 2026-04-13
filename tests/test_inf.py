@@ -8,6 +8,8 @@ with RFC 3986 percent-encoding, 6- and 8-digit hex with sign extension,
 DFS and ADFS access shorthand, and preservation of KEY=value extra info.
 """
 
+from typing import Optional
+
 import pytest
 
 from beebtools import BeebToolsWarning
@@ -914,7 +916,7 @@ class TestSmokeSpecEdgeCases:
         exp_name: str,
         exp_load: int,
         exp_exec: int,
-        exp_len: int | None,
+        exp_len: Optional[int],
         exp_locked: bool,
     ) -> None:
         """Edge case derived from stardot spec or documented tool output."""
