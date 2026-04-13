@@ -723,6 +723,184 @@ class TestDirectoryInf:
 
 
 # =======================================================================
+# CRC generation and validation
+# =======================================================================
+
+class TestCrc:
+
+    def testExtractEmitsCrc16(self, tmp_path) -> None:
+        """Extract with --inf emits CRC= in the .inf sidecar."""
+        image = createDiscImage(tracks=80)
+        data = b"\x00" * 256
+        image.sides[0].addFile(DiscFile("$.FILE", data, load_addr=0x1900))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, write_inf=True)
+
+        inf_path = os.path.join(out_dir, "$", "FILE.bin.inf")
+        with open(inf_path, "r") as f:
+            inf = parseInf(f.readline().strip())
+
+        import binascii
+        expected = binascii.crc_hqx(data, 0)
+        assert inf.crc == expected
+
+    def testExtractEmitsCrc32(self, tmp_path) -> None:
+        """Extract with --inf emits CRC32= in the .inf sidecar."""
+        image = createDiscImage(tracks=80)
+        data = b"\xAA" * 100
+        image.sides[0].addFile(DiscFile("$.FILE", data))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, write_inf=True)
+
+        inf_path = os.path.join(out_dir, "$", "FILE.bin.inf")
+        with open(inf_path, "r") as f:
+            inf = parseInf(f.readline().strip())
+
+        import binascii
+        expected = binascii.crc32(data) & 0xFFFFFFFF
+        assert inf.extra_info["CRC32"] == f"{expected:08X}"
+
+    def testDirectoryInfNoCrc(self, tmp_path) -> None:
+        """Directory-level $.inf does not contain CRC or CRC32 keys."""
+        image = createDiscImage(tracks=80, title="TEST")
+        image.sides[0].addFile(DiscFile("$.DATA", b"\x00" * 10))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, write_inf=True)
+
+        with open(os.path.join(out_dir, "$.inf"), "r") as f:
+            inf = parseInf(f.readline().strip())
+
+        assert "CRC" not in inf.extra_info
+        assert "CRC32" not in inf.extra_info
+
+    def testBuildCrcMatchNoWarning(self, tmp_path) -> None:
+        """Build from unmodified .bin files produces no CRC warnings."""
+        image = createDiscImage(tracks=80, title="CRCTEST")
+        image.sides[0].addFile(DiscFile("$.FILE", b"\xFF" * 256,
+                               load_addr=0x1900, exec_addr=0x1900))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        import warnings
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            buildImage(
+                source_dir=extract_dir,
+                output_path="rebuilt.ssd",
+                tracks=80,
+            )
+
+        crc_warnings = [w for w in caught if "CRC" in str(w.message)]
+        assert crc_warnings == []
+
+    def testBuildCrcMismatchWarns(self, tmp_path) -> None:
+        """Modified file data triggers a CRC mismatch warning on build."""
+        image = createDiscImage(tracks=80, title="CRCTEST")
+        image.sides[0].addFile(DiscFile("$.FILE", b"\xFF" * 256,
+                               load_addr=0x1900, exec_addr=0x1900))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        # Corrupt the extracted file.
+        bin_path = os.path.join(extract_dir, "$", "FILE.bin")
+        with open(bin_path, "wb") as f:
+            f.write(b"\x00" * 256)
+
+        with pytest.warns(BeebToolsWarning, match="CRC mismatch"):
+            buildImage(
+                source_dir=extract_dir,
+                output_path="rebuilt.ssd",
+                tracks=80,
+            )
+
+    def testBuildCrc32MismatchWarns(self, tmp_path) -> None:
+        """Modified file data triggers a CRC32 mismatch warning on build."""
+        image = createDiscImage(tracks=80, title="CRCTEST")
+        image.sides[0].addFile(DiscFile("$.FILE", b"\xFF" * 256,
+                               load_addr=0x1900, exec_addr=0x1900))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        # Corrupt the extracted file.
+        bin_path = os.path.join(extract_dir, "$", "FILE.bin")
+        with open(bin_path, "wb") as f:
+            f.write(b"\x00" * 256)
+
+        with pytest.warns(BeebToolsWarning, match="CRC32 mismatch"):
+            buildImage(
+                source_dir=extract_dir,
+                output_path="rebuilt.ssd",
+                tracks=80,
+            )
+
+    def testCrcRoundTripBinaryFile(self, tmp_path) -> None:
+        """CRC round-trips correctly for an unmodified binary file."""
+        import binascii
+
+        data = bytes(range(256))
+        image = createDiscImage(tracks=80, title="CRCRT")
+        image.sides[0].addFile(DiscFile("$.BIN", data,
+                               load_addr=0x1900, exec_addr=0x1900))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        # Verify .inf has the correct CRC.
+        inf_path = os.path.join(extract_dir, "$", "BIN.bin.inf")
+        with open(inf_path, "r") as f:
+            inf = parseInf(f.readline().strip())
+
+        assert inf.crc == binascii.crc_hqx(data, 0)
+
+        # Rebuild -- no CRC warning expected.
+        import warnings
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            buildImage(
+                source_dir=extract_dir,
+                output_path="rebuilt.ssd",
+                tracks=80,
+            )
+
+        crc_warnings = [w for w in caught if "CRC" in str(w.message)]
+        assert crc_warnings == []
+
+
+# =======================================================================
 # buildImage
 # =======================================================================
 

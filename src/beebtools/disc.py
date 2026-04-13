@@ -19,6 +19,7 @@ Collaborators:
 All operations that span more than one of these belong here.
 """
 
+import binascii
 import os
 import re
 import warnings as _warnings
@@ -162,7 +163,7 @@ def resolveOutputPath(
 # Path qualification
 # -----------------------------------------------------------------------
 
-def formatEntryInf(entry: DiscEntry) -> str:
+def formatEntryInf(entry: DiscEntry, data: Optional[bytes] = None) -> str:
     """Format a catalogue entry as a .inf sidecar line.
 
     Convenience wrapper over formatInf() that destructures a DiscEntry
@@ -175,12 +176,20 @@ def formatEntryInf(entry: DiscEntry) -> str:
     ``buildImage`` later rebuild the disc with byte-exact on-disc file
     placement, which is required for round-tripping copy-protected
     discs that declare overlapping sector allocations.
+
+    When ``data`` is provided, computes CRC16 (XMODEM) and CRC32
+    checksums and emits ``CRC=XXXX`` and ``CRC32=XXXXXXXX`` extra
+    fields. These allow consumers to verify file integrity on rebuild.
     """
 
     extras = {}
 
     if entry.start_sector is not None:
         extras[INF_X_START_SECTOR] = str(entry.start_sector)
+
+    if data is not None:
+        extras["CRC"] = f"{binascii.crc_hqx(data, 0):04X}"
+        extras["CRC32"] = f"{binascii.crc32(data) & 0xFFFFFFFF:08X}"
 
     return formatInf(
         entry.directory, entry.name,
@@ -908,8 +917,10 @@ def extractAll(
                 })
 
             # Write .inf sidecar alongside the data file if requested.
+            # Pass the original disc data so CRC checksums are computed
+            # from the raw bytes, not from any converted form.
             if write_inf:
-                inf_line = formatEntryInf(entry)
+                inf_line = formatEntryInf(entry, data)
                 with open(out_path + ".inf", "w", encoding="utf-8") as f:
                     f.write(inf_line + "\n")
 
@@ -1390,6 +1401,39 @@ def _walkSourceTree(
                     BeebToolsWarning,
                     stacklevel=2,
                 )
+
+        # Validate CRC checksums if present in the .inf sidecar.
+        # At this point data holds the binary form (raw for .bin,
+        # retokenized for .bas) so it should match the original CRC.
+        expected_crc = inf.crc
+
+        if expected_crc is not None:
+            actual_crc = binascii.crc_hqx(data, 0)
+
+            if actual_crc != expected_crc:
+                _warnings.warn(
+                    f"{inf.fullName}: CRC mismatch "
+                    f"(expected {expected_crc:04X}, got {actual_crc:04X})",
+                    BeebToolsWarning,
+                    stacklevel=2,
+                )
+
+        expected_crc32 = inf.extra_info.get("CRC32")
+
+        if expected_crc32 is not None:
+            try:
+                expected_val = int(expected_crc32, 16)
+                actual_val = binascii.crc32(data) & 0xFFFFFFFF
+
+                if actual_val != expected_val:
+                    _warnings.warn(
+                        f"{inf.fullName}: CRC32 mismatch "
+                        f"(expected {expected_val:08X}, got {actual_val:08X})",
+                        BeebToolsWarning,
+                        stacklevel=2,
+                    )
+            except ValueError:
+                pass
 
         side.addFile(DiscFile(
             path=inf.fullName,
