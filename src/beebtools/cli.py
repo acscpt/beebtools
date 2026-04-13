@@ -215,8 +215,18 @@ def cmdExtract(args: Namespace) -> None:
         # Resolve output directory - default to the image filename stem.
         out_dir = args.dir or os.path.splitext(os.path.basename(args.image))[0]
 
+        if getattr(args, "inf", False):
+            warnings.warn(
+                "--inf is now the default for extract and will be "
+                "removed in a future release. See --no-inf.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        layout = "hierarchical" if args.mkdirs else "flat"
         results = extractAll(args.image, out_dir, pretty=args.pretty,
-                              write_inf=args.inf, text_mode=text_mode)
+                              write_inf=not args.no_inf, text_mode=text_mode,
+                              layout=layout)
         for result in results:
             if result["type"] == "BASIC":
                 print(f"  BASIC     {result['path']}")
@@ -704,7 +714,11 @@ def main() -> None:
     p_extract.add_argument("--pretty", action="store_true",
                            help="Add operator spacing to BASIC output")
     p_extract.add_argument("--inf", action="store_true",
-                           help="Write .inf sidecar files with -a/--all")
+                           help="Accepted for backwards compatibility (now the default)")
+    p_extract.add_argument("--no-inf", action="store_true", dest="no_inf",
+                           help="Suppress .inf sidecar files (written by default)")
+    p_extract.add_argument("--mkdirs", action="store_true",
+                           help="Create subdirectories from Acorn paths instead of flat layout")
     p_extract.add_argument("-t", "--text", choices=["ascii", "utf8", "escape"],
                            default="ascii", dest="text_mode",
                            help="Text encoding for BASIC .bas files: "

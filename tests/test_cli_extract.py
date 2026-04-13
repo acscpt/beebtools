@@ -302,8 +302,8 @@ class TestResolveOutputPath:
 
 class TestExtractAllSingleSide:
 
-    def testSingleSideExtractsHierarchically(self, tmp_path):
-        """Bulk extraction of a single-sided disc should create a directory tree that mirrors the DFS '$' layout."""
+    def testSingleSideExtractsFlat(self, tmp_path):
+        """Bulk extraction of a single-sided disc should place files flat using Acorn path notation."""
         # Build a single-sided image with one binary file.
         img_path = str(tmp_path / "test.ssd")
         with open(img_path, "wb") as f:
@@ -312,8 +312,8 @@ class TestExtractAllSingleSide:
         out_dir = str(tmp_path / "out")
         extractAll(img_path, out_dir, pretty=False)
 
-        # File should be in out_dir/$/MYFILE.bin (hierarchical layout).
-        assert os.path.isfile(os.path.join(out_dir, "$", "MYFILE.bin"))
+        # File should be in out_dir/$.MYFILE.bin (flat layout).
+        assert os.path.isfile(os.path.join(out_dir, "$.MYFILE.bin"))
         assert not os.path.isdir(os.path.join(out_dir, "side0"))
 
     def testPlainTextFileSavedAsTxt(self, tmp_path):
@@ -325,8 +325,8 @@ class TestExtractAllSingleSide:
         out_dir = str(tmp_path / "out")
         extractAll(img_path, out_dir, pretty=False)
 
-        assert os.path.isfile(os.path.join(out_dir, "$", "README.txt"))
-        assert not os.path.isfile(os.path.join(out_dir, "$", "README.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "$.README.txt"))
+        assert not os.path.isfile(os.path.join(out_dir, "$.README.bin"))
 
     def testPlainTextCrNormalisedToLf(self, tmp_path):
         """Bare carriage-return line endings in extracted plain text should be converted to Unix LF."""
@@ -337,7 +337,7 @@ class TestExtractAllSingleSide:
         out_dir = str(tmp_path / "out")
         extractAll(img_path, out_dir, pretty=False)
 
-        txt_path = os.path.join(out_dir, "$", "NOTES.txt")
+        txt_path = os.path.join(out_dir, "$.NOTES.txt")
         with open(txt_path, "rb") as f:
             raw = f.read()
 
@@ -356,8 +356,8 @@ class TestExtractAllDoubleSideSubdir:
         out_dir = str(tmp_path / "out")
         extractAll(img_path, out_dir, pretty=False)
 
-        assert os.path.isfile(os.path.join(out_dir, "side0", "$", "PROG0.bin"))
-        assert os.path.isfile(os.path.join(out_dir, "side1", "$", "PROG1.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "side0", "$.PROG0.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "side1", "$.PROG1.bin"))
 
 
 # ---------------------------------------------------------------------------
@@ -393,8 +393,8 @@ class TestExtractAllBasicHybrid:
         out_dir = str(tmp_path / "out")
         extractAll(img_path, out_dir, pretty=False)
 
-        assert os.path.isfile(os.path.join(out_dir, "$", "MYPROG.bas"))
-        assert not os.path.isfile(os.path.join(out_dir, "$", "MYPROG.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "$.MYPROG.bas"))
+        assert not os.path.isfile(os.path.join(out_dir, "$.MYPROG.bin"))
 
     def testBasicWithTrailingMachineCodeExtractedAsBin(self, tmp_path):
         """A BASIC loader with appended machine code should be saved as .bin to preserve the binary data."""
@@ -410,11 +410,11 @@ class TestExtractAllBasicHybrid:
         extractAll(img_path, out_dir, pretty=False)
 
         # Must be saved as binary to preserve the machine code.
-        assert os.path.isfile(os.path.join(out_dir, "$", "PINBALL.bin"))
-        assert not os.path.isfile(os.path.join(out_dir, "$", "PINBALL.bas"))
+        assert os.path.isfile(os.path.join(out_dir, "$.PINBALL.bin"))
+        assert not os.path.isfile(os.path.join(out_dir, "$.PINBALL.bas"))
 
         # Binary content must be identical to the original.
-        with open(os.path.join(out_dir, "$", "PINBALL.bin"), "rb") as f:
+        with open(os.path.join(out_dir, "$.PINBALL.bin"), "rb") as f:
             assert f.read() == hybrid
 
     def testHybridResultTypeIsBasicMC(self, tmp_path):
@@ -449,10 +449,10 @@ class TestExtractAllBasicHybrid:
         extractAll(img_path, out_dir, pretty=False)
 
         # Both sides should get .bin files.
-        assert os.path.isfile(os.path.join(out_dir, "side0", "$", "GAME0.bin"))
-        assert os.path.isfile(os.path.join(out_dir, "side1", "$", "GAME1.bin"))
-        assert not os.path.isfile(os.path.join(out_dir, "side0", "$", "GAME0.bas"))
-        assert not os.path.isfile(os.path.join(out_dir, "side1", "$", "GAME1.bas"))
+        assert os.path.isfile(os.path.join(out_dir, "side0", "$.GAME0.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "side1", "$.GAME1.bin"))
+        assert not os.path.isfile(os.path.join(out_dir, "side0", "$.GAME0.bas"))
+        assert not os.path.isfile(os.path.join(out_dir, "side1", "$.GAME1.bas"))
 
     def testAdfsHybridExtractedAsBin(self, tmp_path):
         """A BASIC+machine-code hybrid in an ADFS image should be saved as .bin."""
@@ -476,11 +476,11 @@ class TestExtractAllBasicHybrid:
         extractAll(img_path, out_dir, pretty=False)
 
         # Should be saved as .bin, not .bas.
-        assert os.path.isfile(os.path.join(out_dir, "$", "HYBRID.bin"))
-        assert not os.path.isfile(os.path.join(out_dir, "$", "HYBRID.bas"))
+        assert os.path.isfile(os.path.join(out_dir, "$.HYBRID.bin"))
+        assert not os.path.isfile(os.path.join(out_dir, "$.HYBRID.bas"))
 
         # Binary content must be identical.
-        with open(os.path.join(out_dir, "$", "HYBRID.bin"), "rb") as f:
+        with open(os.path.join(out_dir, "$.HYBRID.bin"), "rb") as f:
             assert f.read() == hybrid
 
 

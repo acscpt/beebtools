@@ -159,6 +159,52 @@ def resolveOutputPath(
     return os.path.join(dir_path, safe_name)
 
 
+def resolveFlatOutputPath(
+    out_dir: str,
+    disc_side: int,
+    directory: str,
+    name: str,
+    multi_side: bool,
+) -> str:
+    """Resolve the output path for flat extraction layout.
+
+    Builds a flat filename from the full Acorn path, using dots as
+    separators matching natural DFS/ADFS notation:
+        - Single-sided: out_dir/$.BOOT
+        - Double-sided: out_dir/sideN/$.BOOT
+        - ADFS nested:  out_dir/$.GAMES.ELITE
+
+    The full Acorn path is inherently unique per side, so no collision
+    resolution is needed. Characters illegal on the host filesystem
+    are replaced with _xNN_ hex encoding; dots are preserved as-is.
+
+    Args:
+        out_dir:    Root output directory.
+        disc_side:  Side number (0 or 1) for this file.
+        directory:  Acorn directory path (e.g. '$', '$.GAMES').
+        name:       Acorn filename (e.g. 'BOOT', 'ELITE').
+        multi_side: True when the image has more than one side.
+
+    Returns:
+        Path string to write the file to (extension not included).
+    """
+    # Build the full Acorn path: $.BOOT, T.DATA, $.GAMES.ELITE
+    if name:
+        acorn_path = directory + "." + name
+    else:
+        acorn_path = directory
+
+    safe_name = _sanitizeForFilesystem(acorn_path)
+
+    if multi_side:
+        parent = os.path.join(out_dir, f"side{disc_side}")
+    else:
+        parent = out_dir
+
+    os.makedirs(parent, exist_ok=True)
+    return os.path.join(parent, safe_name)
+
+
 # -----------------------------------------------------------------------
 # Path qualification
 # -----------------------------------------------------------------------
@@ -791,8 +837,9 @@ def extractAll(
     image_path: str,
     out_dir: str,
     pretty: bool = False,
-    write_inf: bool = False,
+    write_inf: bool = True,
     text_mode: str = "ascii",
+    layout: str = "flat",
 ) -> List[Dict[str, Union[str, int]]]:
     """Extract every file from a disc image into a directory.
 
@@ -800,15 +847,17 @@ def extractAll(
     Plain text files are saved as .txt with CR normalised to LF.
     Binary files are saved as .bin raw bytes.
 
-    Files are laid out hierarchically with the DFS directory character
-    as a real subdirectory. On double-sided images, an additional
-    side0/ or side1/ level is added:
-        - SSD: out_dir/$/BOOT.bas
-        - DSD: out_dir/side0/$/BOOT.bas
+    The default flat layout puts all files in one directory using the
+    full Acorn path as the filename (e.g. $.BOOT.bas, T.DATA.bin,
+    $.GAMES.ELITE.bas). On double-sided images each side gets its own
+    subdirectory (side0/, side1/).
 
-    When write_inf is True, a .inf sidecar file is written alongside
-    every extracted file, preserving the DFS load address, exec address,
-    length, and lock flag in the standard community interchange format.
+    The hierarchical layout creates real subdirectories from the Acorn
+    directory path (e.g. $/BOOT.bas, T/DATA.bin).
+
+    A .inf sidecar file is written alongside every extracted file by
+    default, preserving the Acorn metadata in the stardot community
+    interchange format. Pass write_inf=False to suppress.
 
     Args:
         image_path: Path to a .ssd or .dsd disc image.
@@ -819,6 +868,8 @@ def extractAll(
                     'ascii'  -- replace with '?' (lossy, default)
                     'utf8'   -- write as UTF-8 (lossless)
                     'escape' -- \\xHH notation (lossless, plain ASCII)
+        layout:     'flat' (default) puts all files in one directory;
+                    'hierarchical' creates subdirectories from Acorn paths.
 
     Returns:
         List of result dicts, one per extracted file. Each dict has:
@@ -831,6 +882,8 @@ def extractAll(
     """
     os.makedirs(out_dir, exist_ok=True)
 
+    flat = layout == "flat"
+
     image = openImage(image_path)
     multi_side = len(image) > 1
 
@@ -840,16 +893,25 @@ def extractAll(
         for entry in side:
             # Directory entries are containers, not files. Write a .inf
             # sidecar for the directory if requested, then skip to the
-            # next entry. The .inf sits alongside the PC directory
-            # folder (e.g. $/GAMES.inf next to $/GAMES/).
+            # next entry. In flat mode the .inf is a standalone file
+            # (e.g. $.GAMES.inf); in hierarchical mode it sits alongside
+            # the PC directory folder (e.g. $/GAMES.inf next to $/GAMES/).
             if entry.isDirectory:
                 if write_inf:
-                    safe_dir, safe_name = sanitizeEntryPath(
-                        entry.directory, entry.name,
-                    )
-                    stem = resolveOutputPath(
-                        out_dir, side.side, safe_dir, safe_name, multi_side,
-                    )
+                    if flat:
+                        stem = resolveFlatOutputPath(
+                            out_dir, side.side,
+                            entry.directory, entry.name, multi_side,
+                        )
+                    else:
+                        safe_dir, safe_name = sanitizeEntryPath(
+                            entry.directory, entry.name,
+                        )
+                        stem = resolveOutputPath(
+                            out_dir, side.side, safe_dir, safe_name,
+                            multi_side,
+                        )
+
                     dir_inf_line = formatEntryInf(entry)
 
                     with open(stem + ".inf", "w", encoding="utf-8") as f:
@@ -857,8 +919,18 @@ def extractAll(
 
                 continue
 
-            safe_dir, safe_name = sanitizeEntryPath(entry.directory, entry.name)
-            stem = resolveOutputPath(out_dir, side.side, safe_dir, safe_name, multi_side)
+            if flat:
+                stem = resolveFlatOutputPath(
+                    out_dir, side.side,
+                    entry.directory, entry.name, multi_side,
+                )
+            else:
+                safe_dir, safe_name = sanitizeEntryPath(
+                    entry.directory, entry.name,
+                )
+                stem = resolveOutputPath(
+                    out_dir, side.side, safe_dir, safe_name, multi_side,
+                )
             data = side.readFile(entry)
 
             if entry.isBasic and looksLikeTokenizedBasic(data):

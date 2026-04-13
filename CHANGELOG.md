@@ -27,7 +27,30 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CRC16 and CRC32 checksums emitted in `.inf` sidecars on extract.
   Validated on build with a warning on mismatch.
 
-### Changed
+- Flat extraction layout. Files are named using the full Acorn path
+  (e.g. `$.BOOT.bas`, `T.DATA.bin`, `$.GAMES.ELITE.bin`). DSD images
+  use `side0/`/`side1/` subdirectories with flat contents per side.
+
+- CLI `--mkdirs` flag on the `extract -a` subcommand to opt into
+  the old hierarchical directory layout.
+
+- CLI `--no-inf` flag on `extract -a` to suppress `.inf` sidecars.
+
+### Deprecated
+
+- `--inf` flag on `extract -a` is now the default and emits a
+  `DeprecationWarning`. It will be removed in a future release.
+
+### Changed (breaking)
+
+- **Default extract behaviour changed.** `extractAll()` now writes a
+  flat directory of files named by their full Acorn path (e.g.
+  `$.BOOT.bas`) and writes `.inf` sidecars by default. Previously
+  it created subdirectories per DFS directory character and required
+  `--inf` to emit sidecars. Use `--mkdirs` (CLI) or
+  `layout="hierarchical"` (library) for the old directory layout;
+  use `--no-inf` (CLI) or `write_inf=False` (library) to suppress
+  sidecars.
 
 - `InfData.access_byte` replaces the old `locked` boolean field. The
   full 8-bit access byte is preserved through parse, format, and
