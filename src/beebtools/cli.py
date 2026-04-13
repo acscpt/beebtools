@@ -215,8 +215,18 @@ def cmdExtract(args: Namespace) -> None:
         # Resolve output directory - default to the image filename stem.
         out_dir = args.dir or os.path.splitext(os.path.basename(args.image))[0]
 
+        if getattr(args, "inf", False):
+            warnings.warn(
+                "--inf is now the default for extract and will be "
+                "removed in a future release. See --no-inf.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        layout = "hierarchical" if args.mkdirs else "flat"
         results = extractAll(args.image, out_dir, pretty=args.pretty,
-                              write_inf=args.inf, text_mode=text_mode)
+                              write_inf=not args.no_inf, text_mode=text_mode,
+                              layout=layout)
         for result in results:
             if result["type"] == "BASIC":
                 print(f"  BASIC     {result['path']}")
@@ -446,9 +456,10 @@ def cmdBuild(args: Namespace) -> None:
                 source_dir=args.dir,
                 output_path=args.output,
                 tracks=args.tracks,
-                title=args.title or "",
+                title=args.title,
                 boot_option=args.boot,
                 save=True,
+                force=getattr(args, "force", False),
             )
     except DiscError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -703,7 +714,11 @@ def main() -> None:
     p_extract.add_argument("--pretty", action="store_true",
                            help="Add operator spacing to BASIC output")
     p_extract.add_argument("--inf", action="store_true",
-                           help="Write .inf sidecar files with -a/--all")
+                           help="Accepted for backwards compatibility (now the default)")
+    p_extract.add_argument("--no-inf", action="store_true", dest="no_inf",
+                           help="Suppress .inf sidecar files (written by default)")
+    p_extract.add_argument("--mkdirs", action="store_true",
+                           help="Create subdirectories from Acorn paths instead of flat layout")
     p_extract.add_argument("-t", "--text", choices=["ascii", "utf8", "escape"],
                            default="ascii", dest="text_mode",
                            help="Text encoding for BASIC .bas files: "
@@ -784,10 +799,15 @@ def main() -> None:
                          help="Track count (default: 80). "
                               "For ADFS: 40t .adf=160K, 80t .adf=320K, "
                               ".adl=640K")
-    p_build.add_argument("--title", help="Disc title")
+    p_build.add_argument("--title", default=None,
+                         help="Disc title (overrides $.inf when --force is set)")
     p_build.add_argument("--boot", type=_parseBootOption,
-                         default=BootOption.OFF,
-                         help="Boot option: OFF, LOAD, RUN, EXEC (or 0-3)")
+                         default=None,
+                         help="Boot option: OFF, LOAD, RUN, EXEC (or 0-3) "
+                              "(overrides $.inf when --force is set)")
+    p_build.add_argument("--force", action="store_true",
+                         help="Override $.inf disc metadata with "
+                              "explicit --title/--boot values")
     p_build.add_argument("--strict", action="store_true",
                          help="Enforce DFS spec-compliance on filenames "
                               "(rejects non-printable bytes, '.', '#', '*', "

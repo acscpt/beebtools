@@ -5,6 +5,96 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.9.0] - 2026-04-13
+
+### Added
+
+- Directory-level `.inf` sidecars on extract. `extractAll` now writes a
+  `$.inf` alongside the root directory (or per-side `$.inf` for DSD)
+  carrying `TITLE=` and `OPT=` extra-info keys. Formats with
+  subdirectories also get a `.inf` per directory entry.
+
+- `formatDirectoryInf()` helper for emitting directory-level `.inf`
+  lines in stardot spec syntax 1 (zeroed hex fields + extra-info keys).
+
+- `buildImage()` reads `$.inf` as the source of truth for disc title
+  and boot option. Explicit `title`/`boot_option` arguments warn when
+  a `$.inf` is present; pass `force=True` to override.
+
+- CLI `--force` flag on the `build` subcommand to override `$.inf`
+  disc metadata with explicit `--title`/`--boot` values.
+
+- CRC16 and CRC32 checksums emitted in `.inf` sidecars on extract.
+  Validated on build with a warning on mismatch.
+
+- Flat extraction layout. Files are named using the full Acorn path
+  (e.g. `$.BOOT.bas`, `T.DATA.bin`, `$.GAMES.ELITE.bin`). DSD images
+  use `side0/`/`side1/` subdirectories with flat contents per side.
+
+- CLI `--mkdirs` flag on the `extract -a` subcommand to opt into
+  the old hierarchical directory layout.
+
+- CLI `--no-inf` flag on `extract -a` to suppress `.inf` sidecars.
+
+### Deprecated
+
+- `--inf` flag on `extract -a` is now the default and emits a
+  `DeprecationWarning`. It will be removed in a future release.
+
+### Changed (breaking)
+
+- **Default extract behaviour changed.** `extractAll()` now writes a
+  flat directory of files named by their full Acorn path (e.g.
+  `$.BOOT.bas`) and writes `.inf` sidecars by default. Previously
+  it created subdirectories per DFS directory character and required
+  `--inf` to emit sidecars. Use `--mkdirs` (CLI) or
+  `layout="hierarchical"` (library) for the old directory layout;
+  use `--no-inf` (CLI) or `write_inf=False` (library) to suppress
+  sidecars.
+
+- `InfData.access_byte` replaces the old `locked` boolean field. The
+  full 8-bit access byte is preserved through parse, format, and
+  round-trip. `locked` is now a read-only property (bit 3 of
+  `access_byte`).
+
+- `DiscEntry` ABC gains an `accessByte` property (default: 0x08 if
+  locked, 0x00 otherwise). Format engines with richer access bits
+  override it to return the full byte.
+
+- `formatInf()` now percent-encodes spaces in extra-info values so
+  they survive whitespace-delimited tokenization on re-parse.
+  `parseInf()` percent-decodes extra-info values.
+
+- `buildImage()` signature: `title` and `boot_option` are now
+  `Optional` (default `None`), distinguishing "not set" from an
+  explicit empty/OFF value. New `force` parameter.
+
+### Fixed
+
+- `.inf` parser now warns on unrecognised tokens instead of silently
+  discarding remaining fields. Malformed tokens are skipped so that
+  valid fields further along the line are still captured.
+
+- `InfData.crc` property now emits `BeebToolsWarning` on unparseable
+  hex, consistent with `startSector`. Previously returned `None`
+  silently.
+
+- New `InfData.crc32` property with the same warn-on-bad-value
+  pattern. Replaces inline `try/except` in build validation.
+
+- `_decodePercentEscapes` warns on invalid or truncated `%XX`
+  sequences instead of silently treating them as literals.
+
+- Bare `$` in root directory `.inf` (Disc Image Manager format) now
+  correctly parses as `directory="$", name=""` instead of
+  `name="$"`.
+
+- Extra-info values containing spaces were silently truncated on
+  round-trip because `formatInf` emitted them unencoded and the
+  tokenizer split on whitespace.
+
 ## [0.8.0] - 2026-04-12
 
 ### Added

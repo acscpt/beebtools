@@ -18,7 +18,7 @@ from beebtools import BeebToolsWarning
 from beebtools.dfs import createDiscImage, openDiscImage, DFSError
 from beebtools.entry import DiscFile, DiscError
 from beebtools.disc import (
-    extractAll, buildImage,
+    extractAll, buildImage, formatDirectoryInf,
     getTitle, setTitle, getBoot, setBoot, discInfo,
     getFileAttribs, setFileAttribs,
     renameFile, compactDisc, makeDirectory,
@@ -436,8 +436,8 @@ class TestExtractInf:
         out_dir = str(tmp_path / "out")
         extractAll(img_path, out_dir, write_inf=True)
 
-        # Check that the .inf sidecar exists.
-        inf_path = os.path.join(out_dir, "$", "LOADER.bin.inf")
+        # Check that the .inf sidecar exists (flat layout: $.LOADER.bin.inf).
+        inf_path = os.path.join(out_dir, "$.LOADER.bin.inf")
         assert os.path.isfile(inf_path)
 
         # Parse the .inf and verify its content.
@@ -467,6 +467,613 @@ class TestExtractInf:
         for root, dirs, files in os.walk(out_dir):
             for fname in files:
                 assert not fname.endswith(".inf"), f"Unexpected .inf: {fname}"
+
+
+# =======================================================================
+# Directory-level .inf ($.inf)
+# =======================================================================
+
+class TestDirectoryInf:
+
+    def testExtractWritesDollarInf(self, tmp_path) -> None:
+        """extract --inf writes a $.inf alongside the $ directory."""
+        image = createDiscImage(tracks=80, title="MYTITLE", boot_option=BootOption.RUN)
+        side = image.sides[0]
+        side.addFile(DiscFile("$.DATA", b"\x00" * 10))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, write_inf=True)
+
+        inf_path = os.path.join(out_dir, "$.inf")
+        assert os.path.isfile(inf_path)
+
+        with open(inf_path, "r") as f:
+            inf = parseInf(f.readline().strip())
+
+        assert inf.extra_info.get("TITLE") == "MYTITLE"
+        assert inf.extra_info.get("OPT") == "2"
+
+    def testNoDollarInfWithoutFlag(self, tmp_path) -> None:
+        """Without write_inf, no $.inf is written."""
+        image = createDiscImage(tracks=80, title="TEST")
+        side = image.sides[0]
+        side.addFile(DiscFile("$.DATA", b"\x00" * 10))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, write_inf=False)
+
+        assert not os.path.isfile(os.path.join(out_dir, "$.inf"))
+
+    def testBuildReadsDollarInf(self, tmp_path) -> None:
+        """buildImage reads $.inf and applies title and boot option."""
+        image = createDiscImage(tracks=80, title="ORIGINAL", boot_option=BootOption.EXEC)
+        side = image.sides[0]
+        side.addFile(DiscFile("$.DATA", b"\x00" * 10))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        # Rebuild without explicit title/boot -- $.inf is source of truth.
+        rebuilt_bytes = buildImage(
+            source_dir=extract_dir,
+            output_path="rebuilt.ssd",
+            tracks=80,
+        )
+
+        rebuilt_path = str(tmp_path / "rebuilt.ssd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        cat = rebuilt.sides[0].readCatalogue()
+
+        assert cat.title == "ORIGINAL"
+        assert cat.boot_option == BootOption.EXEC
+
+    def testBuildWithExplicitTitleWarns(self, tmp_path) -> None:
+        """Explicit title + $.inf emits a warning; .inf wins."""
+        image = createDiscImage(tracks=80, title="INFVALUE")
+        side = image.sides[0]
+        side.addFile(DiscFile("$.DATA", b"\x00" * 10))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        with pytest.warns(BeebToolsWarning, match="using TITLE from .inf"):
+            rebuilt_bytes = buildImage(
+                source_dir=extract_dir,
+                output_path="rebuilt.ssd",
+                tracks=80,
+                title="OVERRIDE",
+            )
+
+        rebuilt_path = str(tmp_path / "rebuilt.ssd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        cat = rebuilt.sides[0].readCatalogue()
+
+        assert cat.title == "INFVALUE"
+
+    def testBuildForceOverridesInf(self, tmp_path) -> None:
+        """force=True makes explicit title/boot override $.inf."""
+        image = createDiscImage(tracks=80, title="INFVALUE", boot_option=BootOption.LOAD)
+        side = image.sides[0]
+        side.addFile(DiscFile("$.DATA", b"\x00" * 10))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        rebuilt_bytes = buildImage(
+            source_dir=extract_dir,
+            output_path="rebuilt.ssd",
+            tracks=80,
+            title="FORCED",
+            boot_option=BootOption.EXEC,
+            force=True,
+        )
+
+        rebuilt_path = str(tmp_path / "rebuilt.ssd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        cat = rebuilt.sides[0].readCatalogue()
+
+        assert cat.title == "FORCED"
+        assert cat.boot_option == BootOption.EXEC
+
+    def testBuildWithoutDollarInfUsesExplicit(self, tmp_path) -> None:
+        """When no $.inf exists, explicit title/boot are used."""
+        # Create source tree manually with a file .inf but no $.inf.
+        src = str(tmp_path / "src")
+        dollar = os.path.join(src, "$")
+        os.makedirs(dollar)
+
+        with open(os.path.join(dollar, "DATA.bin"), "wb") as f:
+            f.write(b"\x00" * 10)
+
+        inf_line = formatInf("$", "DATA", 0, 0, 10)
+        with open(os.path.join(dollar, "DATA.bin.inf"), "w") as f:
+            f.write(inf_line + "\n")
+
+        rebuilt_bytes = buildImage(
+            source_dir=src,
+            output_path="rebuilt.ssd",
+            tracks=80,
+            title="EXPLICIT",
+            boot_option=BootOption.RUN,
+        )
+
+        rebuilt_path = str(tmp_path / "rebuilt.ssd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        cat = rebuilt.sides[0].readCatalogue()
+
+        assert cat.title == "EXPLICIT"
+        assert cat.boot_option == BootOption.RUN
+
+    def testDsdPerSideDollarInf(self, tmp_path) -> None:
+        """DSD extract writes $.inf per side; rebuild reads both."""
+        from dataclasses import replace as dc_replace
+        from beebtools.image import createImage
+
+        image = createImage("test.dsd", tracks=80, title="SIDE0T")
+        image.sides[0].addFile(DiscFile("$.F0", b"\x00" * 10))
+        image.sides[1].addFile(DiscFile("$.F1", b"\xFF" * 10))
+
+        # Set side 1 title differently.
+        cat1 = image.sides[1].readCatalogue()
+        image.sides[1].writeCatalogue(dc_replace(cat1, title="SIDE1T"))
+
+        img_path = str(tmp_path / "test.dsd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        # Verify per-side $.inf files exist.
+        assert os.path.isfile(os.path.join(extract_dir, "side0", "$.inf"))
+        assert os.path.isfile(os.path.join(extract_dir, "side1", "$.inf"))
+
+        # Rebuild and check per-side titles survived.
+        rebuilt_bytes = buildImage(
+            source_dir=extract_dir,
+            output_path="rebuilt.dsd",
+            tracks=80,
+        )
+
+        rebuilt_path = str(tmp_path / "rebuilt.dsd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        assert rebuilt.sides[0].readCatalogue().title == "SIDE0T"
+        assert rebuilt.sides[1].readCatalogue().title == "SIDE1T"
+
+    def testFormatDirectoryInfSyntax1(self) -> None:
+        """formatDirectoryInf emits syntax 1 with zeroed hex fields."""
+        line = formatDirectoryInf("MY DISC", BootOption.RUN)
+
+        inf = parseInf(line)
+        assert inf.load_addr == 0
+        assert inf.exec_addr == 0
+        assert inf.length == 0
+        assert inf.extra_info["TITLE"] == "MY DISC"
+        assert inf.extra_info["OPT"] == "2"
+
+    def testFormatDirectoryInfEmptyTitle(self) -> None:
+        """Empty title omits the TITLE key."""
+        line = formatDirectoryInf("", BootOption.OFF)
+
+        inf = parseInf(line)
+        assert "TITLE" not in inf.extra_info
+        assert inf.extra_info["OPT"] == "0"
+
+    def testAdfsDirectoryInfWritten(self, tmp_path) -> None:
+        """ADFS extract writes .inf sidecars for subdirectory entries."""
+        from beebtools.image import createImage
+
+        image = createImage("test.adf", tracks=80, title="ADFSTEST")
+        side = image.sides[0]
+        side.mkdir("$.GAMES")
+        side.addFile(DiscFile("$.GAMES.ELITE", b"\xFF" * 100,
+                     load_addr=0x1900, exec_addr=0x1900))
+
+        img_path = str(tmp_path / "test.adf")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, write_inf=True)
+
+        # In flat mode the directory .inf is a standalone file.
+        dir_inf_path = os.path.join(out_dir, "$.GAMES.inf")
+        assert os.path.isfile(dir_inf_path)
+
+        with open(dir_inf_path, "r") as f:
+            inf = parseInf(f.readline().strip())
+
+        assert inf.directory == "$"
+        assert inf.name == "GAMES"
+
+
+# =======================================================================
+# CRC generation and validation
+# =======================================================================
+
+class TestCrc:
+
+    def testExtractEmitsCrc16(self, tmp_path) -> None:
+        """Extract with --inf emits CRC= in the .inf sidecar."""
+        image = createDiscImage(tracks=80)
+        data = b"\x00" * 256
+        image.sides[0].addFile(DiscFile("$.FILE", data, load_addr=0x1900))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, write_inf=True)
+
+        inf_path = os.path.join(out_dir, "$.FILE.bin.inf")
+        with open(inf_path, "r") as f:
+            inf = parseInf(f.readline().strip())
+
+        import binascii
+        expected = binascii.crc_hqx(data, 0)
+        assert inf.crc == expected
+
+    def testExtractEmitsCrc32(self, tmp_path) -> None:
+        """Extract with --inf emits CRC32= in the .inf sidecar."""
+        image = createDiscImage(tracks=80)
+        data = b"\xAA" * 100
+        image.sides[0].addFile(DiscFile("$.FILE", data))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, write_inf=True)
+
+        inf_path = os.path.join(out_dir, "$.FILE.bin.inf")
+        with open(inf_path, "r") as f:
+            inf = parseInf(f.readline().strip())
+
+        import binascii
+        expected = binascii.crc32(data) & 0xFFFFFFFF
+        assert inf.extra_info["CRC32"] == f"{expected:08X}"
+
+    def testDirectoryInfNoCrc(self, tmp_path) -> None:
+        """Directory-level $.inf does not contain CRC or CRC32 keys."""
+        image = createDiscImage(tracks=80, title="TEST")
+        image.sides[0].addFile(DiscFile("$.DATA", b"\x00" * 10))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, write_inf=True)
+
+        with open(os.path.join(out_dir, "$.inf"), "r") as f:
+            inf = parseInf(f.readline().strip())
+
+        assert "CRC" not in inf.extra_info
+        assert "CRC32" not in inf.extra_info
+
+    def testBuildCrcMatchNoWarning(self, tmp_path) -> None:
+        """Build from unmodified .bin files produces no CRC warnings."""
+        image = createDiscImage(tracks=80, title="CRCTEST")
+        image.sides[0].addFile(DiscFile("$.FILE", b"\xFF" * 256,
+                               load_addr=0x1900, exec_addr=0x1900))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        import warnings
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            buildImage(
+                source_dir=extract_dir,
+                output_path="rebuilt.ssd",
+                tracks=80,
+            )
+
+        crc_warnings = [w for w in caught if "CRC" in str(w.message)]
+        assert crc_warnings == []
+
+    def testBuildCrcMismatchWarns(self, tmp_path) -> None:
+        """Modified file data triggers a CRC mismatch warning on build."""
+        image = createDiscImage(tracks=80, title="CRCTEST")
+        image.sides[0].addFile(DiscFile("$.FILE", b"\xFF" * 256,
+                               load_addr=0x1900, exec_addr=0x1900))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        # Corrupt the extracted file.
+        bin_path = os.path.join(extract_dir, "$.FILE.bin")
+        with open(bin_path, "wb") as f:
+            f.write(b"\x00" * 256)
+
+        with pytest.warns(BeebToolsWarning, match="CRC mismatch"):
+            buildImage(
+                source_dir=extract_dir,
+                output_path="rebuilt.ssd",
+                tracks=80,
+            )
+
+    def testBuildCrc32MismatchWarns(self, tmp_path) -> None:
+        """Modified file data triggers a CRC32 mismatch warning on build."""
+        image = createDiscImage(tracks=80, title="CRCTEST")
+        image.sides[0].addFile(DiscFile("$.FILE", b"\xFF" * 256,
+                               load_addr=0x1900, exec_addr=0x1900))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        # Corrupt the extracted file.
+        bin_path = os.path.join(extract_dir, "$.FILE.bin")
+        with open(bin_path, "wb") as f:
+            f.write(b"\x00" * 256)
+
+        with pytest.warns(BeebToolsWarning, match="CRC32 mismatch"):
+            buildImage(
+                source_dir=extract_dir,
+                output_path="rebuilt.ssd",
+                tracks=80,
+            )
+
+    def testCrcRoundTripBinaryFile(self, tmp_path) -> None:
+        """CRC round-trips correctly for an unmodified binary file."""
+        import binascii
+
+        data = bytes(range(256))
+        image = createDiscImage(tracks=80, title="CRCRT")
+        image.sides[0].addFile(DiscFile("$.BIN", data,
+                               load_addr=0x1900, exec_addr=0x1900))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir, write_inf=True)
+
+        # Verify .inf has the correct CRC.
+        inf_path = os.path.join(extract_dir, "$.BIN.bin.inf")
+        with open(inf_path, "r") as f:
+            inf = parseInf(f.readline().strip())
+
+        assert inf.crc == binascii.crc_hqx(data, 0)
+
+        # Rebuild -- no CRC warning expected.
+        import warnings
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            buildImage(
+                source_dir=extract_dir,
+                output_path="rebuilt.ssd",
+                tracks=80,
+            )
+
+        crc_warnings = [w for w in caught if "CRC" in str(w.message)]
+        assert crc_warnings == []
+
+
+# =======================================================================
+# Flat extraction layout
+# =======================================================================
+
+class TestFlatLayout:
+
+    def testFlatDfsMultipleDirs(self, tmp_path) -> None:
+        """Flat extraction places files from different DFS directories
+        in the same output directory using dir.name notation."""
+        image = createDiscImage(tracks=80, title="FLAT")
+        image.sides[0].addFile(DiscFile("$.BOOT", b"\xFF" * 16,
+                               load_addr=0x1900, exec_addr=0x1900))
+        image.sides[0].addFile(DiscFile("T.DATA", b"\x00" * 16))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir)
+
+        assert os.path.isfile(os.path.join(out_dir, "$.BOOT.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "T.DATA.bin"))
+        # No subdirectories created for directory characters.
+        assert not os.path.isdir(os.path.join(out_dir, "$"))
+        assert not os.path.isdir(os.path.join(out_dir, "T"))
+
+    def testFlatAdfsNestedPath(self, tmp_path) -> None:
+        """Flat extraction uses the full ADFS path as the filename."""
+        from beebtools.image import createImage
+
+        image = createImage("test.adf", tracks=80, title="ADFSFLAT")
+        side = image.sides[0]
+        side.mkdir("$.GAMES")
+        side.addFile(DiscFile("$.GAMES.ELITE", b"\xFF" * 100,
+                     load_addr=0x1900, exec_addr=0x1900))
+
+        img_path = str(tmp_path / "test.adf")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir)
+
+        assert os.path.isfile(os.path.join(out_dir, "$.GAMES.ELITE.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "$.GAMES.inf"))
+        # No ADFS subdirectories created.
+        assert not os.path.isdir(os.path.join(out_dir, "$"))
+
+    def testFlatDsd(self, tmp_path) -> None:
+        """Flat DSD extraction creates side subdirs with flat contents."""
+        from beebtools.image import createImage
+        from dataclasses import replace as dc_replace
+
+        image = createImage("test.dsd", tracks=80, title="S0")
+        image.sides[0].addFile(DiscFile("$.F0", b"\x00" * 10))
+        image.sides[1].addFile(DiscFile("$.F1", b"\xFF" * 10))
+
+        img_path = str(tmp_path / "test.dsd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir)
+
+        assert os.path.isfile(os.path.join(out_dir, "side0", "$.F0.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "side1", "$.F1.bin"))
+        # No $ subdirectory inside sideN.
+        assert not os.path.isdir(os.path.join(out_dir, "side0", "$"))
+
+    def testFlatDirectoryInfStandalone(self, tmp_path) -> None:
+        """In flat mode, directory .inf is a standalone file with no
+        companion data file."""
+        from beebtools.image import createImage
+
+        image = createImage("test.adf", tracks=80, title="DIRTEST")
+        side = image.sides[0]
+        side.mkdir("$.UTILS")
+        side.addFile(DiscFile("$.UTILS.EDIT", b"\x00" * 50))
+
+        img_path = str(tmp_path / "test.adf")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir)
+
+        # Directory .inf exists.
+        dir_inf = os.path.join(out_dir, "$.UTILS.inf")
+        assert os.path.isfile(dir_inf)
+
+        # No companion data file or directory for UTILS.
+        assert not os.path.isfile(os.path.join(out_dir, "$.UTILS"))
+        assert not os.path.isdir(os.path.join(out_dir, "$.UTILS"))
+
+    def testMkdirsLayoutCreatesSubdirs(self, tmp_path) -> None:
+        """layout='hierarchical' creates subdirectories from Acorn paths."""
+        image = createDiscImage(tracks=80, title="HIER")
+        image.sides[0].addFile(DiscFile("$.BOOT", b"\xFF" * 16,
+                               load_addr=0x1900, exec_addr=0x1900))
+        image.sides[0].addFile(DiscFile("T.DATA", b"\x00" * 16))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, layout="hierarchical")
+
+        assert os.path.isfile(os.path.join(out_dir, "$", "BOOT.bin"))
+        assert os.path.isfile(os.path.join(out_dir, "T", "DATA.bin"))
+
+    def testInfWrittenByDefault(self, tmp_path) -> None:
+        """.inf sidecars are written by default without explicit flag."""
+        image = createDiscImage(tracks=80, title="INFDEF")
+        image.sides[0].addFile(DiscFile("$.FILE", b"\xFF" * 16))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir)
+
+        assert os.path.isfile(os.path.join(out_dir, "$.FILE.bin.inf"))
+        assert os.path.isfile(os.path.join(out_dir, "$.inf"))
+
+    def testNoInfSuppressesSidecars(self, tmp_path) -> None:
+        """write_inf=False suppresses all .inf output."""
+        image = createDiscImage(tracks=80)
+        image.sides[0].addFile(DiscFile("$.FILE", b"\xFF" * 16))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        out_dir = str(tmp_path / "out")
+        extractAll(img_path, out_dir, write_inf=False)
+
+        for root, dirs, files in os.walk(out_dir):
+            for fname in files:
+                assert not fname.endswith(".inf"), f"Unexpected .inf: {fname}"
+
+    def testFlatRoundTrip(self, tmp_path) -> None:
+        """Files extracted flat with .inf round-trip through buildImage."""
+        image = createDiscImage(tracks=80, title="ROUNDTRP")
+        image.sides[0].addFile(DiscFile("$.PROG", b"\xFF" * 256,
+                               load_addr=0x1900, exec_addr=0x1900))
+        image.sides[0].addFile(DiscFile("T.DATA", b"\xAA" * 100))
+
+        img_path = str(tmp_path / "test.ssd")
+        with open(img_path, "wb") as f:
+            f.write(image.serialize())
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(img_path, extract_dir)
+
+        rebuilt_bytes = buildImage(
+            source_dir=extract_dir,
+            output_path="rebuilt.ssd",
+            tracks=80,
+        )
+
+        rebuilt_path = str(tmp_path / "rebuilt.ssd")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openDiscImage(rebuilt_path)
+        cat = rebuilt.sides[0].readCatalogue()
+
+        names = {e.fullName for e in cat.entries}
+        assert "$.PROG" in names
+        assert "T.DATA" in names
+        assert cat.title == "ROUNDTRP"
 
 
 # =======================================================================
@@ -613,7 +1220,7 @@ class TestBuildImage:
         extractAll(img_path, extract_dir, write_inf=True)
 
         # Verify the extracted file is plain text (.bas), not binary.
-        bas_path = os.path.join(extract_dir, "$", "HELLO.bas")
+        bas_path = os.path.join(extract_dir, "$.HELLO.bas")
         assert os.path.isfile(bas_path)
         with open(bas_path, "r") as f:
             text = f.read()

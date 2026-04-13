@@ -291,7 +291,7 @@ placement hint. DFS honours the hint unconditionally; ADFS honours it
 only when the requested range is wholly free in the free-space map.
 
 This enables byte-exact round-trips on discs whose catalogue entries
-share sectors (notably Level 9 copy-protected games). `extract -a --inf`
+share sectors (notably Level 9 copy-protected games). `extract -a`
 writes `X_START_SECTOR` on every sidecar automatically, so the default
 extract-and-rebuild cycle preserves original sector positions.
 

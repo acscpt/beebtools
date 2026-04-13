@@ -81,8 +81,18 @@ class InfData:
     load_addr: int
     exec_addr: int
     length: Optional[int] = None
-    locked: bool = False
+    access_byte: int = 0
     extra_info: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def locked(self) -> bool:
+        """True when the entry is locked (not deletable by you).
+
+        Reads bit 3 of the access byte. For DFS this is the only
+        meaningful bit; for ADFS bits 0-7 all carry meaning.
+        """
+
+        return bool(self.access_byte & 0x08)
 
     @property
     def fullName(self) -> str:
@@ -109,20 +119,12 @@ class InfData:
         return self.directory.encode("latin-1")
 
     @property
-    def access(self) -> int:
-        """Return the 8-bit access byte form of the attributes.
-
-        Bit 3 (0x08) is set when ``locked`` is true. Other access bits
-        are not tracked on the DFS side of the codebase yet; if callers
-        need ADFS R/W/E bits they should supply them via ``extra_info``
-        or extend this dataclass in a later slice.
-        """
-
-        return 0x08 if self.locked else 0x00
-
-    @property
     def crc(self) -> Optional[int]:
-        """Return the 16-bit CRC from the extra_info dict if present."""
+        """Return the 16-bit CRC from the extra_info dict if present.
+
+        Emits a ``BeebToolsWarning`` if the value is present but not
+        valid hex, consistent with the ``startSector`` property.
+        """
 
         value = self.extra_info.get("CRC")
         if value is None:
@@ -131,6 +133,36 @@ class InfData:
         try:
             return int(value, 16)
         except ValueError:
+            _warnings.warn(
+                f".inf CRC={value!r} for {self.fullName!r} is not "
+                f"valid hex, ignoring",
+                BeebToolsWarning,
+                stacklevel=2,
+            )
+            return None
+
+    @property
+    def crc32(self) -> Optional[int]:
+        """Return the 32-bit CRC from the extra_info dict if present.
+
+        Emits a ``BeebToolsWarning`` if the value is present but not
+        valid hex, consistent with the ``crc`` and ``startSector``
+        properties.
+        """
+
+        value = self.extra_info.get("CRC32")
+        if value is None:
+            return None
+
+        try:
+            return int(value, 16)
+        except ValueError:
+            _warnings.warn(
+                f".inf CRC32={value!r} for {self.fullName!r} is not "
+                f"valid hex, ignoring",
+                BeebToolsWarning,
+                stacklevel=2,
+            )
             return None
 
     @property
@@ -212,8 +244,9 @@ def _decodePercentEscapes(raw: str) -> str:
 
     Each ``%XX`` sequence with two hex digits becomes the single code
     point whose value is the decoded byte. Any ``%`` that is not
-    followed by two hex digits is left as a literal character, which
-    matches the tokenizer's historical tolerant behaviour.
+    followed by two valid hex digits is left as a literal character
+    and a ``BeebToolsWarning`` is emitted so the caller knows the
+    input was not cleanly encoded.
     """
 
     out: List[str] = []
@@ -230,7 +263,20 @@ def _decodePercentEscapes(raw: str) -> str:
                 i += 3
                 continue
             except ValueError:
-                pass
+                _warnings.warn(
+                    f"Invalid percent-escape '%{raw[i + 1:i + 3]}' "
+                    f"in .inf field, treating as literal",
+                    BeebToolsWarning,
+                    stacklevel=3,
+                )
+
+        if ch == '%' and i + 2 >= n:
+            _warnings.warn(
+                f"Truncated percent-escape at end of .inf field, "
+                f"treating as literal",
+                BeebToolsWarning,
+                stacklevel=3,
+            )
 
         out.append(ch)
         i += 1
@@ -463,7 +509,7 @@ def parseInf(line: str) -> InfData:
 
     # -- Walk remaining tokens and classify them greedily. --
     hex_fields: List[int] = []
-    locked = False
+    access_byte = 0
     extra_info: Dict[str, str] = {}
     syntax3_access_seen = False
 
@@ -479,7 +525,7 @@ def parseInf(line: str) -> InfData:
         # can contain an '='.
         if _isExtraInfoToken(token):
             key, _, value = token.partition("=")
-            extra_info[key] = value
+            extra_info[key] = _decodePercentEscapes(value)
             idx += 1
 
             # After an extra info field, everything else must be
@@ -497,9 +543,9 @@ def parseInf(line: str) -> InfData:
             continue
 
         # DFS access shorthand: 'L', 'Locked', 'LOCKED'. Sets the
-        # locked flag without consuming a hex slot.
+        # lock bit without consuming a hex slot.
         if _isDfsAccessToken(token):
-            locked = True
+            access_byte |= 0x08
             idx += 1
             continue
 
@@ -515,14 +561,20 @@ def parseInf(line: str) -> InfData:
         # yet and the token is a valid ADFS access string.
         if not hex_fields and _isAdfsAccessToken(token):
             access_byte = _parseAdfsAccess(token)
-            locked = bool(access_byte & 0x08)
             syntax3_access_seen = True
             idx += 1
             continue
 
-        # Unknown token type. Stop parsing defensively rather than
-        # silently misinterpreting it.
-        break
+        # Unknown token type. Warn and skip so that any valid tokens
+        # further along the line are still captured.
+        _warnings.warn(
+            f".inf for {directory}.{name}: unrecognised token "
+            f"{token!r} at position {idx}, skipping",
+            BeebToolsWarning,
+            stacklevel=2,
+        )
+        idx += 1
+        continue
 
     # -- Extract addresses, length, and access byte from hex fields. --
     load_addr = hex_fields[0] if len(hex_fields) > 0 else 0
@@ -531,9 +583,6 @@ def parseInf(line: str) -> InfData:
 
     if len(hex_fields) > 3:
         access_byte = hex_fields[3]
-
-        if access_byte & 0x08:
-            locked = True
 
     # Syntax 3 discards addresses entirely. Mark length as None so the
     # formatter re-emits it as syntax 3 if it wants to preserve shape.
@@ -550,7 +599,7 @@ def parseInf(line: str) -> InfData:
         load_addr=load_addr,
         exec_addr=exec_addr,
         length=length,
-        locked=locked,
+        access_byte=access_byte,
         extra_info=extra_info,
     )
 
@@ -582,6 +631,12 @@ def _splitDirAndName(decoded: str, raw: str) -> Tuple[str, str]:
 
     Both halves are then percent-decoded before returning.
     """
+
+    # A bare '$' with no dot is unambiguously the root directory
+    # itself (used by Disc Image Manager and other tools for the
+    # root directory .inf). Return it as directory='$', name=''.
+    if decoded == "$" and "." not in raw:
+        return "$", ""
 
     dot_positions = _unescapedDotPositions(raw)
 
@@ -766,7 +821,7 @@ def formatInf(
     load_addr: int,
     exec_addr: int,
     length: int,
-    locked: bool = False,
+    access_byte: int = 0,
     extra_info: Optional[Dict[str, str]] = None,
 ) -> str:
     """Format file metadata as a .inf sidecar line.
@@ -777,7 +832,8 @@ def formatInf(
 
     where ``LLLLLLLL`` and ``EEEEEEEE`` are 8-digit hex load and exec
     addresses, ``SSSSSSSS`` is the 8-digit length, and ``AA`` is the
-    2-digit hex access byte (bit 3 set when ``locked`` is true).
+    2-digit hex access byte carrying the full 8-bit Acorn access
+    attributes (R/W/E/L for owner and others).
 
     If the name contains any byte that is not safe to emit unquoted -
     including space, DQUOTE, ``%``, or any byte outside the range
@@ -790,32 +846,36 @@ def formatInf(
     need quoting and which are hex-safe.
 
     Args:
-        directory:  Directory prefix: a single DFS char, or a dotted
-                    ADFS path such as ``$.GAMES``.
-        name:       Leaf filename (str, latin-1 byte semantics).
-        load_addr:  32-bit load address.
-        exec_addr:  32-bit execution address.
-        length:     File length in bytes.
-        locked:     True to set access bit 3 (not deletable by you).
-        extra_info: Optional KEY=value dict emitted after access byte.
+        directory:   Directory prefix: a single DFS char, or a dotted
+                     ADFS path such as ``$.GAMES``.
+        name:        Leaf filename (str, latin-1 byte semantics).
+        load_addr:   32-bit load address.
+        exec_addr:   32-bit execution address.
+        length:      File length in bytes.
+        access_byte: 8-bit access byte. Bit 3 is the lock flag. For
+                     DFS this is 0x00 or 0x08. For ADFS all 8 bits
+                     carry meaning (R/W/E/L owner + r/w/e/l others).
+        extra_info:  Optional KEY=value dict emitted after access byte.
 
     Returns:
         Formatted .inf line (no trailing newline).
     """
 
     name_field = _formatNameField(directory, name)
-    access_byte = 0x08 if locked else 0x00
 
     parts = [
         name_field,
         f"{load_addr & 0xFFFFFFFF:08X}",
         f"{exec_addr & 0xFFFFFFFF:08X}",
         f"{length & 0xFFFFFFFF:08X}",
-        f"{access_byte:02X}",
+        f"{access_byte & 0xFF:02X}",
     ]
 
     if extra_info:
         for key, value in extra_info.items():
-            parts.append(f"{key}={value}")
+            # Percent-encode any bytes in the value that would break
+            # whitespace-delimited tokenization on re-parse (space,
+            # control chars, DQUOTE, percent itself).
+            parts.append(f"{key}={_percentEncode(value, always_encode=' ')}")
 
     return " ".join(parts)

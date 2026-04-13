@@ -19,6 +19,7 @@ Collaborators:
 All operations that span more than one of these belong here.
 """
 
+import binascii
 import os
 import re
 import warnings as _warnings
@@ -158,11 +159,57 @@ def resolveOutputPath(
     return os.path.join(dir_path, safe_name)
 
 
+def resolveFlatOutputPath(
+    out_dir: str,
+    disc_side: int,
+    directory: str,
+    name: str,
+    multi_side: bool,
+) -> str:
+    """Resolve the output path for flat extraction layout.
+
+    Builds a flat filename from the full Acorn path, using dots as
+    separators matching natural DFS/ADFS notation:
+        - Single-sided: out_dir/$.BOOT
+        - Double-sided: out_dir/sideN/$.BOOT
+        - ADFS nested:  out_dir/$.GAMES.ELITE
+
+    The full Acorn path is inherently unique per side, so no collision
+    resolution is needed. Characters illegal on the host filesystem
+    are replaced with _xNN_ hex encoding; dots are preserved as-is.
+
+    Args:
+        out_dir:    Root output directory.
+        disc_side:  Side number (0 or 1) for this file.
+        directory:  Acorn directory path (e.g. '$', '$.GAMES').
+        name:       Acorn filename (e.g. 'BOOT', 'ELITE').
+        multi_side: True when the image has more than one side.
+
+    Returns:
+        Path string to write the file to (extension not included).
+    """
+    # Build the full Acorn path: $.BOOT, T.DATA, $.GAMES.ELITE
+    if name:
+        acorn_path = directory + "." + name
+    else:
+        acorn_path = directory
+
+    safe_name = _sanitizeForFilesystem(acorn_path)
+
+    if multi_side:
+        parent = os.path.join(out_dir, f"side{disc_side}")
+    else:
+        parent = out_dir
+
+    os.makedirs(parent, exist_ok=True)
+    return os.path.join(parent, safe_name)
+
+
 # -----------------------------------------------------------------------
 # Path qualification
 # -----------------------------------------------------------------------
 
-def formatEntryInf(entry: DiscEntry) -> str:
+def formatEntryInf(entry: DiscEntry, data: Optional[bytes] = None) -> str:
     """Format a catalogue entry as a .inf sidecar line.
 
     Convenience wrapper over formatInf() that destructures a DiscEntry
@@ -175,6 +222,10 @@ def formatEntryInf(entry: DiscEntry) -> str:
     ``buildImage`` later rebuild the disc with byte-exact on-disc file
     placement, which is required for round-tripping copy-protected
     discs that declare overlapping sector allocations.
+
+    When ``data`` is provided, computes CRC16 (XMODEM) and CRC32
+    checksums and emits ``CRC=XXXX`` and ``CRC32=XXXXXXXX`` extra
+    fields. These allow consumers to verify file integrity on rebuild.
     """
 
     extras = {}
@@ -182,11 +233,55 @@ def formatEntryInf(entry: DiscEntry) -> str:
     if entry.start_sector is not None:
         extras[INF_X_START_SECTOR] = str(entry.start_sector)
 
+    if data is not None:
+        extras["CRC"] = f"{binascii.crc_hqx(data, 0):04X}"
+        extras["CRC32"] = f"{binascii.crc32(data) & 0xFFFFFFFF:08X}"
+
     return formatInf(
         entry.directory, entry.name,
         entry.load_addr, entry.exec_addr,
-        entry.length, entry.locked,
+        entry.length, access_byte=entry.accessByte,
         extra_info=extras if extras else None,
+    )
+
+
+def formatDirectoryInf(
+    title: str,
+    boot_option: BootOption,
+    directory: str = "$",
+) -> str:
+    """Format a directory-level .inf sidecar line.
+
+    Emits syntax 1 per the stardot spec producer recommendation,
+    with all-zero hex fields and extra-info keys for disc metadata:
+
+        $ 00000000 00000000 00000000 00 TITLE=<disc title> OPT=<boot>
+
+    For DFS the directory is always '$'. For ADFS each subdirectory
+    gets its own .inf with DIRTITLE set to the directory title if
+    it differs from the disc title.
+
+    Args:
+        title:       Disc or directory title string.
+        boot_option: Boot option (0-3).
+        directory:   Directory path, e.g. '$' or '$.GAMES'.
+
+    Returns:
+        Formatted .inf line (no trailing newline).
+    """
+
+    extras: Dict[str, str] = {}
+
+    if title:
+        extras["TITLE"] = title
+
+    extras["OPT"] = str(int(boot_option))
+
+    return formatInf(
+        directory, "",
+        0, 0, 0,
+        access_byte=0x00,
+        extra_info=extras,
     )
 
 
@@ -703,7 +798,7 @@ def search(
 
     for side in image:
         for entry in side:
-            # Skip directory entries (ADFS directories are containers, not files).
+            # Skip directory entries (directories are containers, not files).
             if entry.isDirectory:
                 continue
 
@@ -742,8 +837,9 @@ def extractAll(
     image_path: str,
     out_dir: str,
     pretty: bool = False,
-    write_inf: bool = False,
+    write_inf: bool = True,
     text_mode: str = "ascii",
+    layout: str = "flat",
 ) -> List[Dict[str, Union[str, int]]]:
     """Extract every file from a disc image into a directory.
 
@@ -751,15 +847,17 @@ def extractAll(
     Plain text files are saved as .txt with CR normalised to LF.
     Binary files are saved as .bin raw bytes.
 
-    Files are laid out hierarchically with the DFS directory character
-    as a real subdirectory. On double-sided images, an additional
-    side0/ or side1/ level is added:
-        - SSD: out_dir/$/BOOT.bas
-        - DSD: out_dir/side0/$/BOOT.bas
+    The default flat layout puts all files in one directory using the
+    full Acorn path as the filename (e.g. $.BOOT.bas, T.DATA.bin,
+    $.GAMES.ELITE.bas). On double-sided images each side gets its own
+    subdirectory (side0/, side1/).
 
-    When write_inf is True, a .inf sidecar file is written alongside
-    every extracted file, preserving the DFS load address, exec address,
-    length, and lock flag in the standard community interchange format.
+    The hierarchical layout creates real subdirectories from the Acorn
+    directory path (e.g. $/BOOT.bas, T/DATA.bin).
+
+    A .inf sidecar file is written alongside every extracted file by
+    default, preserving the Acorn metadata in the stardot community
+    interchange format. Pass write_inf=False to suppress.
 
     Args:
         image_path: Path to a .ssd or .dsd disc image.
@@ -770,6 +868,8 @@ def extractAll(
                     'ascii'  -- replace with '?' (lossy, default)
                     'utf8'   -- write as UTF-8 (lossless)
                     'escape' -- \\xHH notation (lossless, plain ASCII)
+        layout:     'flat' (default) puts all files in one directory;
+                    'hierarchical' creates subdirectories from Acorn paths.
 
     Returns:
         List of result dicts, one per extracted file. Each dict has:
@@ -782,6 +882,8 @@ def extractAll(
     """
     os.makedirs(out_dir, exist_ok=True)
 
+    flat = layout == "flat"
+
     image = openImage(image_path)
     multi_side = len(image) > 1
 
@@ -789,12 +891,46 @@ def extractAll(
 
     for side in image:
         for entry in side:
-            # Skip directory entries (ADFS directories are containers, not files).
+            # Directory entries are containers, not files. Write a .inf
+            # sidecar for the directory if requested, then skip to the
+            # next entry. In flat mode the .inf is a standalone file
+            # (e.g. $.GAMES.inf); in hierarchical mode it sits alongside
+            # the PC directory folder (e.g. $/GAMES.inf next to $/GAMES/).
             if entry.isDirectory:
+                if write_inf:
+                    if flat:
+                        stem = resolveFlatOutputPath(
+                            out_dir, side.side,
+                            entry.directory, entry.name, multi_side,
+                        )
+                    else:
+                        safe_dir, safe_name = sanitizeEntryPath(
+                            entry.directory, entry.name,
+                        )
+                        stem = resolveOutputPath(
+                            out_dir, side.side, safe_dir, safe_name,
+                            multi_side,
+                        )
+
+                    dir_inf_line = formatEntryInf(entry)
+
+                    with open(stem + ".inf", "w", encoding="utf-8") as f:
+                        f.write(dir_inf_line + "\n")
+
                 continue
 
-            safe_dir, safe_name = sanitizeEntryPath(entry.directory, entry.name)
-            stem = resolveOutputPath(out_dir, side.side, safe_dir, safe_name, multi_side)
+            if flat:
+                stem = resolveFlatOutputPath(
+                    out_dir, side.side,
+                    entry.directory, entry.name, multi_side,
+                )
+            else:
+                safe_dir, safe_name = sanitizeEntryPath(
+                    entry.directory, entry.name,
+                )
+                stem = resolveOutputPath(
+                    out_dir, side.side, safe_dir, safe_name, multi_side,
+                )
             data = side.readFile(entry)
 
             if entry.isBasic and looksLikeTokenizedBasic(data):
@@ -853,10 +989,32 @@ def extractAll(
                 })
 
             # Write .inf sidecar alongside the data file if requested.
+            # Pass the original disc data so CRC checksums are computed
+            # from the raw bytes, not from any converted form.
             if write_inf:
-                inf_line = formatEntryInf(entry)
+                inf_line = formatEntryInf(entry, data)
                 with open(out_path + ".inf", "w", encoding="utf-8") as f:
                     f.write(inf_line + "\n")
+
+        # Write a directory-level .inf for the root directory,
+        # preserving the disc title and boot option so that a
+        # subsequent buildImage can recover them without explicit
+        # --title/--boot flags.
+        if write_inf:
+            cat = side.readCatalogue()
+
+            if multi_side:
+                side_root = os.path.join(out_dir, f"side{side.side}")
+            else:
+                side_root = out_dir
+
+            dir_inf_line = formatDirectoryInf(
+                cat.title, cat.boot_option,
+            )
+            dir_inf_path = os.path.join(side_root, "$.inf")
+
+            with open(dir_inf_path, "w", encoding="utf-8") as f:
+                f.write(dir_inf_line + "\n")
 
     return results
 
@@ -899,13 +1057,106 @@ def createImageFile(
     return len(image_bytes)
 
 
+def _readDirectoryInf(fs_dir: str) -> Optional[InfData]:
+    """Read and parse a directory-level $.inf from a filesystem tree.
+
+    Looks for ``$.inf`` in the given directory root. Returns the
+    parsed InfData if the file exists and is valid, None otherwise.
+    A malformed .inf emits a warning and returns None.
+    """
+
+    inf_path = os.path.join(fs_dir, "$.inf")
+
+    if not os.path.isfile(inf_path):
+        return None
+
+    with open(inf_path, "r", encoding="utf-8") as handle:
+        inf_line = handle.readline().rstrip("\r\n")
+
+    try:
+        return parseInf(inf_line)
+    except ValueError as exc:
+        _warnings.warn(
+            f"bad directory .inf {inf_path}: {exc}",
+            BeebToolsWarning,
+            stacklevel=3,
+        )
+        return None
+
+
+def _applyDirectoryInf(
+    side: DiscSide,
+    fs_dir: str,
+    title: Optional[str],
+    boot_option: Optional[BootOption],
+    force: bool,
+) -> None:
+    """Apply disc metadata to a side from $.inf or explicit overrides.
+
+    When ``$.inf`` exists in ``fs_dir`` it is the source of truth for
+    the disc title and boot option. If the caller also passed explicit
+    values (title / boot_option are not None), a warning is emitted
+    and the .inf values win. Set ``force=True`` to make the explicit
+    values override the .inf instead.
+
+    When no ``$.inf`` exists, title and boot_option are applied
+    directly as the only source of metadata.
+    """
+
+    dir_inf = _readDirectoryInf(fs_dir)
+    cat = side.readCatalogue()
+
+    if dir_inf is not None:
+        inf_title = dir_inf.extra_info.get("TITLE", cat.title)
+        opt_str = dir_inf.extra_info.get("OPT", "")
+
+        if opt_str.isdigit() and int(opt_str) in range(4):
+            inf_boot = BootOption(int(opt_str))
+        else:
+            inf_boot = cat.boot_option
+
+        if force:
+            # Explicit values win over .inf.
+            new_title = title if title is not None else inf_title
+            new_boot = boot_option if boot_option is not None else inf_boot
+        else:
+            # .inf wins. Warn if the caller also passed explicit values.
+            new_title = inf_title
+            new_boot = inf_boot
+
+            if title is not None and title != inf_title:
+                _warnings.warn(
+                    f"$.inf found in {fs_dir}: using TITLE from .inf "
+                    f"(pass force=True to override)",
+                    BeebToolsWarning,
+                    stacklevel=3,
+                )
+
+            if boot_option is not None and boot_option != inf_boot:
+                _warnings.warn(
+                    f"$.inf found in {fs_dir}: using OPT from .inf "
+                    f"(pass force=True to override)",
+                    BeebToolsWarning,
+                    stacklevel=3,
+                )
+
+    else:
+        # No $.inf -- use explicit values or keep creation defaults.
+        new_title = title if title is not None else cat.title
+        new_boot = boot_option if boot_option is not None else cat.boot_option
+
+    updated = replace(cat, title=new_title, boot_option=new_boot)
+    side.writeCatalogue(updated)
+
+
 def buildImage(
     source_dir: str,
     output_path: str,
     tracks: int = 80,
-    title: str = "",
-    boot_option: BootOption = BootOption.OFF,
+    title: Optional[str] = None,
+    boot_option: Optional[BootOption] = None,
     save: bool = False,
+    force: bool = False,
 ) -> bytes:
     """Build a disc image from a directory of files with .inf sidecars.
 
@@ -920,6 +1171,16 @@ def buildImage(
     character (e.g. '$/', 'T/'). For DSD: side0/ and side1/
     subdirectories. For ADFS: a '$' root directory.
 
+    When a ``$.inf`` directory sidecar is present in the source tree
+    (or in each sideN/ for DSD), its TITLE and OPT extra-info keys
+    are the source of truth for that side's disc metadata. If the
+    caller also passes explicit ``title`` or ``boot_option`` values,
+    a warning is emitted and the .inf values win. Set ``force=True``
+    to override the .inf with the explicit values instead.
+
+    When no ``$.inf`` is present, ``title`` and ``boot_option`` are
+    used directly (defaulting to empty string and OFF respectively).
+
     Files without a .inf sidecar are skipped with a warning. BASIC
     programs compacted to fit the 255-byte line limit also emit
     warnings. Warnings are emitted via the standard warnings module
@@ -931,12 +1192,16 @@ def buildImage(
         output_path: Path whose extension determines the disc format.
                      When save is True this is also the destination file.
         tracks:      Number of tracks (40 or 80).
-        title:       Disc title (up to 12 characters).
-        boot_option: Boot option (0-3).
+        title:       Disc title. When None (default), the value comes
+                     from $.inf or falls back to empty string.
+        boot_option: Boot option (0-3). When None (default), the value
+                     comes from $.inf or falls back to BootOption.OFF.
         save:        When True, the assembled image is also written to
                      output_path. Default False, in which case no file
                      is written and the caller is responsible for
                      persisting the returned bytes.
+        force:       When True, explicit title/boot_option values
+                     override $.inf instead of the other way around.
 
     Returns:
         The assembled disc image as bytes. When save is True the same
@@ -947,15 +1212,22 @@ def buildImage(
         DFSFormatError: If the output_path extension is unrecognised.
         OSError:   If save is True and the write to output_path fails.
     """
+
+    # Create with safe defaults; _applyDirectoryInf sets the real
+    # values from $.inf or from the explicit overrides.
     image = createImage(
-        output_path, tracks=tracks, title=title, boot_option=boot_option,
+        output_path, tracks=tracks,
+        title=title or "",
+        boot_option=boot_option or BootOption.OFF,
     )
 
     if len(image) > 1:
         for i, side in enumerate(image):
             side_path = os.path.join(source_dir, f"side{i}")
+            _applyDirectoryInf(side, side_path, title, boot_option, force)
             _walkSourceTree(side, side_path)
     else:
+        _applyDirectoryInf(image[0], source_dir, title, boot_option, force)
         _walkSourceTree(image[0], source_dir)
 
     image_bytes = image.serialize()
@@ -1040,25 +1312,25 @@ def _collectSourceFiles(
     return collected
 
 
-def _ensureAdfsDirs(side: DiscSide, dir_paths: List[str]) -> None:
-    """Auto-create every ADFS directory referenced by the build set.
+def _ensureDirectories(side: DiscSide, dir_paths: List[str]) -> None:
+    """Auto-create every directory referenced by the build set.
 
     Takes the set of parent directories mentioned by the .inf records
     being placed on disc and creates each one (shortest first) unless
-    it is the root or already exists. Non-ADFS sides are a no-op
-    because DFS directories are implicit.
+    it is the root or already exists. Formats that do not support
+    subdirectories (e.g. DFS) are a no-op because their directories
+    are implicit single-character tokens.
 
     Args:
         side:      The DiscSide to create directories on.
-        dir_paths: Unsorted list of ADFS parent directory paths such
-                   as ``$``, ``$.GAMES``, ``$.GAMES.ACTION``.
+        dir_paths: Unsorted list of parent directory paths such as
+                   ``$``, ``$.GAMES``, ``$.GAMES.ACTION``.
     """
 
     # Collect every path prefix we might need, de-duplicated. A file
     # under "$.A.B.C" requires "$.A", "$.A.B", and "$.A.B.C" to exist.
-    # Directory paths that do not start with the $ root are DFS-style
-    # single-character tokens and are skipped entirely because DFS has
-    # no explicit directory structure on disc.
+    # Paths that do not start with "$." are single-character directory
+    # tokens (e.g. DFS) and need no explicit creation on disc.
     prefixes = set()
 
     for dir_path in dir_paths:
@@ -1104,8 +1376,8 @@ def _walkSourceTree(
     Processing happens in several passes:
 
     1. Collect every (data file, .inf record) pair from the filesystem.
-    2. Auto-create any ADFS directories referenced by the collected
-       records.
+    2. Auto-create any directories referenced by the collected records
+       (e.g. ADFS subdirectories; DFS directories are implicit).
     3. Split the records into placed (those whose .inf sidecar carries
        an ``X_START_SECTOR`` / ``START_SECTOR`` hint) and unplaced.
     4. Write the placed records first, ordered by end sector ascending
@@ -1130,8 +1402,8 @@ def _walkSourceTree(
     # Pass 1: collect every source file with its .inf metadata.
     records = _collectSourceFiles(fs_dir)
 
-    # Auto-create every ADFS parent directory referenced by the records.
-    _ensureAdfsDirs(side, [rec[2].directory for rec in records])
+    # Auto-create every parent directory referenced by the records.
+    _ensureDirectories(side, [rec[2].directory for rec in records])
 
     # Split into placed and unplaced, preserving the original order
     # for the unplaced bucket. Placed records are sorted by end
@@ -1198,6 +1470,35 @@ def _walkSourceTree(
                 _warnings.warn(
                     f"side {side.side} {inf.fullName}: "
                     f"compacted to fit ({w})",
+                    BeebToolsWarning,
+                    stacklevel=2,
+                )
+
+        # Validate CRC checksums if present in the .inf sidecar.
+        # At this point data holds the binary form (raw for .bin,
+        # retokenized for .bas) so it should match the original CRC.
+        expected_crc = inf.crc
+
+        if expected_crc is not None:
+            actual_crc = binascii.crc_hqx(data, 0)
+
+            if actual_crc != expected_crc:
+                _warnings.warn(
+                    f"{inf.fullName}: CRC mismatch "
+                    f"(expected {expected_crc:04X}, got {actual_crc:04X})",
+                    BeebToolsWarning,
+                    stacklevel=2,
+                )
+
+        expected_crc32 = inf.crc32
+
+        if expected_crc32 is not None:
+            actual_val = binascii.crc32(data) & 0xFFFFFFFF
+
+            if actual_val != expected_crc32:
+                _warnings.warn(
+                    f"{inf.fullName}: CRC32 mismatch "
+                    f"(expected {expected_crc32:08X}, got {actual_val:08X})",
                     BeebToolsWarning,
                     stacklevel=2,
                 )

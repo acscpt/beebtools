@@ -69,7 +69,7 @@ beebtools extract mydisc.dsd T.LOTTERY -o lottery.bas -t escape
 Extract all files from a disc image by specifying the option `-a`.
 
 ```bash
-beebtools extract <image> -a [-d DIR] [--pretty] [--inf] [-t MODE]
+beebtools extract <image> -a [-d DIR] [--pretty] [--no-inf] [--mkdirs] [-t MODE]
 ```
 
 Extracts every file from the disc.
@@ -84,17 +84,25 @@ The output directory defaults to the disc image filename stem (`bbc_d1/` for `bb
 
 ### Output layout
 
-Files are laid out hierarchically. On a DFS image the DFS directory character becomes a real subdirectory. On ADFS images the full directory tree is recreated as nested filesystem directories.
+Files are placed in a flat directory using the full Acorn path as the
+filename, with dots as separators. This matches natural DFS/ADFS notation
+and follows the stardot DFS-style arrangement. The `.inf` sidecar is the
+source of truth for the Acorn name; the host filename is cosmetic.
+
+On double-sided DSD images, each side gets its own subdirectory
+(`side0/`, `side1/`).
 
 **DFS single-sided (`.ssd`):**
 
 ```
 bbc_d1/
-  $/
-    BOOT.txt
-    LOADER.bin
-  T/
-    PROG.bas
+  $.inf
+  $.BOOT.txt
+  $.LOADER.bin
+  T.PROG.bas
+  T.PROG.bas.inf
+  $.BOOT.txt.inf
+  $.LOADER.bin.inf
 ```
 
 **DFS double-sided (`.dsd`):**
@@ -102,47 +110,54 @@ bbc_d1/
 ```
 bbc_d1/
   side0/
-    $/
-      BOOT.txt
-    T/
-      PROG.bas
+    $.inf
+    $.BOOT.txt
+    $.BOOT.txt.inf
+    T.PROG.bas
+    T.PROG.bas.inf
   side1/
-    $/
-      BOOT.txt
-    T/
-      GAME.bas
+    $.inf
+    $.BOOT.txt
+    $.BOOT.txt.inf
+    T.GAME.bas
+    T.GAME.bas.inf
 ```
 
 **ADFS (`.adf`/`.adl`):**
 
 ```
 game/
-  $/
-    !BOOT.txt
-    README.bin
-    GAMES/
-      ELITE.bas
-      REVS.bin
-    DATA/
-      SCORES.bin
+  $.inf
+  $.!BOOT.txt
+  $.!BOOT.txt.inf
+  $.GAMES.inf
+  $.GAMES.ELITE.bas
+  $.GAMES.ELITE.bas.inf
+  $.DATA.inf
+  $.DATA.SCORES.bin
+  $.DATA.SCORES.bin.inf
 ```
 
-Directory entries from ADFS images are skipped - only files are extracted.
+Directory entries from ADFS images produce standalone `.inf` files (e.g.
+`$.GAMES.inf`) with no companion data file. These carry directory metadata
+such as access attributes.
+
+Pass `--mkdirs` to use the old hierarchical layout where DFS directory
+characters and ADFS paths become real subdirectories.
 
 ### .inf sidecars
 
-Add `--inf` to write `.inf` sidecar files alongside each extracted file,
-preserving the load address, exec address, length, and lock flag in the
-standard community interchange format.
+`.inf` sidecar files are written by default alongside each extracted file,
+preserving the load address, exec address, length, access byte, CRC16,
+and CRC32 in the stardot community interchange format. A `$.inf` is
+written for the root directory carrying the disc title and boot option.
 
-The `.inf` file format is the same for DFS and ADFS - it records the leaf
-directory, filename, load address, exec address, length, and optional lock
-flag. The format predates ADFS and has no field for hierarchical paths, so
-for ADFS extractions the directory hierarchy is encoded in the *filesystem
-layout* instead: subdirectories mirror the ADFS tree, and each `.inf` file
-records only the leaf directory name and filename. The `build` command
-reconstructs the full ADFS path from the nested directory structure when
-rebuilding an image.
+Pass `--no-inf` to suppress sidecar output.
+
+The `.inf` file records the full Acorn path (e.g. `$.BOOT`, `T.PROG`,
+`$.GAMES.ELITE`), load address, exec address, length, and access byte.
+The `build` command reads these sidecars to reconstruct the disc image
+with full metadata.
 
 ## Filename matching
 
@@ -170,7 +185,13 @@ Ambiguous filename 'LOADER' - specify with full path.
 
 - `--pretty` - add operator spacing to BASIC output
 
-- `--inf` - write `.inf` sidecar files with bulk extraction
+- `--no-inf` - suppress `.inf` sidecar files (written by default)
+
+- `--mkdirs` - create subdirectories from Acorn paths instead of flat layout
+
+- `--inf` - *deprecated, now the default.* Accepted for backwards
+  compatibility; emits a deprecation warning. Will be removed in a
+  future release. Use `--no-inf` to suppress sidecars
 
 - `-t` / `--text` - text encoding for BASIC `.bas` files: `ascii` (lossy,
   default), `utf8` (lossless), `escape` (`\xHH` notation, lossless).

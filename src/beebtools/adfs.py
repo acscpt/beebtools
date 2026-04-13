@@ -92,6 +92,12 @@ class ADFSEntry(DiscEntry):
     sequence: int
 
     @property
+    def accessByte(self) -> int:
+        """Return the full 8-bit ADFS access byte from the directory entry."""
+
+        return self.access
+
+    @property
     def fullName(self) -> str:
         """Full ADFS path, e.g. '$.GAMES.ELITE'."""
         if self.directory == "$":

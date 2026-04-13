@@ -1,7 +1,7 @@
 # build - Build a disc image from files
 
 ```bash
-beebtools build <dir> <output> [-t 40|80] [--title TITLE] [--boot OFF|LOAD|RUN|EXEC] [--strict]
+beebtools build <dir> <output> [-t 40|80] [--title TITLE] [--boot OFF|LOAD|RUN|EXEC] [--force] [--strict]
 ```
 
 Assembles a disc image from a directory of files with `.inf` sidecars. The
@@ -10,70 +10,81 @@ or `.adl`).
 
 ## Source directory layout
 
-The source directory should have the same hierarchical layout produced by
-`extract -a --inf`:
+The source directory should have the layout produced by `extract -a`. The
+builder supports both flat (default) and hierarchical layouts.
 
-- **DFS**: one subdirectory per directory character (`$/`, `T/`), with each
-  data file accompanied by a `.inf` sidecar. For DSD images, `side0/` and
-  `side1/` subdirectories are expected.
+### Flat layout (default from `extract -a`)
 
-- **ADFS**: a `$` directory at the top level containing the file hierarchy,
-  with subdirectories matching the ADFS tree structure. Subdirectories are
-  created on the image automatically.
+All files sit in one directory, named by their full Acorn path with dots
+as separators. Each data file has a companion `.inf` sidecar. A `$.inf`
+carries the disc title and boot option.
 
-### DFS example layout
+**DFS example:**
 
 ```
 working/
+  $.inf                   # $ 00000000 00000000 00000000 00 TITLE=MY%20DISC OPT=3
+  $.BOOT.bin
+  $.BOOT.bin.inf          # $.BOOT  FF1900 FF8023 000100 00
+  $.MENU.bas
+  $.MENU.bas.inf          # $.MENU  FF0E00 FF802B 000400 00
+  T.MYPROG.bas
+  T.MYPROG.bas.inf        # T.MYPROG FF0E00 FF802B 000800 00
+```
+
+**ADFS example:**
+
+```
+working/
+  $.inf
+  $.GAMES.inf             # directory metadata
+  $.GAMES.ELITE.bin
+  $.GAMES.ELITE.bin.inf   # $.GAMES.ELITE  FFFF0E00 FFFF802B 004000 00
+  $.DATA.inf              # directory metadata
+  $.DATA.SCORES.bin
+  $.DATA.SCORES.bin.inf   # $.DATA.SCORES  FF0000 FF0000 001000 00
+```
+
+For DSD images, the builder expects `side0/` and `side1/` subdirectories,
+each with its own flat layout and `$.inf`.
+
+### Hierarchical layout (from `extract -a --mkdirs`)
+
+One subdirectory per DFS directory character or ADFS path. This is the
+layout produced when `--mkdirs` is passed to `extract`.
+
+**DFS example:**
+
+```
+working/
+  $.inf
   $/
-    BOOT
-    BOOT.inf          # $.BOOT  FF1900 FF8023 000100
-    MENU
-    MENU.inf          # $.MENU  FF0E00 FF802B 000400
+    BOOT.bin
+    BOOT.bin.inf          # $.BOOT  FF1900 FF8023 000100 00
   T/
-    MYPROG
-    MYPROG.inf        # T.MYPROG FF0E00 FF802B 000800
+    MYPROG.bas
+    MYPROG.bas.inf        # T.MYPROG FF0E00 FF802B 000800 00
 ```
 
-Each `.inf` file uses the standard DFS format: `DIR.NAME  LOAD EXEC SIZE [L]`.
-The directory character in the `.inf` content matches the subdirectory the file
-sits in.
+The builder auto-detects which layout is present by looking for `.inf`
+sidecars in the source tree. Both layouts round-trip correctly.
 
-### ADFS example layout
+### $.inf as source of truth
 
-```
-working/
-  $/
-    BOOT
-    BOOT.inf          # $.BOOT  FF1900 FF8023 000100
-    GAMES/
-      ELITE
-      ELITE.inf       # $.GAMES.ELITE  FFFF0E00 FFFF802B 004000
-      DATA/
-        SCORES
-        SCORES.inf    # $.GAMES.DATA.SCORES  FF0000 FF0000 001000
-```
-
-For ADFS, the directory tree on the filesystem mirrors the ADFS directory
-hierarchy. Each `.inf` sidecar must contain the **full ADFS path** of the file
-(e.g. `$.GAMES.ELITE`, not just `$.ELITE`), because `build` reads the path
-from the `.inf` content when adding the file to the image.
-
-Subdirectories do not need their own `.inf` files - `build` creates them
-automatically as it walks the filesystem tree.
+When a `$.inf` exists in the source directory, the builder uses its
+`TITLE=` and `OPT=` values for the disc title and boot option. Explicit
+`--title`/`--boot` flags emit a warning when they conflict with `$.inf`;
+pass `--force` to override.
 
 ## Round-trip workflow
 
-The easiest way to get a valid source directory is to extract from an existing
-image:
-
 ```bash
 # DFS round-trip
-beebtools extract original.ssd -a --inf -d working/
+beebtools extract original.ssd -a -d working/
 beebtools build working/ modified.ssd --title "MODIFIED"
 
 # ADFS round-trip
-beebtools extract original.adf -a --inf -d working/
+beebtools extract original.adf -a -d working/
 beebtools build working/ modified.adf --title "MODIFIED"
 ```
 
@@ -95,14 +106,12 @@ beebtools add mydisc.adf game.bin --name $.GAMES.ELITE --load 0E00 --exec 802B
 
 **Option 2: `build`** (better for many files)
 
-Create the directory tree manually with `.inf` sidecars, then build in one
-step. You must write the `.inf` files yourself with the correct paths and
-addresses:
+Create a directory with `.inf` sidecars, then build in one step. You must
+write the `.inf` files yourself with the correct paths and addresses:
 
 ```bash
-mkdir -p working/\$/GAMES
-echo '$.LOADER  001900 001900 000400' > working/\$/LOADER.inf
-echo '$.GAMES.ELITE  FFFF0E00 FFFF802B 004000' > working/\$/GAMES/ELITE.inf
+echo '$.LOADER  001900 001900 000400 00' > working/$.LOADER.bin.inf
+echo '$.GAMES.ELITE  FFFF0E00 FFFF802B 004000 00' > working/$.GAMES.ELITE.bin.inf
 # ... copy the actual data files alongside each .inf ...
 beebtools build working/ mydisc.adf --title "MY DISC"
 ```
@@ -114,7 +123,7 @@ the builder places the file at that exact sector instead of allocating a fresh
 range. This enables byte-exact round-trips on discs whose catalogue entries
 share sectors (notably Level 9 copy-protected games).
 
-`extract -a --inf` writes `X_START_SECTOR` on every sidecar automatically, so
+`extract -a` writes `X_START_SECTOR` on every sidecar automatically, so
 the default extract-and-rebuild cycle preserves original sector positions without
 any extra flags.
 
@@ -130,6 +139,9 @@ for the full story.
 - `--title` - disc title
 
 - `--boot` - boot option: OFF, LOAD, RUN, or EXEC (numbers 0-3 also accepted)
+
+- `--force` - override `$.inf` disc metadata with explicit `--title`/`--boot`
+  values
 
 - `--strict` - enforce DFS spec-compliance on filenames. Rejects non-printable
   bytes, `.`, `#`, `*`, `:`, `"`, and space. Use when authoring new discs where

@@ -164,7 +164,7 @@ beebtools extract mydisc.dsd T.MYPROG --pretty
 beebtools extract mydisc.dsd -a --pretty -d output/
 
 # Extract everything with .inf sidecars preserving file metadata
-beebtools extract mydisc.dsd -a --inf -d output/
+beebtools extract mydisc.dsd -a -d output/
 
 # Preserve teletext control codes in BASIC strings (lossless UTF-8)
 beebtools extract mydisc.dsd T.LOTTERY -o lottery.bas -t utf8
