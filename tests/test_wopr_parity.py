@@ -224,3 +224,71 @@ def testRomAbbrevADotIsAnd():
 def testRomAbbrevAbDotIsAbs():
     """AB. resolves to ABS: the AB prefix only matches ABS."""
     assertRomFirstByte("AB.", _TOKEN_OF["ABS"])
+
+
+# Case sensitivity. The BBC BASIC ROM's keyword matcher is
+# case-sensitive: only uppercase letters at the cursor can match a
+# keyword row. The keyboard input stage uppercases as you type, which
+# is why interactive listings always appear uppercase, but text loaded
+# from disc or tape passes through tokenisation verbatim. Lowercase
+# identifiers that happen to contain keyword letters (value, data,
+# print, for, to) must survive as literal bytes.
+
+def testCaseSensitiveLowercaseValueStaysLiteral():
+    """Lowercase `value` does not match VAL; all bytes stay literal."""
+    assertParity("value")
+
+
+def testCaseSensitiveLowercaseDataStaysLiteral():
+    """Lowercase `data` does not match DATA; no line-literal takeover."""
+    assertParity("data")
+
+
+def testCaseSensitiveLowercasePrintStaysLiteral():
+    """Lowercase `print` does not match PRINT."""
+    assertParity("print x")
+
+
+def testCaseSensitiveLowercaseForStaysLiteral():
+    """Lowercase `for` does not match FOR."""
+    assertParity("for i=1 to 10")
+
+
+def testCaseSensitiveLowercaseDotAbbrevDoesNotMatch():
+    """Lowercase `p.` does not match any keyword by abbreviation."""
+    assertParity("p.")
+
+
+def testCaseSensitiveUppercaseValueMatchesVAL():
+    """VALUE tokenises VAL + 'UE' (VAL's conditional flag rejects the
+    identifier-char suppression only when followed by an ident char;
+    here the letters after VAL are themselves part of the source)."""
+    assertParity("VALUE")
+
+
+# Embedded assembler blocks. The BBC BASIC ROM has no distinct
+# assembler-mode in the tokenizer: `[` and `]` are ordinary literal
+# bytes, and the text between them is tokenised by the same rules as
+# the rest of the line. Keyword-letter mnemonics like LDA, STA, JMP
+# are not keywords so pass through as literals; the logical operators
+# AND/OR/EOR and control words FOR/NEXT *are* keywords and tokenise
+# even inside `[...]`. Parity with the legacy tokenizer is the check.
+
+def testAssemblerBlockLiteralsAndOperands():
+    """Straight LDA/STA block with an AND operator tokenises AND only."""
+    assertParity("[LDA value AND &7F: STA &70]")
+
+
+def testAssemblerBlockLoopWithForNext():
+    """FOR/NEXT inside an assembler block still tokenise as keywords."""
+    assertParity("[FOR I%=0 TO 7: LDA data,X: NEXT]")
+
+
+def testAssemblerBlockBracketsAreLiterals():
+    """Bare `[` and `]` are ordinary ASCII in the output."""
+    assertParity("[]")
+
+
+def testAssemblerBlockWithLabel():
+    """A .label inside an assembler block stays literal (no token)."""
+    assertParity("[.loop LDA &70: BNE loop]")

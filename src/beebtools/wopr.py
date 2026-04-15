@@ -205,7 +205,7 @@ def _matchKeyword(ctx: Context) -> Optional[Match]:
         if pos + kwLen > length:
             continue
 
-        if text[pos:pos + kwLen].upper() != name:
+        if text[pos:pos + kwLen] != name:
             continue
 
         if kw.conditional and pos + kwLen < length:
@@ -221,7 +221,7 @@ def _matchKeyword(ctx: Context) -> Optional[Match]:
     if end == pos or end >= length or text[end] != _DOT:
         return None
 
-    prefix = text[pos:end].upper()
+    prefix = text[pos:end]
     consumed = end - pos + 1
 
     for kw in ctx.dialect.keywords:
