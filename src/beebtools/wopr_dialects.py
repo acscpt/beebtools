@@ -146,10 +146,19 @@ _COMMON_ABBREV = frozenset({
 # Keywords BBC BASIC IV adds on top of BBC BASIC II. The 6502 CMOS
 # BASIC shipped on the BBC Master is otherwise a strict superset of
 # BASIC II: same token byte assignments, same flag behaviour. EDIT
-# fills the unused 0xCE slot. TIME$ is also new (a battery-backed RTC
-# pseudo-variable) but its byte assignment is not published in any
-# clean-room source we have, so it is left out until verified by
-# observing a real BASIC IV ROM.
+# fills the previously-unused 0xCE slot.
+#
+# BASIC IV's other documented additions need no token additions:
+#
+# - TIME$ is the battery-backed RTC pseudo-variable. Per mdfs.net's
+#   token table it tokenises as the TIME byte (0x91/0xD1) followed by
+#   a literal '$' (0x24); the interpreter distinguishes TIME from
+#   TIME$ at run time. Falls out of the existing engine for free.
+# - LIST IF, ON PROC, EXT# as statement, and VDU '|' all reuse
+#   existing tokens with new parser/interpreter semantics.
+# - OPENUP and OPENOUT are already in BASIC II at 0xAD and 0xAE.
+#
+# So at the token-byte level, EDIT is the only delta.
 _BBC_BASIC_IV_ADDITIONS: Tuple[Tuple[int, str], ...] = (
     (0xCE, "EDIT"),
 )

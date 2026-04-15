@@ -104,3 +104,46 @@ def testOnProcIsTokenisedSameAsOnGoto():
     assert ii == iv
     assert _TOKEN_OF["ON"] in iv
     assert _TOKEN_OF["PROC"] in iv
+
+
+# TIME$ is BASIC IV's RTC pseudo-variable. Per mdfs.net's BBC BASIC
+# token table, the 6502 BASIC IV ROM tokenises TIME$ as the TIME byte
+# (0x91 function-form, 0xD1 statement-form) followed by a literal '$'
+# byte (0x24). There is no separate token for TIME$. The interpreter
+# distinguishes TIME from TIME$ at run time by the trailing '$'.
+#
+# Consequence for our engine: TIME$ falls out of existing logic with
+# no dialect changes. The TIME keyword matches first (its conditional
+# flag does not suppress here because '$' is not an identifier char),
+# emits its token, and the '$' falls through to the literal-emission
+# arm. The byte sequence is identical in BBC_BASIC_II and BBC_BASIC_IV
+# at the tokenizer level; only the interpreter would treat the two
+# differently.
+
+def testTimeDollarRhsIsFunctionFormPlusLiteralDollar():
+    """X=TIME$ tokenises as X = 0x91 0x24 in both dialects."""
+    expected = bytes([ord('X'), ord('='), 0x91, 0x24])
+    assert tokenizeLine("X=TIME$", BBC_BASIC_IV) == expected
+    assert tokenizeLine("X=TIME$", BBC_BASIC_II) == expected
+
+
+def testTimeDollarLhsIsStatementFormPlusLiteralDollar():
+    """TIME$="01 JAN 2026" tokenises with the 0xD1 statement form."""
+    out = tokenizeLine('TIME$="01 JAN 2026"', BBC_BASIC_IV)
+    assert out[0] == 0xD1
+    assert out[1] == 0x24
+
+
+def testTimeDollarConditionalNotSuppressedByDollar():
+    """TIME's conditional flag suppresses on identifier chars only.
+    '$' is not an identifier char, so TIME still tokenises before $.
+    """
+    out = tokenizeLine("TIME$", BBC_BASIC_IV)
+    assert 0xD1 in out or 0x91 in out
+
+
+def testTimeRStillSuppressedInIV():
+    """TIMER (identifier char after TIME) stays a variable in IV too."""
+    out = tokenizeLine("TIMER=0", BBC_BASIC_IV)
+    assert 0x91 not in out
+    assert 0xD1 not in out
