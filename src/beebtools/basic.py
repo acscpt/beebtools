@@ -706,13 +706,9 @@ def _tokenizeContent(text: str, fn_proc_names: Dict[str, FrozenSet[str]] = None)
             in_variable = False
             at_start = False
             i += 1
-            first = True
             while i < length and upper[i] in '0123456789ABCDEF':
-                if not first and _startsWithKeyword(text, i, length):
-                    break
                 result.append(ord(text[i]))
                 i += 1
-                first = False
             continue
 
         # Line-number mode: encode digit sequences as 0x8D references.

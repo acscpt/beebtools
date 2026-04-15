@@ -504,39 +504,38 @@ def testAmpersandSkipsHex():
     assert 0xDD not in content  # DEF token
 
 
-def testHexScanStopsBeforeKeyword():
-    """A keyword after at least one hex digit breaks the hex run."""
-    # "&3DEF" should produce the hex literal "&3" followed by the DEF
-    # keyword (0xDD). The first hex digit is always consumed, so "&DEF"
-    # on its own still greedily stays a single hex literal - only the
-    # ambiguous case where a keyword can start inside the hex run is
-    # resolved in favour of the keyword.
+def testHexScanIsGreedy():
+    """Hex literals consume all trailing [0-9A-F] characters greedily.
+
+    The BBC BASIC II ROM hex scanner stays in its hex-digit loop for
+    any character in [0-9A-F] and never consults the keyword table
+    mid-scan, so &3DEF tokenizes as one hex literal, not as &3 + DEF.
+    """
     content = _tokenizeContent("A=&3DEF")
     assert content == bytes([
-        ord('A'), ord('='), ord('&'), ord('3'), 0xDD,
+        ord('A'), ord('='), ord('&'), ord('3'), ord('D'), ord('E'), ord('F'),
     ])
 
 
-def testHexScanGreedyWhenNoKeywordSuffix():
-    """&FFFF stays a single hex literal when no keyword hides inside."""
+def testHexScanGreedyAllFs():
+    """&FFFF stays a single hex literal."""
     content = _tokenizeContent("A=&FFFF")
-    # No keyword starts with FFF, FF, or F, so all four hex digits
-    # are consumed greedily.
     assert content == bytes([
         ord('A'), ord('='), ord('&'), ord('F'), ord('F'), ord('F'), ord('F'),
     ])
 
 
 def testHexScanStopsAtNonHexKeywordStart():
-    """&276BMOD16 splits into hex &276B then MOD keyword then "16"."""
-    # M is not a hex digit, so the hex run naturally stops at &276B.
-    # The following MOD must tokenize as the MOD keyword (0x83).
+    """&276BMOD16 splits into hex &276B then MOD keyword then "16".
+
+    M is not a hex digit, so the hex run naturally stops at &276B.
+    The following MOD must tokenize as the MOD keyword (0x83).
+    """
     content = _tokenizeContent("A=&276BMOD16")
     assert content[:2] == bytes([ord('A'), ord('=')])
-    # Locate the ampersand run.
     assert content[2] == ord('&')
     assert content[3:7] == b'276B'
-    assert content[7] == 0x83   # MOD token
+    assert content[7] == 0x83
     assert content[8:] == b'16'
 
 
