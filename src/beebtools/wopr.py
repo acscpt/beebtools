@@ -18,17 +18,11 @@ Formal shape:
 
 Adding a new state is one State entry plus one TRANSITIONS entry.
 Adding a new dialect is one Dialect instance.
-
-Skeleton stage (step 1 of the wopr plan): the State enum, the Dialect
-dataclass, the Context, and a driver loop wired to a transition
-dispatch that emits all input as literal bytes. Subsequent steps port
-keyword matching, abbreviations, line-number references, and string /
-literal sub-states.
 """
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Callable, Dict, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 
 class State(IntEnum):
@@ -102,52 +96,191 @@ TransitionFn = Callable[[Context], State]
 
 
 _QUOTE = '"'
+_COLON = ':'
+_COMMA = ','
+_AMP = '&'
+_HEX_DIGITS = frozenset('0123456789ABCDEFabcdef')
+_DEC_DIGITS = frozenset('0123456789')
+
+
+def _isIdentStartChar(ch: str) -> bool:
+    """Letter, underscore, or backtick: the characters a name may begin with."""
+    return ch.isalpha() or ch == '_' or ch == '`'
+
+
+def _isIdentChar(ch: str) -> bool:
+    """Identifier continuation: BBC BASIC II range 0x5F..0x7A plus digits."""
+    return ch.isalnum() or ch == '_' or ch == '`'
 
 
 def _emitAndAdvance(ctx: Context) -> str:
-    """Emit the current character as a literal byte and advance one step.
-
-    Returns the character that was just emitted so the caller can act
-    on it without re-reading from `ctx.text`.
-    """
+    """Emit the current character as a literal byte and advance one step."""
     ch = ctx.text[ctx.pos]
     ctx.out.append(ord(ch))
     ctx.pos += 1
     return ch
 
 
-def _atStart(ctx: Context) -> State:
-    """Open-of-statement transition.
+def _consumeHex(ctx: Context) -> None:
+    """Greedy '&[0-9A-Fa-f]*' scan: emit every byte verbatim.
 
-    Emits the next character literally. A double quote opens a string;
-    any other non-keyword character moves us into the body of the
-    statement. (Keyword recognition lands in a later step; until then
-    every character is treated as a literal.)
+    The ampersand itself is emitted; following hex digits are emitted
+    in source case. Termination is purely character-class: the scan
+    stops on the first non-hex character. No keyword lookahead.
     """
-    ch = _emitAndAdvance(ctx)
+    _emitAndAdvance(ctx)
+    while ctx.pos < len(ctx.text) and ctx.text[ctx.pos] in _HEX_DIGITS:
+        _emitAndAdvance(ctx)
+
+
+def _consumeIdentifier(ctx: Context) -> None:
+    """Emit a run of identifier characters as literal bytes."""
+    while ctx.pos < len(ctx.text) and _isIdentChar(ctx.text[ctx.pos]):
+        _emitAndAdvance(ctx)
+
+
+def _emitLineNumberRef(ctx: Context) -> None:
+    """Encode a decimal digit run as the 0x8D inline line-number escape.
+
+    The BBC ROM packs a 16-bit line number into three bytes with a
+    specific bit-scrambling (see SPGETN in the ROM recce). This mirror
+    implementation follows the same packing so the encoded bytes match.
+    """
+    start = ctx.pos
+    while ctx.pos < len(ctx.text) and ctx.text[ctx.pos] in _DEC_DIGITS:
+        ctx.pos += 1
+
+    value = int(ctx.text[start:ctx.pos]) & 0xFFFF
+    top = (((value & 0x00C0) >> 2) | ((value & 0xC000) >> 12)) ^ 0x54
+    byte1 = (value & 0x3F) | 0x40
+    byte2 = ((value >> 8) & 0x3F) | 0x40
+
+    ctx.out.append(0x8D)
+    ctx.out.append(top)
+    ctx.out.append(byte1)
+    ctx.out.append(byte2)
+
+
+def _matchKeyword(ctx: Context) -> Optional[Keyword]:
+    """Longest-prefix keyword match with conditional suppression.
+
+    Walks the dialect's keyword tuple in order. Because the tuple is
+    ordered longest-first within each first-letter cluster, the first
+    full prefix match is the longest. A keyword marked `conditional`
+    is rejected if the following character is an identifier char (so
+    TIMER stays a variable, not TIME + 'R').
+    """
+    text = ctx.text
+    pos = ctx.pos
+    length = len(text)
+
+    for kw in ctx.dialect.keywords:
+        name = kw.name
+        kwLen = len(name)
+
+        if pos + kwLen > length:
+            continue
+
+        if text[pos:pos + kwLen].upper() != name:
+            continue
+
+        if kw.conditional and pos + kwLen < length:
+            if _isIdentChar(text[pos + kwLen]):
+                continue
+
+        return kw
+
+    return None
+
+
+def _applyKeyword(ctx: Context, kw: Keyword, currentState: State) -> State:
+    """Emit a matched keyword's token and return the resulting state.
+
+    Pseudo-variable tokens emit in their statement form (+0x40) when
+    matched at start-of-statement; otherwise in the function form.
+    After emission, FN and PROC eat the following identifier as
+    literal bytes (the user's PROC/FN name is opaque). State
+    transitions follow the keyword's flags.
+    """
+    atStart = (currentState == State.AT_START)
+    token = kw.token + 0x40 if (kw.pseudoVarBase and atStart) else kw.token
+    ctx.out.append(token)
+    ctx.pos += len(kw.name)
+
+    if kw.fnProc:
+        _consumeIdentifier(ctx)
+
+    ctx.expectLineNumber = kw.expectLineNumber
+
+    if kw.lineLiteral:
+        return State.LINE_LITERAL
+    if kw.startOfStatement:
+        return State.AT_START
+    if kw.middle:
+        return State.MID_STATEMENT
+
+    return currentState
+
+
+def _statementStep(ctx: Context, currentState: State) -> State:
+    """Dispatch one character of statement body (AT_START or MID_STATEMENT).
+
+    Recognises strings, hex literals, keywords, identifiers, and
+    line-number references. Falls through to literal emission for
+    anything else. Whitespace and comma preserve both the current
+    state and the expect-line-number latch so `GOTO 10, 20, 30`
+    encodes all three as line references.
+    """
+    ch = ctx.text[ctx.pos]
+
     if ch == _QUOTE:
+        _emitAndAdvance(ctx)
         return State.IN_STRING
+
+    if ctx.expectLineNumber and ch in _DEC_DIGITS:
+        _emitLineNumberRef(ctx)
+        return State.MID_STATEMENT
+
+    if ch == _AMP:
+        _consumeHex(ctx)
+        ctx.expectLineNumber = False
+        return State.MID_STATEMENT
+
+    if _isIdentStartChar(ch):
+        kw = _matchKeyword(ctx)
+        if kw is not None:
+            return _applyKeyword(ctx, kw, currentState)
+        _consumeIdentifier(ctx)
+        ctx.expectLineNumber = False
+        return State.MID_STATEMENT
+
+    if ch == _COLON:
+        _emitAndAdvance(ctx)
+        ctx.expectLineNumber = False
+        return State.AT_START
+
+    if ch.isspace() or ch == _COMMA:
+        _emitAndAdvance(ctx)
+        return currentState
+
+    _emitAndAdvance(ctx)
+    if ch not in _DEC_DIGITS:
+        ctx.expectLineNumber = False
     return State.MID_STATEMENT
+
+
+def _atStart(ctx: Context) -> State:
+    """Open-of-statement transition."""
+    return _statementStep(ctx, State.AT_START)
 
 
 def _midStatement(ctx: Context) -> State:
-    """Mid-statement transition.
-
-    Emits the next character literally. A double quote opens a string;
-    everything else stays mid-statement.
-    """
-    ch = _emitAndAdvance(ctx)
-    if ch == _QUOTE:
-        return State.IN_STRING
-    return State.MID_STATEMENT
+    """Mid-statement transition."""
+    return _statementStep(ctx, State.MID_STATEMENT)
 
 
 def _inString(ctx: Context) -> State:
-    """Inside a double-quoted string.
-
-    Every character is emitted as a literal byte, including the
-    closing quote. The closing quote returns us to mid-statement.
-    """
+    """Inside a double-quoted string: emit until the closing quote."""
     ch = _emitAndAdvance(ctx)
     if ch == _QUOTE:
         return State.MID_STATEMENT
@@ -155,10 +288,7 @@ def _inString(ctx: Context) -> State:
 
 
 def _lineLiteral(ctx: Context) -> State:
-    """Rest of line is opaque (after REM, DATA).
-
-    Every remaining character is emitted as a literal byte.
-    """
+    """Rest of line is opaque (after REM, DATA): emit every byte literally."""
     _emitAndAdvance(ctx)
     return State.LINE_LITERAL
 

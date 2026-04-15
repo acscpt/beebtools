@@ -44,22 +44,18 @@ def testParitySpacesAndPunctuation():
     assertParity("A = 42 + 1")
 
 
-# Keyword-bearing inputs: the legacy tokenizer emits tokens, wopr
-# emits literals. These xfails pin the engine's growth: each one
-# becomes a passing test as the relevant transition logic lands.
-
-@pytest.mark.xfail(reason="wopr step 3: keyword matching not yet ported")
 def testParityPrintKeyword():
+    """PRINT followed by a literal: keyword tokenised, rest literal."""
     assertParity("PRINT 1")
 
 
-@pytest.mark.xfail(reason="wopr step 2: IN_STRING transition not yet ported")
 def testParityStringLiteral():
+    """PRINT \"hello\": keyword plus a string that must round-trip."""
     assertParity('PRINT "hello"')
 
 
-@pytest.mark.xfail(reason="wopr step 2: LINE_LITERAL transition not yet ported")
 def testParityRemTail():
+    """REM swallows the rest of the line as opaque bytes."""
     assertParity("REM the rest of this line is opaque")
 
 
@@ -68,8 +64,8 @@ def testParityDotAbbreviation():
     assertParity("PR.")
 
 
-@pytest.mark.xfail(reason="wopr step 3: pseudo-var form selection not yet ported")
 def testParityPseudoVarStatementForm():
+    """PAGE= at start of statement picks the +0x40 statement form."""
     assertParity("PAGE=&1900")
 
 
@@ -103,6 +99,46 @@ def testParityAdjacentStrings():
     assertParity('"one""two"')
 
 
-@pytest.mark.xfail(reason="wopr step 3: line-number ref encoding not yet ported")
 def testParityGotoLineRef():
+    """GOTO 100: digits encode as a 0x8D inline line-number reference."""
     assertParity("GOTO 100")
+
+
+def testParityGotoChainedLineRefs():
+    """GOTO 10, 20, 30: comma preserves the expect-line-number latch."""
+    assertParity("ON X GOTO 10, 20, 30")
+
+
+def testParityForNext():
+    """FOR/NEXT loop with a TO and STEP: two middle-keywords, back-to-back."""
+    assertParity("FOR I=1 TO 10 STEP 2: NEXT I")
+
+
+def testParityIfThenElse():
+    """IF/THEN/ELSE: start-of-statement keywords re-arm line-number expectation."""
+    assertParity("IF X=1 THEN 100 ELSE 200")
+
+
+def testParityFnProcOpaqueName():
+    """PROC and FN eat the following identifier as opaque bytes."""
+    assertParity("PROCfoo(1): A=FNbar(2)")
+
+
+def testParityConditionalTimer():
+    """TIMER must not tokenise as TIME + R: conditional suppression."""
+    assertParity("TIMER=0")
+
+
+def testParityPseudoVarFunctionForm():
+    """PAGE on the right of = takes its function form, no +0x40 offset."""
+    assertParity("X=PAGE")
+
+
+def testParityDataTail():
+    """DATA swallows the rest of the line literally, commas included."""
+    assertParity("DATA one, two, three")
+
+
+def testParityLetAtStart():
+    """LET at start transitions back to AT_START for what follows."""
+    assertParity("LET A=1")
