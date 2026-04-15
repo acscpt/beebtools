@@ -255,6 +255,43 @@ _KEYWORDS_BY_LENGTH = sorted(
     _KEYWORD_TO_TOKEN.keys(), key=len, reverse=True
 )
 
+
+# Dot-abbreviation index: maps "<letters>." to the full keyword string.
+#
+# BBC BASIC accepts abbreviations like "P." for PRINT, "PR." also for
+# PRINT, and "PRO." for PROC. Resolution walks the token table in
+# numeric order so earlier tokens claim their prefixes first
+# (PRINT < PROC so PR. resolves to PRINT, PRO. to PROC).
+#
+# Keywords whose text contains non-alphabetic characters (TAB(, LEFT$(,
+# INSTR( etc.) are skipped here: the abbreviation form for those
+# tokens is ambiguous because the token bytes encode the trailing
+# punctuation, and users would normally type the punctuation
+# separately. Statement-form pseudo-variable tokens are also skipped
+# since the function form is canonical in this index; the statement
+# form is chosen at tokenize time by the usual +0x40 logic.
+def _buildAbbreviations() -> Dict[str, str]:
+    abbrev: Dict[str, str] = {}
+
+    # Alphabetical walk resolves conflicts by first-match: AND (before
+    # ABS, ACS, ...) claims A. and AN., ABS claims AB., etc. The
+    # pseudo-variable statement forms are already absent from
+    # _KEYWORD_TO_TOKEN, so only function forms feature here and the
+    # +0x40 logic at tokenize time selects statement form when needed.
+    for kw in sorted(_KEYWORD_TO_TOKEN.keys()):
+        if not kw.isalpha() or len(kw) < 2:
+            continue
+
+        for prefix_len in range(1, len(kw)):
+            ab = kw[:prefix_len] + '.'
+            if ab not in abbrev:
+                abbrev[ab] = kw
+
+    return abbrev
+
+
+_ABBREV_TO_KEYWORD: Dict[str, str] = _buildAbbreviations()
+
 # -----------------------------------------------------------------------
 # Keyword flags (BBC BASIC II)
 # -----------------------------------------------------------------------
@@ -415,37 +452,109 @@ def _parseLine(line: str) -> Tuple[int, str]:
     return int(m.group(1)), m.group(2)
 
 
+_AUTO_LINENUM_START = 1
+_AUTO_LINENUM_STEP = 1
+
+
+def _normalizeLines(lines: List[str]) -> List[Tuple[int, str]]:
+    """Resolve each non-blank line to a (linenum, content_text) pair.
+
+    Line-numbering rules:
+
+    - A line beginning with a digit uses that explicit number, which
+      must be strictly greater than the previous line's number.
+    - A line not beginning with a digit is auto-numbered as
+      last_line + 1, or 1 if no prior line has been numbered yet.
+    - Blank or whitespace-only lines are dropped from the output but
+      still advance the counter, so a numberless line that follows N
+      blanks gets last_line + 1 + N.
+
+    The two strategies (explicit and implicit) interleave freely in the
+    same source file. Source authors are responsible for picking
+    explicit numbers that stay ahead of where the auto-counter will
+    land; jump and RESTORE targets are not rewritten.
+    """
+    pairs: List[Tuple[int, str]] = []
+    last_line = -1
+
+    for line in lines:
+        stripped_left = line.lstrip()
+
+        if not stripped_left:
+            # Blank line: bump the counter so a later implicit line
+            # gets a higher number, but emit nothing.
+            last_line = (
+                _AUTO_LINENUM_START
+                if last_line < 0
+                else last_line + _AUTO_LINENUM_STEP
+            )
+            continue
+
+        if stripped_left[0].isdigit():
+            linenum, content_text = _parseLine(line)
+            if linenum <= last_line:
+                raise ValueError(
+                    f"Line numbers must increase: line {linenum} is "
+                    f"not greater than previous line {last_line}"
+                )
+            last_line = linenum
+        else:
+            linenum = (
+                _AUTO_LINENUM_START
+                if last_line < 0
+                else last_line + _AUTO_LINENUM_STEP
+            )
+            last_line = linenum
+            # Prepend a single space so the stored bytes mirror the
+            # explicit "<linenum> <content>" form. Trailing CR/LF is
+            # dropped; leading indentation is preserved verbatim.
+            content_text = " " + line.rstrip("\r\n")
+
+        pairs.append((linenum, content_text))
+
+    return pairs
+
+
+# -----------------------------------------------------------------------
+# Identifier character classification
+# -----------------------------------------------------------------------
+
+# BBC BASIC II accepts ASCII digits and any character in the range
+# 0x5F..0x7A ('_' through 'z') as an identifier character, plus the
+# usual uppercase letters A-Z. The 0x5F..0x7A range covers '_' (0x5F),
+# backtick (0x60), and a-z (0x61..0x7A), so a simple predicate of
+# "alphanumeric or '_' or backtick" captures the full set used by
+# BBC BASIC II source.
+def _isIdentChar(ch: str) -> bool:
+    """True when ch is a valid identifier continuation character."""
+    return ch.isalnum() or ch == '_' or ch == '`'
+
+
 # -----------------------------------------------------------------------
 # FN/PROC symbol table (pass 1)
 # -----------------------------------------------------------------------
 
 # Matches DEFFNname or DEFPROCname at any position in a line. The name
-# is the run of alphanumeric and underscore characters after FN/PROC.
-_DEF_FN_PROC_RE = re.compile(r'DEF\s*(FN|PROC)([A-Za-z_]\w*)')
+# is the run of identifier characters after FN/PROC (letters, digits,
+# underscore, or backtick).
+_DEF_FN_PROC_RE = re.compile(r'DEF\s*(FN|PROC)([A-Za-z_`][A-Za-z0-9_`]*)')
 
 
-def _collectFnProcNames(lines: List[str]) -> Dict[str, FrozenSet[str]]:
-    """Scan all lines for DEFFN/DEFPROC declarations and collect names.
+def _collectFnProcNames(content_texts: List[str]) -> Dict[str, FrozenSet[str]]:
+    """Scan content texts for DEFFN/DEFPROC declarations and collect names.
 
     Returns a dict mapping the prefix ('FN' or 'PROC') to a frozenset
     of declared names for that prefix. Used in pass 2 to determine
     where a FN/PROC identifier ends so that the keyword after it can
     be tokenized correctly.
+
+    Inputs are line content texts with the line number already stripped
+    by _normalizeLines, so this function does not need to parse line
+    headers itself.
     """
     names: Dict[str, Set[str]] = {'FN': set(), 'PROC': set()}
 
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-
-        # Extract content after line number.
-        m = _LINE_RE.match(stripped)
-        if not m:
-            continue
-        content = m.group(2)
-
-        # Find all DEF FN/PROC declarations in this line.
+    for content in content_texts:
         for match in _DEF_FN_PROC_RE.finditer(content):
             prefix = match.group(1)   # 'FN' or 'PROC'
             name = match.group(2)     # identifier name
@@ -469,7 +578,7 @@ def _matchFnProcName(
     """
     # Collect the full greedy identifier span.
     end = pos
-    while end < length and (text[end].isalnum() or text[end] == '_'):
+    while end < length and _isIdentChar(text[end]):
         end += 1
     greedy_len = end - pos
 
@@ -566,6 +675,7 @@ def _tokenizeContent(text: str, fn_proc_names: Dict[str, FrozenSet[str]] = None)
             result.append(0x22)
             i += 1
             linenum_mode = False
+            at_start = False
             continue
 
         # Colon resets to start-of-statement mode.
@@ -584,15 +694,25 @@ def _tokenizeContent(text: str, fn_proc_names: Dict[str, FrozenSet[str]] = None)
             i += 1
             continue
 
-        # Ampersand skips hex digits that follow (prevents tokenizing
-        # the hex literal, e.g. &DEF should not tokenize DEF).
+        # Ampersand introduces a hex literal. Consume hex digits
+        # greedily, but stop before any position (after the first hex
+        # digit) where the remaining text begins a known keyword. This
+        # resolves the ambiguity in "&3DEF" so that the DEF keyword is
+        # recognised after the hex literal "&3". The first hex digit
+        # is always consumed unconditionally, which keeps simple forms
+        # like "&DEF" as a whole hex literal (DEF is not tokenized).
         if ch == '&':
             result.append(ord('&'))
             in_variable = False
+            at_start = False
             i += 1
+            first = True
             while i < length and upper[i] in '0123456789ABCDEF':
+                if not first and _startsWithKeyword(text, i, length):
+                    break
                 result.append(ord(text[i]))
                 i += 1
+                first = False
             continue
 
         # Line-number mode: encode digit sequences as 0x8D references.
@@ -628,7 +748,7 @@ def _tokenizeContent(text: str, fn_proc_names: Dict[str, FrozenSet[str]] = None)
         # This prevents embedded keywords like ON in NOON, TO in BOTTOM
         # from being tokenized, while still allowing 1TO10 (digit before
         # keyword) and PRINTTAB( (token before keyword).
-        if in_variable and (ch.isalpha() or ch == '_'):
+        if in_variable and (ch.isalpha() or ch == '_' or ch == '`'):
             at_start = False
             result.append(ord(ch))
             i += 1
@@ -661,7 +781,7 @@ def _tokenizeContent(text: str, fn_proc_names: Dict[str, FrozenSet[str]] = None)
             # "CLSPRINT" with no separator).
             if token in _CONDITIONAL:
                 next_pos = i + kw_len
-                if next_pos < length and (text[next_pos].isalnum() or text[next_pos] == '_'):
+                if next_pos < length and _isIdentChar(text[next_pos]):
                     if not _startsWithKeyword(text, next_pos, length):
                         continue
 
@@ -706,14 +826,69 @@ def _tokenizeContent(text: str, fn_proc_names: Dict[str, FrozenSet[str]] = None)
         if matched:
             continue
 
+        # Dot-abbreviation match: <letters>. -> full keyword token.
+        # Scan the alphabetic run at the current position; if the run
+        # ends at a dot and the letters + dot are in the abbreviation
+        # index, treat it as a keyword match. Conditional suppression
+        # here examines the character immediately after the dot.
+        end = i
+        while end < length and text[end].isalpha():
+            end += 1
+
+        if end > i and end < length and text[end] == '.':
+            candidate = text[i:end] + '.'
+            kw = _ABBREV_TO_KEYWORD.get(candidate)
+
+            if kw is not None:
+                token = _KEYWORD_TO_TOKEN[kw]
+                next_pos = end + 1
+
+                suppressed = False
+                if token in _CONDITIONAL:
+                    if next_pos < length and _isIdentChar(text[next_pos]):
+                        if not _startsWithKeyword(text, next_pos, length):
+                            suppressed = True
+
+                if not suppressed:
+                    if token in _PSEUDO_VAR_BASE and at_start:
+                        result.append(token + 0x40)
+                    else:
+                        result.append(token)
+
+                    i = next_pos   # consume letters + dot
+
+                    if token in LINE_LITERAL_TOKENS:
+                        literal_rest = True
+                    elif token in _FN_PROC:
+                        prefix = 'FN' if token == 0xA4 else 'PROC'
+                        known = fn_proc_names.get(prefix, frozenset())
+                        name_len = _matchFnProcName(text, i, length, known)
+                        for _ in range(name_len):
+                            result.append(ord(text[i]))
+                            i += 1
+                    else:
+                        if token in _LINENUM:
+                            linenum_mode = True
+                        if token in _START_OF_STATEMENT:
+                            at_start = True
+                        elif token in _MIDDLE:
+                            at_start = False
+
+                    in_variable = False
+                    continue
+
         # No keyword matched - emit the character as a literal byte.
-        # Letters and underscores enter variable-name mode; everything
-        # else exits it.
-        if ch.isalpha() or ch == '_':
-            at_start = False
+        # Letters, underscore and backtick enter variable-name mode;
+        # everything else exits it. Any non-whitespace literal clears
+        # start-of-statement mode, so pseudo-variables on the right-hand
+        # side of an assignment (e.g. PAGE after '=') get the function form.
+        if ch.isalpha() or ch == '_' or ch == '`':
             in_variable = True
         else:
             in_variable = False
+
+        if not ch.isspace():
+            at_start = False
 
         result.append(ord(ch))
         i += 1
@@ -731,9 +906,18 @@ def tokenize(
     writing to a DFS disc image. Blank lines and lines containing only
     whitespace are silently skipped.
 
+    Two source formats are accepted, selected by the first non-blank line:
+
+    - Explicit line numbers: every line starts with a digit, optionally
+      preceded by whitespace. Classic LIST-style output from detokenize().
+    - No line numbers: no non-blank line begins with a digit. Line
+      numbers are auto-injected starting at 1 in steps of 1, with blank
+      lines advancing the counter.
+
     Args:
         lines:       List of strings in LIST format, each starting with a
-                     line number (optionally preceded by whitespace).
+                     line number (optionally preceded by whitespace), or
+                     source with no line numbers at all.
         on_overflow: Optional callback invoked when a tokenized line exceeds
                      255 bytes. Receives (line_text, error_message) and
                      returns a replacement line to retry. If the replacement
@@ -749,17 +933,17 @@ def tokenize(
     """
     result = bytearray()
 
+    # Pass 0: resolve each non-blank line to a (linenum, content) pair,
+    # auto-numbering when the source has no explicit line numbers.
+    pairs = _normalizeLines(lines)
+    content_texts = [c for _, c in pairs]
+
     # Pass 1: collect DEF FN/PROC names so pass 2 can determine where
     # each FN/PROC identifier ends in ambiguous cases like FNldTHEN.
-    fn_proc_names = _collectFnProcNames(lines)
+    fn_proc_names = _collectFnProcNames(content_texts)
 
     # Pass 2: tokenize each line using the symbol table.
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-
-        linenum, content_text = _parseLine(line)
+    for linenum, content_text in pairs:
         content = _tokenizeContent(content_text, fn_proc_names)
 
         hi = (linenum >> 8) & 0xFF
@@ -776,9 +960,10 @@ def tokenize(
             msg = (f"Line {linenum} tokenizes to {linelen} bytes "
                    f"(max 255)")
 
-            # Give the caller a chance to compact and retry.
+            # Give the caller a chance to compact and retry. The callback
+            # gets the explicit-form line so it can edit it in LIST style.
             if on_overflow is not None:
-                replacement = on_overflow(line, msg)
+                replacement = on_overflow(f"{linenum}{content_text}", msg)
                 _, content_text = _parseLine(replacement)
                 content = _tokenizeContent(content_text, fn_proc_names)
                 linelen = 4 + len(content)
