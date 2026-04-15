@@ -101,35 +101,65 @@ class Context:
 TransitionFn = Callable[[Context], State]
 
 
-# Skeleton transitions: every state currently emits the next character
-# verbatim and stays in MID_STATEMENT. Subsequent steps replace each
-# entry with the real transition logic for that state.
+_QUOTE = '"'
+
+
+def _emitAndAdvance(ctx: Context) -> str:
+    """Emit the current character as a literal byte and advance one step.
+
+    Returns the character that was just emitted so the caller can act
+    on it without re-reading from `ctx.text`.
+    """
+    ch = ctx.text[ctx.pos]
+    ctx.out.append(ord(ch))
+    ctx.pos += 1
+    return ch
+
 
 def _atStart(ctx: Context) -> State:
-    """Skeleton: emit one byte, advance to MID_STATEMENT."""
-    ctx.out.append(ord(ctx.text[ctx.pos]))
-    ctx.pos += 1
+    """Open-of-statement transition.
+
+    Emits the next character literally. A double quote opens a string;
+    any other non-keyword character moves us into the body of the
+    statement. (Keyword recognition lands in a later step; until then
+    every character is treated as a literal.)
+    """
+    ch = _emitAndAdvance(ctx)
+    if ch == _QUOTE:
+        return State.IN_STRING
     return State.MID_STATEMENT
 
 
 def _midStatement(ctx: Context) -> State:
-    """Skeleton: emit one byte, stay in MID_STATEMENT."""
-    ctx.out.append(ord(ctx.text[ctx.pos]))
-    ctx.pos += 1
+    """Mid-statement transition.
+
+    Emits the next character literally. A double quote opens a string;
+    everything else stays mid-statement.
+    """
+    ch = _emitAndAdvance(ctx)
+    if ch == _QUOTE:
+        return State.IN_STRING
     return State.MID_STATEMENT
 
 
 def _inString(ctx: Context) -> State:
-    """Skeleton placeholder: not yet entered by any transition."""
-    ctx.out.append(ord(ctx.text[ctx.pos]))
-    ctx.pos += 1
+    """Inside a double-quoted string.
+
+    Every character is emitted as a literal byte, including the
+    closing quote. The closing quote returns us to mid-statement.
+    """
+    ch = _emitAndAdvance(ctx)
+    if ch == _QUOTE:
+        return State.MID_STATEMENT
     return State.IN_STRING
 
 
 def _lineLiteral(ctx: Context) -> State:
-    """Skeleton placeholder: not yet entered by any transition."""
-    ctx.out.append(ord(ctx.text[ctx.pos]))
-    ctx.pos += 1
+    """Rest of line is opaque (after REM, DATA).
+
+    Every remaining character is emitted as a literal byte.
+    """
+    _emitAndAdvance(ctx)
     return State.LINE_LITERAL
 
 

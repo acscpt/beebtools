@@ -78,6 +78,31 @@ def testParityHexLiteral():
     assertParity("A=&3DEF")
 
 
+def testParityBareString():
+    """A bare string round-trips: both engines emit the bytes verbatim."""
+    assertParity('"hello"')
+
+
+def testParityAssignmentToString():
+    """Literal-prefix + string: A="hello" is all literal bytes on both sides."""
+    assertParity('A="hello"')
+
+
+def testParityStringWithPunctuation():
+    """String content is preserved byte-for-byte including spaces and symbols."""
+    assertParity('X$="one, two; three"')
+
+
+def testParityEmptyString():
+    """An empty string emits just the two quote bytes."""
+    assertParity('A=""')
+
+
+def testParityAdjacentStrings():
+    """Two adjacent strings: the engine must exit and re-enter IN_STRING."""
+    assertParity('"one""two"')
+
+
 @pytest.mark.xfail(reason="wopr step 3: line-number ref encoding not yet ported")
 def testParityGotoLineRef():
     assertParity("GOTO 100")
