@@ -3,25 +3,44 @@
 
 """Parity harness: wopr engine vs the legacy basic.py tokenizer.
 
-For every input here, both tokenizers must emit identical bytes.
-Until the wopr engine reaches parity, divergent inputs are marked
-`xfail` and are closed out as each step of the wopr plan lands.
+For every parity input here, both tokenizers must emit identical
+bytes. Inputs where the wopr engine is ROM-correct and the legacy
+basic.py is wrong (alphabetical-first abbreviation resolution)
+live in the ROM-correct section below; those assert the wopr output
+directly against the byte the BBC ROM would emit.
 
 When the parity suite is fully green the wopr engine is the
 tokenizer, and basic.tokenize becomes a thin wrapper around
 wopr.tokenizeLine.
 """
 
-import pytest
-
 from beebtools.basic import _tokenizeContent
+from beebtools.tokens import TOKENS
 from beebtools.wopr import tokenizeLine
 from beebtools.wopr_dialects import BBC_BASIC_II
+
+
+# TOKENS maps both forms of pseudo-vars (PAGE at 0x90 and 0xD0) to the
+# same name. The engine emits the function-form base byte and adds
+# 0x40 itself when the keyword lands at start of statement, so the
+# lookup here keeps the lower of the two.
+_TOKEN_OF: dict = {}
+for _tok, _name in TOKENS.items():
+    if _name not in _TOKEN_OF or _tok < _TOKEN_OF[_name]:
+        _TOKEN_OF[_name] = _tok
 
 
 def assertParity(text: str) -> None:
     """Both tokenizers must produce identical bytes for `text`."""
     assert tokenizeLine(text, BBC_BASIC_II) == _tokenizeContent(text)
+
+
+def assertRomFirstByte(text: str, expected: int) -> None:
+    """The first byte of the wopr output must equal the ROM-correct byte."""
+    out = tokenizeLine(text, BBC_BASIC_II)
+    assert out[:1] == bytes([expected]), (
+        f"wopr({text!r}) starts 0x{out[0]:02X}, expected 0x{expected:02X}"
+    )
 
 
 # Skeleton-stage parity: pure-literal inputs round-trip identically
@@ -59,8 +78,8 @@ def testParityRemTail():
     assertParity("REM the rest of this line is opaque")
 
 
-@pytest.mark.xfail(reason="wopr step 4: dot-abbreviation matching not yet ported")
 def testParityDotAbbreviation():
+    """PR. -> PRINT: legacy and ROM agree on this one."""
     assertParity("PR.")
 
 
@@ -142,3 +161,66 @@ def testParityDataTail():
 def testParityLetAtStart():
     """LET at start transitions back to AT_START for what follows."""
     assertParity("LET A=1")
+
+
+# ROM-correct abbreviations: cases where the BBC BASIC II ROM keyword
+# table is hand-ordered so the common keyword wins the short prefix.
+# Legacy basic.py walks the keyword table alphabetically and gets
+# different answers (P. -> PAGE, E. -> ELSE, etc.); wopr matches the
+# ROM. These tests assert the wopr output directly against the byte
+# the ROM would emit, no parity check.
+
+def testRomAbbrevPDotIsPrint():
+    """P. resolves to PRINT (PRINT precedes PAGE/POINT in ROM table)."""
+    assertRomFirstByte("P.", _TOKEN_OF["PRINT"])
+
+
+def testRomAbbrevEDotIsEndproc():
+    """E. resolves to ENDPROC (ENDPROC precedes END/ELSE/EOF in ROM table)."""
+    assertRomFirstByte("E.", _TOKEN_OF["ENDPROC"])
+
+
+def testRomAbbrevEnDotIsEndproc():
+    """EN. also resolves to ENDPROC: the EN prefix still matches it first."""
+    assertRomFirstByte("EN.", _TOKEN_OF["ENDPROC"])
+
+
+def testRomAbbrevEndDotIsEnd():
+    """END. resolves to END: the four-letter prefix only matches END."""
+    assertRomFirstByte("END.", _TOKEN_OF["END"])
+
+
+def testRomAbbrevRDotIsRepeat():
+    """R. resolves to REPEAT (REPEAT precedes READ/RAD in ROM table)."""
+    assertRomFirstByte("R.", _TOKEN_OF["REPEAT"])
+
+
+def testRomAbbrevReDotIsRepeat():
+    """RE. also resolves to REPEAT: the RE prefix still matches it first."""
+    assertRomFirstByte("RE.", _TOKEN_OF["REPEAT"])
+
+
+def testRomAbbrevReaDotIsRead():
+    """REA. resolves to READ: the three-letter prefix only matches READ."""
+    assertRomFirstByte("REA.", _TOKEN_OF["READ"])
+
+
+def testRomAbbrevTDotIsTime():
+    """T. resolves to TIME (TIME precedes TAN/TAB/THEN in ROM table)."""
+    # TIME at start of statement gets the +0x40 statement form.
+    assertRomFirstByte("T.", _TOKEN_OF["TIME"] + 0x40)
+
+
+def testRomAbbrevTaDotIsTan():
+    """TA. resolves to TAN: the TA prefix only matches TAN."""
+    assertRomFirstByte("TA.", _TOKEN_OF["TAN"])
+
+
+def testRomAbbrevADotIsAnd():
+    """A. resolves to AND (AND precedes ABS/ACS/ASC/ASN in ROM table)."""
+    assertRomFirstByte("A.", _TOKEN_OF["AND"])
+
+
+def testRomAbbrevAbDotIsAbs():
+    """AB. resolves to ABS: the AB prefix only matches ABS."""
+    assertRomFirstByte("AB.", _TOKEN_OF["ABS"])

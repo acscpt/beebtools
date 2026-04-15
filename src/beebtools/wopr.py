@@ -22,7 +22,7 @@ Adding a new dialect is one Dialect instance.
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, NamedTuple, Optional, Tuple
 
 
 class State(IntEnum):
@@ -64,6 +64,7 @@ class Keyword:
     expectLineNumber: bool = False    # next digit run encodes as 0x8D ref
     fnProc: bool = False              # next identifier is opaque user name
     pseudoVarBase: bool = False       # +0x40 in AT_START gives statement form
+    commonAbbrev: bool = False        # ROM hand-ordering: claims short prefixes
 
 
 @dataclass(frozen=True)
@@ -99,8 +100,22 @@ _QUOTE = '"'
 _COLON = ':'
 _COMMA = ','
 _AMP = '&'
+_DOT = '.'
 _HEX_DIGITS = frozenset('0123456789ABCDEFabcdef')
 _DEC_DIGITS = frozenset('0123456789')
+
+
+class Match(NamedTuple):
+    """A keyword recognised at the cursor and the source span it consumed.
+
+    `consumed` differs between full-keyword matches (the keyword's own
+    length) and dot-abbreviation matches (letters before the dot, plus
+    the dot itself). The engine advances by `consumed`; the emitted
+    token always comes from `kw`.
+    """
+
+    kw: "Keyword"
+    consumed: int
 
 
 def _isIdentStartChar(ch: str) -> bool:
@@ -161,14 +176,23 @@ def _emitLineNumberRef(ctx: Context) -> None:
     ctx.out.append(byte2)
 
 
-def _matchKeyword(ctx: Context) -> Optional[Keyword]:
-    """Longest-prefix keyword match with conditional suppression.
+def _matchKeyword(ctx: Context) -> Optional[Match]:
+    """Match a full keyword or a dot-abbreviation at the cursor.
 
-    Walks the dialect's keyword tuple in order. Because the tuple is
-    ordered longest-first within each first-letter cluster, the first
-    full prefix match is the longest. A keyword marked `conditional`
-    is rejected if the following character is an identifier char (so
-    TIMER stays a variable, not TIME + 'R').
+    Walks the dialect's keyword tuple in order; the first row whose
+    name matches the cursor wins. The tuple is ordered with
+    ROM-preferred keywords first within each first-letter cluster,
+    then longest-first, so the first full match is the longest and
+    the first abbreviation match is the ROM-preferred keyword.
+
+    Two match shapes:
+
+    - Full: source text equals `kw.name`. Conditional keywords reject
+      when the following character is an identifier char (TIMER is
+      not TIME + 'R').
+    - Abbreviation: source text is `kw.name`'s leading letters
+      followed by '.'. Walks `dialect.keywords` for the first row
+      whose name starts with those letters.
     """
     text = ctx.text
     pos = ctx.pos
@@ -188,24 +212,41 @@ def _matchKeyword(ctx: Context) -> Optional[Keyword]:
             if _isIdentChar(text[pos + kwLen]):
                 continue
 
-        return kw
+        return Match(kw, kwLen)
+
+    end = pos
+    while end < length and text[end].isalpha():
+        end += 1
+
+    if end == pos or end >= length or text[end] != _DOT:
+        return None
+
+    prefix = text[pos:end].upper()
+    consumed = end - pos + 1
+
+    for kw in ctx.dialect.keywords:
+        if kw.name.isalpha() and kw.name.startswith(prefix) and len(kw.name) > len(prefix):
+            return Match(kw, consumed)
 
     return None
 
 
-def _applyKeyword(ctx: Context, kw: Keyword, currentState: State) -> State:
+def _applyKeyword(ctx: Context, match: Match, currentState: State) -> State:
     """Emit a matched keyword's token and return the resulting state.
 
     Pseudo-variable tokens emit in their statement form (+0x40) when
     matched at start-of-statement; otherwise in the function form.
     After emission, FN and PROC eat the following identifier as
     literal bytes (the user's PROC/FN name is opaque). State
-    transitions follow the keyword's flags.
+    transitions follow the keyword's flags. The cursor advances by
+    `match.consumed`, which is the keyword length for full matches
+    and prefix-letters + dot for abbreviations.
     """
+    kw = match.kw
     atStart = (currentState == State.AT_START)
     token = kw.token + 0x40 if (kw.pseudoVarBase and atStart) else kw.token
     ctx.out.append(token)
-    ctx.pos += len(kw.name)
+    ctx.pos += match.consumed
 
     if kw.fnProc:
         _consumeIdentifier(ctx)
@@ -247,9 +288,9 @@ def _statementStep(ctx: Context, currentState: State) -> State:
         return State.MID_STATEMENT
 
     if _isIdentStartChar(ch):
-        kw = _matchKeyword(ctx)
-        if kw is not None:
-            return _applyKeyword(ctx, kw, currentState)
+        match = _matchKeyword(ctx)
+        if match is not None:
+            return _applyKeyword(ctx, match, currentState)
         _consumeIdentifier(ctx)
         ctx.expectLineNumber = False
         return State.MID_STATEMENT

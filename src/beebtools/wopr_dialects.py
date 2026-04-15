@@ -121,6 +121,22 @@ _FN_PROC = frozenset({
     0xF2,   # PROC
 })
 
+# ROM-preferred abbreviation winners. The BBC BASIC II ROM keyword
+# table is hand-ordered so the common keyword in each shared-prefix
+# cluster is reached first by the linear matcher: PRINT before PAGE,
+# ENDPROC before END, REPEAT before READ, TIME before TAN, AND before
+# ABS, PROC before POS/PTR/PI. Marking these keywords promotes them
+# to the head of the dialect's keyword tuple so dot-abbreviations
+# resolve as the ROM does.
+_COMMON_ABBREV = frozenset({
+    0x80,   # AND        (A. AN.)
+    0xE1,   # ENDPROC    (E. EN.)
+    0xF1,   # PRINT      (P. PR.)
+    0xF2,   # PROC       (PRO.)
+    0xF5,   # REPEAT     (R. RE.)
+    0x91,   # TIME       (T. TI. TIM.)
+})
+
 
 def _buildBbcBasicII() -> Dialect:
     """Assemble the BBC BASIC II dialect table from the token map and flag sets."""
@@ -140,9 +156,10 @@ def _buildBbcBasicII() -> Dialect:
             expectLineNumber=token in _EXPECT_LINE_NUMBER,
             fnProc=token in _FN_PROC,
             pseudoVarBase=token in _PSEUDO_VAR_BASE,
+            commonAbbrev=token in _COMMON_ABBREV,
         ))
 
-    rows.sort(key=lambda kw: (-len(kw.name), kw.token))
+    rows.sort(key=lambda kw: (not kw.commonAbbrev, -len(kw.name), kw.token))
 
     return Dialect(name="BBC BASIC II", keywords=tuple(rows))
 
