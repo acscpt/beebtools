@@ -22,7 +22,7 @@ Adding a new dialect is one Dialect instance.
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Callable, Dict, NamedTuple, Optional, Tuple
+from typing import Callable, Dict, FrozenSet, List, NamedTuple, Optional, Tuple
 
 
 class State(IntEnum):
@@ -356,3 +356,183 @@ def tokenizeLine(text: str, dialect: "Dialect") -> bytes:
         state = TRANSITIONS[state](ctx)
 
     return bytes(ctx.out)
+
+
+# =====================================================================
+# Detokenizer
+# =====================================================================
+
+
+def decodeLineRef(b0: int, b1: int, b2: int) -> int:
+    """Decode a BBC BASIC inline line-number reference.
+
+    The encoding XORs the top two bits of each 6-bit payload half into
+    a single control byte, with a sentinel of 0x54. Reverses the
+    packing done by the tokenizer's line-reference emitter.
+    """
+    x = b0 ^ 0x54
+    lo = (b1 & 0x3F) | ((x & 0x30) << 2)
+    hi = (b2 & 0x3F) | ((x & 0x0C) << 4)
+    return hi * 256 + lo
+
+
+def _buildDecoderMaps(
+    dialect: Dialect,
+) -> Tuple[Dict[int, str], FrozenSet[int]]:
+    """Derive the byte-to-name map and line-literal set from a Dialect.
+
+    The detokenizer consults these two structures on every byte of the
+    token stream. Pseudo-variable keywords are present in the dialect
+    at their function-form byte only, so the statement form (byte +
+    0x40) is expanded here for the decode-time lookup.
+    """
+    byteToName: Dict[int, str] = {}
+    lineLiteral: set = set()
+
+    for kw in dialect.keywords:
+        byteToName[kw.token] = kw.name
+
+        if kw.pseudoVarBase:
+            byteToName[kw.token + 0x40] = kw.name
+
+        if kw.lineLiteral:
+            lineLiteral.add(kw.token)
+
+    return byteToName, frozenset(lineLiteral)
+
+
+class _DecoderState(IntEnum):
+    """Detokenizer states.
+
+    Simpler than the tokenizer: the AT_START vs MID_STATEMENT
+    distinction does not exist here because both pseudo-variable
+    byte forms decode to the same keyword name.
+    """
+
+    NORMAL = 0            # expanding tokens, handling literal ASCII
+    IN_STRING = 1         # inside double-quoted string; literal bytes
+    LINE_LITERAL = 2      # after REM or DATA; literal to end of line
+
+
+def _detokenizeWithMaps(
+    content: bytes,
+    byteToName: Dict[int, str],
+    lineLiteral: FrozenSet[int],
+) -> str:
+    """Walk a line body's token bytes, returning the decoded text.
+
+    State machine: NORMAL -> IN_STRING on '"', NORMAL -> LINE_LITERAL
+    on any byte in `lineLiteral`. Both absorbing states run to end of
+    content (or for IN_STRING, to the matching close-quote).
+    """
+    parts: List[str] = []
+    state = _DecoderState.NORMAL
+    i = 0
+    n = len(content)
+
+    while i < n:
+        b = content[i]
+
+        if b == 0x0D:
+            break
+
+        if state == _DecoderState.IN_STRING:
+            parts.append(chr(b))
+            if b == 0x22:
+                state = _DecoderState.NORMAL
+            i += 1
+            continue
+
+        if state == _DecoderState.LINE_LITERAL:
+            parts.append(chr(b))
+            i += 1
+            continue
+
+        if b == 0x22:
+            parts.append('"')
+            state = _DecoderState.IN_STRING
+            i += 1
+            continue
+
+        if b == 0x8D:
+            if i + 3 < n:
+                target = decodeLineRef(
+                    content[i + 1], content[i + 2], content[i + 3]
+                )
+                parts.append(str(target))
+                i += 4
+            else:
+                parts.append("?")
+                i += 1
+            continue
+
+        if b >= 0x80:
+            name = byteToName.get(b)
+            if name is not None:
+                parts.append(name)
+                if b in lineLiteral:
+                    state = _DecoderState.LINE_LITERAL
+            else:
+                parts.append(f"[&{b:02X}]")
+            i += 1
+            continue
+
+        parts.append(chr(b))
+        i += 1
+
+    return "".join(parts)
+
+
+def detokenizeLine(content: bytes, dialect: Dialect) -> str:
+    """Decode one line body's token bytes back to source text.
+
+    Dialect-driven: the byte-to-name lookup and the line-literal set
+    are derived from `dialect` so BASIC IV's EDIT (0xCE) decodes when
+    the IV dialect is passed.
+    """
+    byteToName, lineLiteral = _buildDecoderMaps(dialect)
+
+    return _detokenizeWithMaps(content, byteToName, lineLiteral)
+
+
+def detokenize(data: bytes, dialect: Dialect) -> List[str]:
+    """Decode a whole tokenised BBC BASIC program to LIST-style lines.
+
+    Walks the line-record structure: each record is 0x0D, high byte,
+    low byte, length, body. Returns one string per line, prefixed with
+    the 5-character right-justified line number as the ROM's LIST
+    command would.
+    """
+    byteToName, lineLiteral = _buildDecoderMaps(dialect)
+    lines: List[str] = []
+    pos = 0
+
+    while pos < len(data):
+        if data[pos] != 0x0D:
+            break
+
+        pos += 1
+        if pos >= len(data):
+            break
+
+        hi = data[pos]
+        if hi == 0xFF:
+            break
+
+        if pos + 2 >= len(data):
+            break
+
+        lo = data[pos + 1]
+        linenum = hi * 256 + lo
+        linelen = data[pos + 2]
+
+        if linelen < 4:
+            break
+
+        content = data[pos + 3: pos - 1 + linelen]
+        pos = pos - 1 + linelen
+
+        text = _detokenizeWithMaps(content, byteToName, lineLiteral)
+        lines.append(f"{linenum:>5d}{text}")
+
+    return lines

@@ -20,7 +20,7 @@ in the dialect yet. A beebjit probe will close that gap.
 """
 
 from beebtools.tokens import TOKENS
-from beebtools.wopr import tokenizeLine
+from beebtools.wopr import detokenizeLine, tokenizeLine
 from beebtools.wopr_dialects import BBC_BASIC_II, BBC_BASIC_IV
 
 
@@ -147,3 +147,36 @@ def testTimeRStillSuppressedInIV():
     out = tokenizeLine("TIMER=0", BBC_BASIC_IV)
     assert 0x91 not in out
     assert 0xD1 not in out
+
+
+# Detokenizer dialect behaviour. The same byte stream decodes
+# differently under II and IV for the one byte where they disagree
+# (0xCE): IV knows it as EDIT, II sees it as an unknown token.
+
+def testDetokenizeEditInBasicIv():
+    """0xCE decodes to EDIT under BBC_BASIC_IV."""
+    assert detokenizeLine(bytes([0xCE]), BBC_BASIC_IV) == "EDIT"
+
+
+def testDetokenizeEditUnknownInBasicII():
+    """0xCE has no keyword in II; renders as [&CE] placeholder."""
+    assert detokenizeLine(bytes([0xCE]), BBC_BASIC_II) == "[&CE]"
+
+
+def testDetokenizeRoundTripEditInBasicIv():
+    """EDIT round-trips through tokenise and detokenise under IV."""
+    tokens = tokenizeLine("EDIT", BBC_BASIC_IV)
+    assert detokenizeLine(tokens, BBC_BASIC_IV) == "EDIT"
+
+
+def testDetokenizeTimeDollarStatementForm():
+    """Statement-form TIME$ (0xD1 0x24) decodes to 'TIME$'."""
+    assert detokenizeLine(bytes([0xD1, 0x24]), BBC_BASIC_IV) == "TIME$"
+
+
+def testDetokenizeBasicIiProgramIdenticalAcrossDialects():
+    """A token stream with no IV-only bytes decodes identically."""
+    # PRINT "HI" tokenises the same in II and IV
+    src = 'PRINT "HI"'
+    tokens = tokenizeLine(src, BBC_BASIC_II)
+    assert detokenizeLine(tokens, BBC_BASIC_II) == detokenizeLine(tokens, BBC_BASIC_IV)
