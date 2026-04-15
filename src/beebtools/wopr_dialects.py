@@ -8,14 +8,18 @@ Each dialect is a `Dialect` instance carrying an ordered tuple of
 a `Dialect` passed by the caller.
 
 BBC_BASIC_II is derived from the token byte table in `tokens.py` and
-hand-curated flag sets capturing BBC BASIC II keyword behaviour. The
-keyword tuple is ordered longest-first so that full-keyword matches
-find ENDPROC before END and STRING$( before ERROR. Abbreviation
-precedence (P. -> PRINT, E. -> ENDPROC) requires ROM table ordering
-and is introduced in a later step.
+the hand-curated flag sets below. BBC_BASIC_IV is BBC_BASIC_II plus
+the small set of additional keywords the BBC Master's CMOS BASIC
+introduced. The flag sets are token-byte-keyed and shared between
+dialects: a flag for a token byte not present in a dialect's keyword
+list is simply ignored.
+
+The keyword tuple is sorted with ROM-preferred abbreviation winners
+first, then longest-first. Full-keyword matches see ENDPROC before
+END; abbreviations see PRINT before PAGE; both fall out of one walk.
 """
 
-from typing import List
+from typing import Iterable, List, Tuple
 
 from .tokens import TOKENS
 from .wopr import Dialect, Keyword
@@ -41,6 +45,7 @@ _CONDITIONAL = frozenset({
     0xC5,   # EOF
     0xCA,   # NEW
     0xCB,   # OLD
+    0xCE,   # EDIT      (BASIC IV; ignored by BASIC II since 0xCE is unused there)
     0xD5,   # BPUT
     0xD8,   # CLEAR
     0xD9,   # CLOSE
@@ -138,11 +143,29 @@ _COMMON_ABBREV = frozenset({
 })
 
 
-def _buildBbcBasicII() -> Dialect:
-    """Assemble the BBC BASIC II dialect table from the token map and flag sets."""
+# Keywords BBC BASIC IV adds on top of BBC BASIC II. The 6502 CMOS
+# BASIC shipped on the BBC Master is otherwise a strict superset of
+# BASIC II: same token byte assignments, same flag behaviour. EDIT
+# fills the unused 0xCE slot. TIME$ is also new (a battery-backed RTC
+# pseudo-variable) but its byte assignment is not published in any
+# clean-room source we have, so it is left out until verified by
+# observing a real BASIC IV ROM.
+_BBC_BASIC_IV_ADDITIONS: Tuple[Tuple[int, str], ...] = (
+    (0xCE, "EDIT"),
+)
+
+
+def _buildKeywordRows(items: Iterable[Tuple[int, str]]) -> Tuple[Keyword, ...]:
+    """Build the ordered keyword tuple for a dialect from (token, name) pairs.
+
+    Pseudo-variable statement-form rows are skipped because the engine
+    derives them at emission time by adding 0x40 to the function-form
+    token. The result is sorted with ROM-preferred abbreviation winners
+    first, then longest-first within each cluster.
+    """
     rows: List[Keyword] = []
 
-    for token, name in TOKENS.items():
+    for token, name in items:
         if token in _PSEUDO_VAR_STATEMENT_FORMS:
             continue
 
@@ -161,7 +184,19 @@ def _buildBbcBasicII() -> Dialect:
 
     rows.sort(key=lambda kw: (not kw.commonAbbrev, -len(kw.name), kw.token))
 
-    return Dialect(name="BBC BASIC II", keywords=tuple(rows))
+    return tuple(rows)
+
+
+def _buildBbcBasicII() -> Dialect:
+    """Assemble the BBC BASIC II dialect from the canonical token map."""
+    return Dialect(name="BBC BASIC II", keywords=_buildKeywordRows(TOKENS.items()))
+
+
+def _buildBbcBasicIV() -> Dialect:
+    """Assemble the BBC BASIC IV dialect: BASIC II plus the Master's additions."""
+    items = list(TOKENS.items()) + list(_BBC_BASIC_IV_ADDITIONS)
+    return Dialect(name="BBC BASIC IV", keywords=_buildKeywordRows(items))
 
 
 BBC_BASIC_II = _buildBbcBasicII()
+BBC_BASIC_IV = _buildBbcBasicIV()
