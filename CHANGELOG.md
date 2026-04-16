@@ -7,6 +7,54 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- ROM-accurate tokenizer engine (`sophie.py`). A four-state
+  finite-state machine that reproduces the BBC BASIC ROM's tokenisation
+  behaviour: keyword matching with conditional suppression, ROM-ordered
+  dot-abbreviation resolution, string and literal-tail states,
+  pseudo-variable statement/function forms, greedy FN/PROC name
+  consumption, hex literal scanning, star-command passthrough, and
+  inline line-number encoding. The engine is dialect-agnostic: adding
+  a new BBC BASIC variant is one data table, not new code.
+
+- BBC BASIC IV dialect with EDIT keyword (0xCE) and TIME$ support.
+  Every BASIC II input tokenises identically under the IV dialect;
+  the engine never branches on dialect identity.
+
+- Auto line numbering for source files without explicit line numbers.
+  Lines are numbered starting at 1 in steps of 1. Blank lines advance
+  the counter without emitting output. Explicit and implicit numbering
+  interleave freely, so numbered GOTO/GOSUB targets can coexist with
+  unnumbered source.
+
+- `docs/tokenizer.md` covering the FSM design, dialect system, keyword
+  flags, and a worked tokenization trace.
+
+### Changed
+
+- The tokenizer is now the `sophie` module, named in honour of Sophie
+  Wilson, creator of BBC BASIC.
+
+- `basic.py` is now a thin facade. All token-level work (keyword
+  matching, state-machine traversal, abbreviation resolution) is
+  handled by the sophie engine. `basic.py` retains line-number
+  parsing, auto-numbering, binary packing, overflow handling, content
+  classification, and text escaping.
+
+### Fixed
+
+- Abbreviation resolution now matches the ROM's hand-ordered keyword
+  table: `P.` resolves to PRINT (not PAGE), `E.` to ENDPROC (not
+  ELSE), `R.` to REPEAT (not READ).
+
+- Star commands at start of statement (`*RUN`, `*CAT`) now correctly
+  enter line-literal mode, preventing keyword tokenisation of the
+  command tail.
+
+- Hex literal scanner is greedy: `&3DEF` tokenises as one hex literal,
+  not `&3` followed by the DEF keyword.
+
 ## [0.9.0] - 2026-04-13
 
 ### Added
