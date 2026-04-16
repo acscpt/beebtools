@@ -20,7 +20,9 @@ already exist - use `beebtools build` or the library `mkdir()` to create them.
 
 - `--basic` - set BBC BASIC defaults (load=0x1900, exec=0x8023). If the input
   file is plain text (e.g. a `.bas` file from `extract`), it is automatically
-  retokenized to BBC BASIC II binary before being added to the disc image. If
+  retokenized to BBC BASIC II binary before being added to the disc image.
+  Source files may include explicit line numbers or omit them entirely; lines
+  without numbers are auto-numbered starting at 1 in steps of 1. If
   `--load` or `--exec` is given alongside `--basic`, the explicit flag overrides
   that address and a note is printed showing the override. The other address keeps
   the BASIC default. Ignored with a warning when `--inf` is used.

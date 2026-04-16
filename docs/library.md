@@ -188,6 +188,34 @@ with openImage("mydisc.ssd") as image:
     image.save("mydisc.ssd")
 ```
 
+### Source without line numbers
+
+`tokenize()` also accepts source lines with no line numbers at all.
+Lines are auto-numbered starting at 1 in steps of 1. Blank lines
+advance the counter without emitting output. Explicit and implicit
+numbering can interleave, so numbered GOTO/GOSUB targets coexist
+freely with unnumbered source.
+
+```python
+from beebtools import tokenize
+
+# No line numbers - auto-numbered 1, 2, 3, ...
+data = tokenize([
+    'MODE 7',
+    'PRINT "HELLO WORLD"',
+    'END',
+])
+
+# Numbered targets mixed with unnumbered source
+data = tokenize([
+    'INPUT "Guess: " G%',
+    'IF G%=42 THEN 100',
+    'PRINT "Wrong"',
+    'GOTO 1',
+    '100 PRINT "Correct!"',
+])
+```
+
 ### Retokenizing plain-text BASIC on the way in
 
 `addFileTo()` wraps `side.addFile()` with optional retokenization - if

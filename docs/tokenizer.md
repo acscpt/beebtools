@@ -51,6 +51,15 @@ state machine driven by a single keyword table. The engine handles
 both BBC BASIC II (the BBC B ROM) and BBC BASIC IV (the BBC Master
 128 ROM) and is straightforward to extend to other dialects.
 
+Source files can omit line numbers entirely. Before the tokenizer
+engine runs, a pre-processing step in `basic.py` resolves every
+line to a `(line_number, content)` pair. Lines without an explicit
+number are auto-numbered starting at 1 in steps of 1; blank lines
+advance the counter without emitting a line record. Explicit and
+implicit numbering interleave freely, so numbered GOTO/GOSUB targets
+coexist with unnumbered source. The engine itself sees ordinary
+numbered lines regardless of how the numbers were assigned.
+
 
 ## 2. What a token is
 
