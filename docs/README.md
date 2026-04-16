@@ -24,5 +24,6 @@ For a quick overview and installation instructions, see the
 ## Guides
 
 - [The .inf sidecar format](https://github.com/acscpt/beebtools/blob/main/docs/inf-format.md) - syntax, keys, extraction layouts, CRC validation
+- [How the BBC BASIC Tokenizer Works](https://github.com/acscpt/beebtools/blob/main/docs/tokenizer.md) - state machine, keyword table, BASIC II vs IV
 - [Pretty-printer](https://github.com/acscpt/beebtools/blob/main/docs/pretty-printer.md) - operator spacing, anti-listing traps
 - [Library usage](https://github.com/acscpt/beebtools/blob/main/docs/library.md) - using beebtools as a Python library

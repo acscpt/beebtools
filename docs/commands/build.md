@@ -130,6 +130,28 @@ any extra flags.
 See [A Field Guide to Non-standard BBC Micro Disc Images](../inf-and-nonstandard-discs.md)
 for the full story.
 
+## BASIC source without line numbers
+
+When the builder retokenizes a `.bas` file, it accepts source with or
+without line numbers. Numberless source is auto-numbered starting at 1
+in steps of 1. Blank lines advance the counter without emitting output.
+
+You can mix numbered and unnumbered lines in the same file. This is
+useful when a program has GOTO or GOSUB targets that need stable
+numbers but the rest of the source does not:
+
+```basic
+INPUT "Guess: " G%
+IF G%=42 THEN 100
+PRINT "Wrong"
+GOTO 1
+100 PRINT "Correct!"
+```
+
+Auto-numbering happens before tokenization. The tokenizer engine sees
+ordinary numbered lines regardless of whether the source was numbered
+by hand or by the auto-numberer.
+
 ## Options
 
 - `-t` / `--tracks` - 40 or 80 tracks (default: 80). For ADFS: 40-track

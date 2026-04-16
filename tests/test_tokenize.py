@@ -12,7 +12,9 @@ binary for a range of BASIC constructs.
 import pytest
 
 from beebtools import detokenize, tokenize
-from beebtools.basic import encodeLineRef, _parseLine, _tokenizeContent
+from beebtools.basic import encodeLineRef, _parseLine
+from beebtools.sophie import tokenizeLine
+from beebtools.basic_dialects import BBC_BASIC_II
 
 
 # ---------------------------------------------------------------------------
@@ -20,7 +22,12 @@ from beebtools.basic import encodeLineRef, _parseLine, _tokenizeContent
 # ---------------------------------------------------------------------------
 
 def makeLine(linenum, content_bytes):
-    """Build a single tokenized BASIC line record (Russell format)."""
+    """Build a single tokenized BASIC line record (Russell format).
+
+    Args:
+        linenum:       BBC BASIC line number (0-32767).
+        content_bytes: Tokenized content bytes for this line.
+    """
     hi = (linenum >> 8) & 0xFF
     lo = linenum & 0xFF
     linelen = 4 + len(content_bytes)
@@ -28,7 +35,11 @@ def makeLine(linenum, content_bytes):
 
 
 def makeProgram(*lines):
-    """Build a complete tokenized BASIC program from (linenum, content_bytes) pairs."""
+    """Build a complete tokenized BASIC program from (linenum, content_bytes) pairs.
+
+    Args:
+        lines: Variable number of (linenum, content_bytes) tuples.
+    """
     data = bytearray()
     for linenum, content in lines:
         data += makeLine(linenum, content)
@@ -138,9 +149,9 @@ def testTokenizeEnd():
 
 
 def testTokenizeTwoKeywords():
-    """Adjacent keywords are both tokenized."""
-    data = tokenize(["   10CLSPRINT"])
-    expected = makeProgram((10, [0xDB, 0xF1]))
+    """Adjacent keywords: PRINT (no C flag) followed by END tokenizes both."""
+    data = tokenize(["   10PRINTEND"])
+    expected = makeProgram((10, [0xF1, 0xE0]))
     assert data == expected
 
 
@@ -224,14 +235,14 @@ def testConditionalEndVsEndproc():
 
 def testConditionalFalseNotMatchedInVariable():
     """FALSE has C flag so FALSEx is not tokenized as FALSE + x."""
-    content = _tokenizeContent("FALSEx=1")
+    content = tokenizeLine("FALSEx=1", BBC_BASIC_II)
     # Should be literal text, not FALSE token + "x=1".
     assert 0xA3 not in content
 
 
 def testConditionalTimeNotMatchedInTimer():
     """TIME has C flag so TIMER is not tokenized as TIME + R."""
-    content = _tokenizeContent("TIMER=0")
+    content = tokenizeLine("TIMER=0", BBC_BASIC_II)
     # Should be literal text, not TIME token + "R=0".
     assert 0x91 not in content
     assert 0xD1 not in content
@@ -244,21 +255,21 @@ def testConditionalTimeNotMatchedInTimer():
 def testPseudoVarStatementForm():
     """TIME at start of statement uses the statement form token (0xD1)."""
     # TIME=0 at start of line -> statement form
-    content = _tokenizeContent("TIME=0")
+    content = tokenizeLine("TIME=0", BBC_BASIC_II)
     assert content[0] == 0xD1
 
 
 def testPseudoVarFunctionForm():
     """TIME inside an expression uses the function form token (0x91)."""
     # PRINT TIME -> PRINT is a M-flag keyword, then TIME is mid-statement
-    content = _tokenizeContent("PRINTTIME")
+    content = tokenizeLine("PRINTTIME", BBC_BASIC_II)
     assert content[0] == 0xF1   # PRINT
     assert content[1] == 0x91   # TIME (function form)
 
 
 def testPseudoVarAfterColon():
     """Colon resets to start-of-statement, so pseudo-var gets statement form."""
-    content = _tokenizeContent("CLS:TIME=0")
+    content = tokenizeLine("CLS:TIME=0", BBC_BASIC_II)
     # CLS = 0xDB, colon = 0x3A, TIME = 0xD1 (stmt form), '=' '0'
     assert content[0] == 0xDB
     assert content[1] == ord(':')
@@ -267,15 +278,142 @@ def testPseudoVarAfterColon():
 
 def testPseudoVarPtrStatementForm():
     """PTR at start of statement uses 0xCF."""
-    content = _tokenizeContent("PTR#3=100")
+    content = tokenizeLine("PTR#3=100", BBC_BASIC_II)
     assert content[0] == 0xCF
 
 
 def testPseudoVarPtrFunctionForm():
     """PTR inside expression uses 0x8F."""
-    content = _tokenizeContent("PRINTPTR#3")
+    content = tokenizeLine("PRINTPTR#3", BBC_BASIC_II)
     assert content[0] == 0xF1  # PRINT
     assert content[1] == 0x8F  # PTR (function form)
+
+
+def testPseudoVarFunctionFormAfterEquals():
+    """PAGE on the RHS of '=' uses the function form (0x90), not stmt form."""
+    # '=' as the first non-whitespace character indicates we are inside
+    # an expression (e.g. the body of a function that returns PAGE),
+    # so the following PAGE must be the function-form token.
+    content = tokenizeLine("=PAGE", BBC_BASIC_II)
+    assert content[0] == ord('=')
+    assert content[1] == 0x90
+
+
+def testPseudoVarFunctionFormAfterIndirection():
+    """PAGE inside an indirection operator's argument uses function form."""
+    # ?(PAGE+1024)=1 assigns through a byte-indirection operator. The
+    # PAGE inside the parens is on the RHS of an expression, not the
+    # head of a statement, so it must tokenize as function form 0x90.
+    content = tokenizeLine("?(PAGE+1024)=1", BBC_BASIC_II)
+    # Find PAGE in the output: should be 0x90, not 0xD0.
+    assert 0x90 in content
+    assert 0xD0 not in content
+
+
+def testPseudoVarFunctionFormAfterShriekAssignment():
+    """TIME on the RHS of a word-indirection assignment uses function form."""
+    content = tokenizeLine("!&80=TIME", BBC_BASIC_II)
+    assert 0x91 in content   # function form
+    assert 0xD1 not in content  # not statement form
+
+
+def testPseudoVarStatementFormAtLineStart():
+    """PAGE=&1900 at the very start of a line still emits statement form."""
+    content = tokenizeLine("PAGE=&1900", BBC_BASIC_II)
+    assert content[0] == 0xD0   # statement form PAGE
+
+
+def testPseudoVarFunctionFormAfterStringLiteral():
+    """A string literal counts as non-whitespace and clears start-of-stmt."""
+    # "X"=PAGE is not meaningful BASIC but exercises the rule: the
+    # closing quote leaves us mid-expression, so PAGE after '=' must be
+    # function form.
+    content = tokenizeLine('"X"=PAGE', BBC_BASIC_II)
+    assert 0x90 in content
+    assert 0xD0 not in content
+
+
+def testPseudoVarFunctionFormAfterHexLiteral():
+    """A hex literal clears start-of-statement for the next pseudo-var."""
+    # &0=PAGE: the ampersand-hex consumes its own bytes; the '=' and
+    # PAGE that follow must not treat PAGE as head-of-statement.
+    content = tokenizeLine("&0=PAGE", BBC_BASIC_II)
+    assert 0x90 in content
+    assert 0xD0 not in content
+
+
+def testPseudoVarStatementFormAfterColonSurvives():
+    """Colon still resets to start-of-statement even with the wider reset."""
+    content = tokenizeLine(":TIME=0", BBC_BASIC_II)
+    assert content[0] == ord(':')
+    assert content[1] == 0xD1   # statement form TIME
+
+
+def testPseudoVarStatementFormAfterLeadingWhitespace():
+    """Leading spaces before a pseudo-var keep start-of-statement mode."""
+    content = tokenizeLine("   PAGE=&1900", BBC_BASIC_II)
+    # First three bytes are spaces, then PAGE in statement form.
+    assert content[:3] == bytes([0x20, 0x20, 0x20])
+    assert content[3] == 0xD0
+
+
+# ---------------------------------------------------------------------------
+# Identifier character range: BBC BASIC II accepts '_' through 'z' plus
+# digits and uppercase letters in identifiers. Backtick (0x60) lives in
+# that range but is missed by Python's str.isalnum().
+# ---------------------------------------------------------------------------
+
+def testBacktickSuppressesConditionalKeyword():
+    """END followed by backtick counts as an identifier continuation."""
+    # END is a conditional keyword; a following identifier character
+    # suppresses tokenization. Backtick must count as ident in BBC
+    # BASIC II, so "END`EOR" is one variable name, not END + `EOR.
+    content = tokenizeLine("END`EOR=1", BBC_BASIC_II)
+    assert 0xE0 not in content   # END must not tokenize
+    assert 0xA7 not in content   # EOR must not tokenize either
+
+
+def testBacktickStartsVariable():
+    """A name starting with backtick consumes any keyword within it."""
+    content = tokenizeLine("`PRINT=3", BBC_BASIC_II)
+    # `PRINT is one variable name; PRINT must not tokenize.
+    assert 0xF1 not in content
+
+
+def testUnderscoreStartsVariableRegression():
+    """Underscore-starting variable still works (regression guard)."""
+    content = tokenizeLine("_END=4", BBC_BASIC_II)
+    assert 0xE0 not in content   # END must not tokenize inside _END
+
+
+def testProcNameWithBacktickAndDigits():
+    """Greedy PROC name eater consumes backtick and digits in the name."""
+    # PROC's F-flag makes the following identifier opaque. Without a
+    # matching DEF, the name is consumed greedily across all identifier
+    # characters - which must include backtick and digits - so the
+    # trailing PRINT does not tokenize.
+    content = tokenizeLine("PROC`1PRINT", BBC_BASIC_II)
+    assert content[0] == 0xF2   # PROC token
+    # No PRINT keyword in the identifier tail.
+    assert 0xF1 not in content[1:]
+
+
+def testDefProcNameWithBacktickCollected():
+    """DEFPROC`name is recognised by the symbol-table collector."""
+    # A DEFPROC with a backtick in the name must be recorded so the
+    # boundary is known on the caller side.
+    data = tokenize([
+        "10 IF A=1 THEN PROC`fooELSEPROC`bar",
+        "20 DEFPROC`foo",
+        "30 ENDPROC",
+        "40 DEFPROC`bar",
+        "50 ENDPROC",
+    ])
+    # Round-trip via detokenize to verify ELSE tokenized correctly on
+    # line 10, i.e. PROC`foo boundary was found.
+    lines = detokenize(data)
+    assert "ELSE" in lines[0]
+    assert "PROC`bar" in lines[0]
 
 
 # ---------------------------------------------------------------------------
@@ -372,9 +510,174 @@ def testStarCommandMidStatement():
 
 def testAmpersandSkipsHex():
     """&DEF should not tokenize DEF as a keyword."""
-    content = _tokenizeContent("X=&DEF")
+    content = tokenizeLine("X=&DEF", BBC_BASIC_II)
     # Should be: X = & D E F  (all literal)
     assert 0xDD not in content  # DEF token
+
+
+def testHexScanIsGreedy():
+    """Hex literals consume all trailing [0-9A-F] characters greedily.
+
+    The BBC BASIC II ROM hex scanner stays in its hex-digit loop for
+    any character in [0-9A-F] and never consults the keyword table
+    mid-scan, so &3DEF tokenizes as one hex literal, not as &3 + DEF.
+    """
+    content = tokenizeLine("A=&3DEF", BBC_BASIC_II)
+    assert content == bytes([
+        ord('A'), ord('='), ord('&'), ord('3'), ord('D'), ord('E'), ord('F'),
+    ])
+
+
+def testHexScanGreedyAllFs():
+    """&FFFF stays a single hex literal."""
+    content = tokenizeLine("A=&FFFF", BBC_BASIC_II)
+    assert content == bytes([
+        ord('A'), ord('='), ord('&'), ord('F'), ord('F'), ord('F'), ord('F'),
+    ])
+
+
+def testHexScanStopsAtNonHexKeywordStart():
+    """&276BMOD16 splits into hex &276B then MOD keyword then "16".
+
+    M is not a hex digit, so the hex run naturally stops at &276B.
+    The following MOD must tokenize as the MOD keyword (0x83).
+    """
+    content = tokenizeLine("A=&276BMOD16", BBC_BASIC_II)
+    assert content[:2] == bytes([ord('A'), ord('=')])
+    assert content[2] == ord('&')
+    assert content[3:7] == b'276B'
+    assert content[7] == 0x83
+    assert content[8:] == b'16'
+
+
+# ---------------------------------------------------------------------------
+# Dot-abbreviation form: "P." -> PRINT, "PRO." -> PROC, etc. Resolution
+# is by token value (earlier tokens claim shorter prefixes first).
+# ---------------------------------------------------------------------------
+
+def testAbbreviationPrExpandsToPrint():
+    """PR. expands to PRINT - resolves by alphabetical-first match."""
+    # P-prefix keywords in alphabetical order: PAGE, PI, PLOT, POS,
+    # PRINT, PROC, PTR. PR-prefix first is PRINT. So PR. -> PRINT.
+    content = tokenizeLine("PR.", BBC_BASIC_II)
+    assert content == bytes([0xF1])
+
+
+def testAbbreviationPrinStillPrint():
+    """PRIN. also resolves to PRINT (longer prefix, same first match)."""
+    content = tokenizeLine("PRIN.", BBC_BASIC_II)
+    assert content == bytes([0xF1])
+
+
+def testAbbreviationPrDisambiguatesProc():
+    """PRO. expands to PROC (PR. taken by PRINT, PRO. frees up)."""
+    content = tokenizeLine("PRO.", BBC_BASIC_II)
+    assert content == bytes([0xF2])
+
+
+def testAbbreviationFollowedByString():
+    """PR. followed by a string tokenizes PRINT and preserves the string."""
+    content = tokenizeLine('PR."HI"', BBC_BASIC_II)
+    assert content == bytes([0xF1, 0x22, ord('H'), ord('I'), 0x22])
+
+
+def testAbbreviationInsideRemTailIsLiteral():
+    """After REM the rest of the line is literal, so PR. does not expand."""
+    data = tokenize(["10 REM PR."])
+    lines = detokenize(data)
+    assert lines[0].rstrip().endswith("PR.")
+
+
+def testAbbreviationInsideStringIsLiteral():
+    """A dot inside a quoted string is literal, no expansion."""
+    data = tokenize(['10 PRINT"PR."'])
+    lines = detokenize(data)
+    assert '"PR."' in lines[0]
+
+
+def testAbbreviationConditionalSuppressedByIdentChar():
+    """EN. followed by an identifier is not expanded (END is conditional)."""
+    # EN-prefix first alphabetically is END (conditional keyword). A
+    # trailing identifier character must suppress the expansion.
+    content = tokenizeLine("EN.X", BBC_BASIC_II)
+    assert 0xE0 not in content   # END token must not appear
+
+
+def testAbbreviationConditionalExpandsBeforeNonIdent():
+    """EN. at end of line expands to ENDPROC (ROM table order)."""
+    content = tokenizeLine("EN.", BBC_BASIC_II)
+    # ENDPROC precedes END in the ROM keyword table due to commonAbbrev
+    # ordering, so EN. resolves to ENDPROC, not END.
+    assert 0xE1 in content
+
+
+def testAbbreviationPseudoVarFunctionForm():
+    """TI. inside an expression expands to TIME in function form."""
+    content = tokenizeLine("X=TI.", BBC_BASIC_II)
+    # After '=' at_start is False, so pseudo-var TI. -> 0x91.
+    assert 0x91 in content
+    assert 0xD1 not in content
+
+
+def testAbbreviationPseudoVarStatementForm():
+    """TI.=0 at start of statement expands to TIME statement form."""
+    content = tokenizeLine("TI.=0", BBC_BASIC_II)
+    # TI. -> TIME; at start of statement -> 0xD1 (0x91 + 0x40).
+    assert content[0] == 0xD1
+
+
+def testAbbreviationAfterColonIsStatementForm():
+    """Colon resets start-of-statement, so TI.=0 after ':' emits stmt form."""
+    content = tokenizeLine("CLS:TI.=0", BBC_BASIC_II)
+    assert content[0] == 0xDB
+    assert content[1] == ord(':')
+    assert content[2] == 0xD1
+
+
+def testAbbreviationDetokenizesToFullKeyword():
+    """Abbreviations are lossy input: detokenize emits the canonical keyword."""
+    data = tokenize(["10 PR."])
+    lines = detokenize(data)
+    assert "PRINT" in lines[0]
+    assert "PR." not in lines[0]
+
+
+def testAbbreviationWithLineNumberEncoding():
+    """GOT. (GOTO abbrev) followed by digits encodes a line-number ref."""
+    # G-keywords alphabetical order: GCOL, GET, GET$, GOSUB, GOTO.
+    # GOT-prefix first is GOTO (no other keyword starts with GOT).
+    data = tokenize(["10 GOT. 100", "100 END"])
+    assert 0xE5 in data   # GOTO
+    assert 0x8D in data   # inline line-number ref
+
+
+def testAbbreviationAutoNumberSource():
+    """Auto-numbered source uses abbreviations too."""
+    data = tokenize(['PR."HI"'])
+    # _normalizeLines prepends a space; abbreviation PR. -> PRINT.
+    expected = makeProgram(
+        (1, [0x20, 0xF1, 0x22, ord('H'), ord('I'), 0x22]),
+    )
+    assert data == expected
+
+
+def testAbbreviationNotTriggeredInsideVariable():
+    """XPR. within a variable name is literal, no abbreviation expansion."""
+    # XPR is a variable; the dot is just a dot, not a keyword abbreviation.
+    content = tokenizeLine("XPR.=1", BBC_BASIC_II)
+    # PRINT token must not appear.
+    assert 0xF1 not in content
+
+
+def testHexSingleDigitStillGreedy():
+    """A lone hex digit like &D before a keyword keeps the first digit."""
+    # "&DTHEN" - D is the first hex digit (consumed unconditionally),
+    # THEN is not a hex run continuation character, so the hex stops
+    # at &D and THEN tokenizes normally.
+    content = tokenizeLine("&DTHEN", BBC_BASIC_II)
+    assert content[0] == ord('&')
+    assert content[1] == ord('D')
+    assert content[2] == 0x8C   # THEN token
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +686,7 @@ def testAmpersandSkipsHex():
 
 def testFnNameNotTokenized():
     """FN followed by a name does not tokenize keywords in the name."""
-    content = _tokenizeContent("FNprint")
+    content = tokenizeLine("FNprint", BBC_BASIC_II)
     assert content[0] == 0xA4  # FN token
     # "print" should be literal, not PRINT token.
     assert 0xF1 not in content
@@ -391,7 +694,7 @@ def testFnNameNotTokenized():
 
 def testProcNameNotTokenized():
     """PROC followed by a name does not tokenize keywords in the name."""
-    content = _tokenizeContent("PROCend")
+    content = tokenizeLine("PROCend", BBC_BASIC_II)
     assert content[0] == 0xF2  # PROC token
     assert 0xE0 not in content  # END token should not appear
 
@@ -639,22 +942,24 @@ def testTextStableFullProgram():
 
 
 # ---------------------------------------------------------------------------
-# FN/PROC symbol table: two-pass tokenizer resolves identifier boundaries
+# FN/PROC greedy name consumption (ROM behaviour)
+#
+# The ROM tokenizer greedily consumes all identifier characters after
+# FN/PROC as the user name. When a keyword's letters adjoin the name
+# with no separator, the keyword is consumed as part of the name. This
+# matches the BBC BASIC ROM which has no multi-line lookahead.
 # ---------------------------------------------------------------------------
 
-def testFnProcSymbolTableThenAfterFn():
-    """FNld followed by THEN is correctly split when DEFFNld is defined."""
+def testFnProcGreedyEatsAdjacentKeyword():
+    """FN greedy: FNldTHEN eats ldTHEN as the name, THEN not tokenized."""
     text = [
         "   10IFNOTFNldTHEN=0",
         "   20DEFFNld",
         "   30=GET",
     ]
     data = tokenize(text)
-    # Detokenize line 10 and check THEN appears as a keyword.
-    lines = detokenize(data)
-    assert "THEN" in lines[0]
-    # The token stream for line 10 should contain THEN token (0x8C).
-    assert 0x8C in data
+    # Greedy consumption: FN + name "ldTHEN". THEN token not present.
+    assert 0x8C not in data
 
 
 def testFnProcSymbolTableElseAfterProc():
@@ -673,27 +978,27 @@ def testFnProcSymbolTableElseAfterProc():
     assert "PROCm" in lines[0]
 
 
-def testFnProcSymbolTableDivAfterFn():
-    """FNhd followed by DIV is correctly split when DEFFNhd exists."""
+def testFnProcGreedyEatsDivInName():
+    """FN greedy: FNhdDIV40 eats hdDIV40 as the name, DIV not tokenized."""
     text = [
         "   10X=FNhdDIV40",
         "   20DEFFNhd=42",
     ]
     data = tokenize(text)
-    # DIV token (0x81) should be present.
-    assert 0x81 in data
+    # Greedy consumption: FN + name "hdDIV40". DIV token not present.
+    assert 0x81 not in data
 
 
-def testFnProcSymbolTableLongestMatch():
-    """When both FNh and FNhd exist, FNhdDIV matches the longer name."""
+def testFnProcGreedyIgnoresMultipleDefs():
+    """Without symbol table, multiple DEFs do not affect greedy consumption."""
     text = [
         "   10X=FNhdDIV40",
         "   20DEFFNh=1",
         "   30DEFFNhd=2",
     ]
     data = tokenize(text)
-    # Should match FNhd (longer), leaving DIV to be tokenized.
-    assert 0x81 in data
+    # Greedy consumption: FN + name "hdDIV40". DIV token not present.
+    assert 0x81 not in data
 
 
 def testFnProcSymbolTableFallbackGreedy():
@@ -707,9 +1012,14 @@ def testFnProcSymbolTableFallbackGreedy():
     assert 0x8C not in data
 
 
-def testFnProcSymbolTableRoundTrip():
-    """Program with FN/PROC boundary ambiguity round-trips correctly."""
-    # Build binary where FNld token is followed directly by THEN token.
+def testFnProcBoundaryDoesNotRoundTrip():
+    """FN name abutting a keyword does not round-trip (ROM limitation).
+
+    The detokenizer emits FNldTHEN100 with no separator; greedy
+    re-tokenization eats THEN as part of the FN name. This is a
+    known ROM-level limitation: the ROM's LIST output is not always
+    re-tokenizable when FN/PROC names adjoin keywords.
+    """
     ref100 = encodeLineRef(100)
     original = makeProgram(
         (10, [0xE7, 0xAC, 0xA4, ord('l'), ord('d'),
@@ -718,4 +1028,122 @@ def testFnProcSymbolTableRoundTrip():
         (30, [0x3D, 0xA5]),                       # =GET
         (100, [0xE0]),                             # END
     )
-    assert tokenize(detokenize(original)) == original
+    assert tokenize(detokenize(original)) != original
+
+
+# ---------------------------------------------------------------------------
+# Auto-numbered source: lines without an explicit line number
+#
+# The tokenizer assigns line numbers to numberless lines: start at 1,
+# increment by 1, blank lines advance the counter without emitting
+# output, and explicit line numbers may interleave freely provided
+# they stay strictly greater than the previous line.
+# ---------------------------------------------------------------------------
+
+def testAutoNumberSingleLine():
+    """A single source line with no line number gets line 1."""
+    data = tokenize(["PRINT"])
+    # Numberless content gets a leading space prepended so it mirrors
+    # the stored form of an explicit "<N> <content>" line.
+    expected = makeProgram((1, [0x20, 0xF1]))
+    assert data == expected
+
+
+def testAutoNumberStepsByOne():
+    """Successive numberless lines get 1, 2, 3."""
+    data = tokenize(["PRINT", "END", "PRINT"])
+    expected = makeProgram(
+        (1, [0x20, 0xF1]),
+        (2, [0x20, 0xE0]),
+        (3, [0x20, 0xF1]),
+    )
+    assert data == expected
+
+
+def testAutoNumberBlankLinesAdvanceCounter():
+    """Blank lines drop from output but still bump the counter."""
+    data = tokenize(["PRINT", "", "   ", "END"])
+    # "PRINT" -> 1, blank -> 2, whitespace-only -> 3, "END" -> 4.
+    expected = makeProgram(
+        (1, [0x20, 0xF1]),
+        (4, [0x20, 0xE0]),
+    )
+    assert data == expected
+
+
+def testAutoNumberPreservesLeadingIndentation():
+    """Source indentation is stored verbatim in the tokenized line content."""
+    # The stored form is "<linenum> <line as typed>", so a source line
+    # indented with two spaces gets three spaces of content bytes.
+    data = tokenize(["  PRINT"])
+    expected = makeProgram((1, [0x20, 0x20, 0x20, 0xF1]))
+    assert data == expected
+
+
+def testAutoNumberIdenticalToExplicitForm():
+    """Auto-numbered source produces the same bytes as the explicit form."""
+    auto = tokenize(["PRINT \"HELLO\"", "END"])
+    explicit = tokenize(["1 PRINT \"HELLO\"", "2 END"])
+    assert auto == explicit
+
+
+def testAutoNumberLeadingBlanksAdvanceCounter():
+    """Leading blank lines bump the counter before the first emitted line."""
+    # Two leading blanks bump last_line from -1 -> 1 -> 2, then PRINT
+    # lands on 3.
+    data = tokenize(["", "  ", "PRINT"])
+    expected = makeProgram((3, [0x20, 0xF1]))
+    assert data == expected
+
+
+def testAutoNumberFnProcSymbolTable():
+    """FN/PROC names declared in auto-numbered source are still collected.
+
+    Without the symbol table, FNldTHEN would greedily consume "ldTHEN"
+    as the name, leaving no THEN token. With it, FNld is matched and
+    THEN tokenizes correctly.
+    """
+    data = tokenize([
+        "IF NOT FNld THEN 100",
+        "DEF FNld",
+        "=GET",
+    ])
+    # THEN token (0x8C) must be present, proving FNld boundary was found.
+    assert 0x8C in data
+
+
+def testAutoNumberGotoRefersToInjectedLine():
+    """GOTO targets within auto-numbered source resolve to injected numbers."""
+    data = tokenize([
+        "PRINT \"START\"",    # becomes line 1
+        "GOTO 1",              # becomes line 2, jumps back to 1
+    ])
+    listed = detokenize(data)
+    assert listed[0].lstrip().startswith("1")
+    assert listed[1].lstrip().startswith("2")
+    assert "GOTO1" in listed[1].replace(" ", "")
+
+
+def testMixedModeAllowsNumberlessAfterNumbered():
+    """A numbered line followed by numberless lines auto-numbers continuing."""
+    # First line is explicit 10; subsequent numberless line is 11.
+    data = tokenize(["10 PRINT", "END"])
+    expected = makeProgram(
+        (10, [0x20, 0xF1]),
+        (11, [0x20, 0xE0]),
+    )
+    assert data == expected
+
+
+def testExplicitNumbersMustStrictlyIncrease():
+    """Explicit line numbers out of order raise ValueError."""
+    with pytest.raises(ValueError, match="must increase"):
+        tokenize(["20 PRINT", "10 END"])
+
+
+def testExplicitNumberMustBeatAutoCounter():
+    """An explicit number that has been overtaken by the auto-counter errors."""
+    # After three numberless lines (1, 2, 3), an explicit "3 ..." tries
+    # to reuse 3 which is not strictly greater than last_line.
+    with pytest.raises(ValueError, match="must increase"):
+        tokenize(["PRINT", "PRINT", "PRINT", "3 END"])
