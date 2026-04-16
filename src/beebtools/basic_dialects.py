@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Heisenberg (acscpt)
 # SPDX-License-Identifier: MIT
 
-"""Dialect instances consumed by the wopr tokenizer engine.
+"""Dialect instances consumed by the sophie tokenizer engine.
 
 Each dialect is a `Dialect` instance carrying an ordered tuple of
 `Keyword` rows. The keyword bytes, names, and behaviour flags are
@@ -23,7 +23,7 @@ from .tokens import (
     BBC_BASIC_IV_TOKENS,
     TokenSpec,
 )
-from .wopr import Dialect, Keyword
+from .sophie import Dialect, Keyword
 
 
 def _toKeyword(spec: TokenSpec) -> Keyword:

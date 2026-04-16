@@ -1,13 +1,24 @@
 # SPDX-FileCopyrightText: 2026 Heisenberg (acscpt)
 # SPDX-License-Identifier: MIT
 
+# This module is named in honour of Sophie Wilson who created BBC BASIC for the
+# BBC Micro, arguably one of the finest BASIC implementations ever written.
+#
+# Sophie Wilson went on to co-architect the ARM instruction set with Steve Furber
+# at Acorn Computers, work that now underpins essentially every modern mobile
+# and embedded device.
+#
+# This module is a tribute to Sophie Wilson and BBC Basic.
+#
+# It is in no way endorsed by or affiliated with Sophie Wilson.
+
 """BBC BASIC tokenizer engine.
 
 A deterministic finite-state machine that tokenizes BBC BASIC source.
 The engine is dialect-agnostic: every supported BBC BASIC version is
 expressed as an instance of `Dialect` and consumed by the same
 machine. Dialect-specific data (keyword table, flag-set membership)
-lives in `wopr_dialects.py`.
+lives in `basic_dialects.py`.
 
 Formal shape:
     Q   the State enum below
@@ -101,6 +112,7 @@ _COLON = ':'
 _COMMA = ','
 _AMP = '&'
 _DOT = '.'
+_STAR = '*'
 _HEX_DIGITS = frozenset('0123456789ABCDEFabcdef')
 _DEC_DIGITS = frozenset('0123456789')
 
@@ -161,10 +173,14 @@ def _emitLineNumberRef(ctx: Context) -> None:
     specific bit-scrambling (see SPGETN in the ROM recce). This mirror
     implementation follows the same packing so the encoded bytes match.
     """
+    # Collect the decimal digit run from source.
     start = ctx.pos
     while ctx.pos < len(ctx.text) and ctx.text[ctx.pos] in _DEC_DIGITS:
         ctx.pos += 1
 
+    # Pack the 16-bit value into the ROM's 0x8D + 3-byte format:
+    # top byte carries inverted high bits XORed with 0x54, then the
+    # low and high 6-bit halves each with bit 6 set.
     value = int(ctx.text[start:ctx.pos]) & 0xFFFF
     top = (((value & 0x00C0) >> 2) | ((value & 0xC000) >> 12)) ^ 0x54
     byte1 = (value & 0x3F) | 0x40
@@ -198,6 +214,10 @@ def _matchKeyword(ctx: Context) -> Optional[Match]:
     pos = ctx.pos
     length = len(text)
 
+    # Full-keyword scan: walk the dialect table in order, checking
+    # each keyword against the source at the cursor. Conditional
+    # keywords (e.g. TIME, VAL) reject when the next char continues
+    # an identifier, preventing TIMER from matching as TIME + R.
     for kw in ctx.dialect.keywords:
         name = kw.name
         kwLen = len(name)
@@ -214,6 +234,10 @@ def _matchKeyword(ctx: Context) -> Optional[Match]:
 
         return Match(kw, kwLen)
 
+    # Dot-abbreviation scan: collect the alphabetic prefix before
+    # a '.', then find the first keyword whose name starts with
+    # that prefix. Table order gives ROM-faithful precedence
+    # (P. -> PRINT ahead of PAGE).
     end = pos
     while end < length and text[end].isalpha():
         end += 1
@@ -241,18 +265,33 @@ def _applyKeyword(ctx: Context, match: Match, currentState: State) -> State:
     transitions follow the keyword's flags. The cursor advances by
     `match.consumed`, which is the keyword length for full matches
     and prefix-letters + dot for abbreviations.
+
+    Args:
+        ctx:          Per-line tokenizer context (source, cursor, output).
+        match:        The keyword and consumed span returned by _matchKeyword.
+        currentState: AT_START or MID_STATEMENT at time of match.
+
+    Returns:
+        The state to use for the next character.
     """
     kw = match.kw
+
+    # Emit the token byte. Pseudo-variables (PAGE, TIME, etc.) get
+    # the +0x40 statement form when matched at start-of-statement.
     atStart = (currentState == State.AT_START)
     token = kw.token + 0x40 if (kw.pseudoVarBase and atStart) else kw.token
     ctx.out.append(token)
     ctx.pos += match.consumed
 
+    # FN/PROC: consume the user's procedure or function name as
+    # opaque literal bytes (ROM greedy behaviour).
     if kw.fnProc:
         _consumeIdentifier(ctx)
 
+    # Propagate line-number expectation from keyword flags.
     ctx.expectLineNumber = kw.expectLineNumber
 
+    # Determine the resulting state from keyword flags.
     if kw.lineLiteral:
         return State.LINE_LITERAL
     if kw.startOfStatement:
@@ -274,19 +313,33 @@ def _statementStep(ctx: Context, currentState: State) -> State:
     """
     ch = ctx.text[ctx.pos]
 
+    # Opening quote: enter string state, everything until close-quote
+    # is emitted verbatim with no keyword scanning.
     if ch == _QUOTE:
         _emitAndAdvance(ctx)
         return State.IN_STRING
 
+    # Star command at start of statement: rest of line is literal text.
+    if ch == _STAR and currentState == State.AT_START:
+        _emitAndAdvance(ctx)
+        return State.LINE_LITERAL
+
+    # Digit run after GOTO/GOSUB/THEN/ELSE: encode as a packed
+    # 0x8D line-number reference instead of literal ASCII digits.
     if ctx.expectLineNumber and ch in _DEC_DIGITS:
         _emitLineNumberRef(ctx)
         return State.MID_STATEMENT
 
+    # Hex literal (&3DEF): emit ampersand and greedy hex digits
+    # verbatim with no keyword lookahead.
     if ch == _AMP:
         _consumeHex(ctx)
         ctx.expectLineNumber = False
         return State.MID_STATEMENT
 
+    # Identifier-start character: attempt a keyword match against the
+    # dialect table. If no keyword matches, consume the whole
+    # identifier run as literal bytes.
     if _isIdentStartChar(ch):
         match = _matchKeyword(ctx)
         if match is not None:
@@ -295,15 +348,20 @@ def _statementStep(ctx: Context, currentState: State) -> State:
         ctx.expectLineNumber = False
         return State.MID_STATEMENT
 
+    # Colon: statement separator, resets to start-of-statement.
     if ch == _COLON:
         _emitAndAdvance(ctx)
         ctx.expectLineNumber = False
         return State.AT_START
 
+    # Whitespace and comma preserve state. Comma also preserves the
+    # line-number latch so "GOTO 10, 20, 30" encodes all three refs.
     if ch.isspace() or ch == _COMMA:
         _emitAndAdvance(ctx)
         return currentState
 
+    # Anything else (operators, punctuation, digits): emit as literal.
+    # Non-digit characters clear the line-number latch.
     _emitAndAdvance(ctx)
     if ch not in _DEC_DIGITS:
         ctx.expectLineNumber = False
@@ -348,6 +406,13 @@ def tokenizeLine(text: str, dialect: "Dialect") -> bytes:
     Drives the state machine character by character: each transition
     consumes input, emits output, and returns the next state. Loop
     terminates when the input is exhausted.
+
+    Args:
+        text:    Source text for one BASIC line (without line number).
+        dialect: Keyword table and flag-set for the target BBC BASIC version.
+
+    Returns:
+        Tokenized byte sequence ready for packing into a line record.
     """
     ctx = Context(text=text, pos=0, out=bytearray(), dialect=dialect)
     state = State.AT_START
@@ -369,6 +434,14 @@ def decodeLineRef(b0: int, b1: int, b2: int) -> int:
     The encoding XORs the top two bits of each 6-bit payload half into
     a single control byte, with a sentinel of 0x54. Reverses the
     packing done by the tokenizer's line-reference emitter.
+
+    Args:
+        b0: Control byte (inverted high bits XORed with 0x54).
+        b1: Low byte of line number (bits 0-5, bit 6 set).
+        b2: High byte of line number (bits 0-5, bit 6 set).
+
+    Returns:
+        Decoded line number (0-32767).
     """
     x = b0 ^ 0x54
     lo = (b1 & 0x3F) | ((x & 0x30) << 2)
@@ -385,16 +458,28 @@ def _buildDecoderMaps(
     token stream. Pseudo-variable keywords are present in the dialect
     at their function-form byte only, so the statement form (byte +
     0x40) is expanded here for the decode-time lookup.
+
+    Args:
+        dialect: Keyword table for the target BBC BASIC version.
+
+    Returns:
+        (byteToName, lineLiteral) tuple: a dict mapping token bytes to
+        keyword names, and a frozenset of token bytes that absorb the
+        rest of the line (REM, DATA).
     """
     byteToName: Dict[int, str] = {}
     lineLiteral: set = set()
 
     for kw in dialect.keywords:
+        # Map the function-form byte to keyword name.
         byteToName[kw.token] = kw.name
 
+        # Pseudo-variables have a second entry for the statement form
+        # (function byte + 0x40) that decodes to the same name.
         if kw.pseudoVarBase:
             byteToName[kw.token + 0x40] = kw.name
 
+        # Track which tokens absorb the rest of the line (REM, DATA).
         if kw.lineLiteral:
             lineLiteral.add(kw.token)
 
@@ -424,6 +509,14 @@ def _detokenizeWithMaps(
     State machine: NORMAL -> IN_STRING on '"', NORMAL -> LINE_LITERAL
     on any byte in `lineLiteral`. Both absorbing states run to end of
     content (or for IN_STRING, to the matching close-quote).
+
+    Args:
+        content:     Raw token bytes for one BASIC line body.
+        byteToName:  Map from token byte to keyword name string.
+        lineLiteral: Set of token bytes that absorb the rest of the line.
+
+    Returns:
+        Decoded source text for this line body.
     """
     parts: List[str] = []
     state = _DecoderState.NORMAL
@@ -433,9 +526,11 @@ def _detokenizeWithMaps(
     while i < n:
         b = content[i]
 
+        # Line terminator: 0x0D marks end of this line's content.
         if b == 0x0D:
             break
 
+        # Inside a string: emit bytes verbatim until the closing quote.
         if state == _DecoderState.IN_STRING:
             parts.append(chr(b))
             if b == 0x22:
@@ -443,17 +538,21 @@ def _detokenizeWithMaps(
             i += 1
             continue
 
+        # After REM or DATA: everything to end-of-line is literal.
         if state == _DecoderState.LINE_LITERAL:
             parts.append(chr(b))
             i += 1
             continue
 
+        # Opening quote: enter string state.
         if b == 0x22:
             parts.append('"')
             state = _DecoderState.IN_STRING
             i += 1
             continue
 
+        # Inline line-number reference (0x8D + 3 packed bytes).
+        # Decode the bit-scrambled value back to a decimal number.
         if b == 0x8D:
             if i + 3 < n:
                 target = decodeLineRef(
@@ -466,6 +565,8 @@ def _detokenizeWithMaps(
                 i += 1
             continue
 
+        # Token byte (0x80+): look up the keyword name in the dialect
+        # map. Line-literal tokens (REM, DATA) switch to absorbing state.
         if b >= 0x80:
             name = byteToName.get(b)
             if name is not None:
@@ -477,6 +578,7 @@ def _detokenizeWithMaps(
             i += 1
             continue
 
+        # Literal ASCII: emit as-is.
         parts.append(chr(b))
         i += 1
 
@@ -489,6 +591,13 @@ def detokenizeLine(content: bytes, dialect: Dialect) -> str:
     Dialect-driven: the byte-to-name lookup and the line-literal set
     are derived from `dialect` so BASIC IV's EDIT (0xCE) decodes when
     the IV dialect is passed.
+
+    Args:
+        content: Raw token bytes for one BASIC line body.
+        dialect: Keyword table for the target BBC BASIC version.
+
+    Returns:
+        Decoded source text for this line body.
     """
     byteToName, lineLiteral = _buildDecoderMaps(dialect)
 
@@ -502,12 +611,21 @@ def detokenize(data: bytes, dialect: Dialect) -> List[str]:
     low byte, length, body. Returns one string per line, prefixed with
     the 5-character right-justified line number as the ROM's LIST
     command would.
+
+    Args:
+        data:    Raw bytes of a tokenised BBC BASIC program.
+        dialect: Keyword table for the target BBC BASIC version.
+
+    Returns:
+        List of strings, one per line, in LIST output format.
     """
     byteToName, lineLiteral = _buildDecoderMaps(dialect)
     lines: List[str] = []
     pos = 0
 
     while pos < len(data):
+        # Each record starts with 0x0D; anything else means we have
+        # walked past the program data.
         if data[pos] != 0x0D:
             break
 
@@ -515,6 +633,7 @@ def detokenize(data: bytes, dialect: Dialect) -> List[str]:
         if pos >= len(data):
             break
 
+        # 0xFF after the 0x0D sentinel is the end-of-program marker.
         hi = data[pos]
         if hi == 0xFF:
             break
@@ -522,6 +641,7 @@ def detokenize(data: bytes, dialect: Dialect) -> List[str]:
         if pos + 2 >= len(data):
             break
 
+        # Unpack the line header: high byte, low byte, record length.
         lo = data[pos + 1]
         linenum = hi * 256 + lo
         linelen = data[pos + 2]
@@ -529,9 +649,13 @@ def detokenize(data: bytes, dialect: Dialect) -> List[str]:
         if linelen < 4:
             break
 
+        # Extract the token body (everything between the header and
+        # the next record's 0x0D sentinel) and advance to the next
+        # record.
         content = data[pos + 3: pos - 1 + linelen]
         pos = pos - 1 + linelen
 
+        # Decode the token body and format as a LIST-style line.
         text = _detokenizeWithMaps(content, byteToName, lineLiteral)
         lines.append(f"{linenum:>5d}{text}")
 

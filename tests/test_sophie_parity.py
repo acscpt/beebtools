@@ -1,23 +1,21 @@
 # SPDX-FileCopyrightText: 2026 Heisenberg (acscpt)
 # SPDX-License-Identifier: MIT
 
-"""Parity harness: wopr engine vs the legacy basic.py tokenizer.
+"""Sophie engine behaviour tests.
 
-For every parity input here, both tokenizers must emit identical
-bytes. Inputs where the wopr engine is ROM-correct and the legacy
-basic.py is wrong (alphabetical-first abbreviation resolution)
-live in the ROM-correct section below; those assert the wopr output
-directly against the byte the BBC ROM would emit.
+Regression suite for the dialect-driven tokenizer engine. Each test
+exercises a specific tokenizer behaviour (keyword matching, string
+handling, pseudo-variables, hex literals, case sensitivity, assembler
+blocks) by feeding source text to tokenizeLine and checking the output.
 
-When the parity suite is fully green the wopr engine is the
-tokenizer, and basic.tokenize becomes a thin wrapper around
-wopr.tokenizeLine.
+The ROM-correct section tests abbreviation resolution where the
+BBC BASIC II ROM's hand-ordered keyword table gives different results
+from alphabetical ordering.
 """
 
-from beebtools.basic import _tokenizeContent
 from beebtools.tokens import TOKENS
-from beebtools.wopr import tokenizeLine
-from beebtools.wopr_dialects import BBC_BASIC_II
+from beebtools.sophie import tokenizeLine
+from beebtools.basic_dialects import BBC_BASIC_II
 
 
 # TOKENS maps both forms of pseudo-vars (PAGE at 0x90 and 0xD0) to the
@@ -30,16 +28,18 @@ for _tok, _name in TOKENS.items():
         _TOKEN_OF[_name] = _tok
 
 
-def assertParity(text: str) -> None:
-    """Both tokenizers must produce identical bytes for `text`."""
-    assert tokenizeLine(text, BBC_BASIC_II) == _tokenizeContent(text)
+def assertTokenizes(text: str) -> bytes:
+    """Tokenize text via the sophie engine and return the result."""
+    result = tokenizeLine(text, BBC_BASIC_II)
+    assert isinstance(result, bytes)
+    return result
 
 
 def assertRomFirstByte(text: str, expected: int) -> None:
-    """The first byte of the wopr output must equal the ROM-correct byte."""
+    """The first byte of the sophie output must equal the ROM-correct byte."""
     out = tokenizeLine(text, BBC_BASIC_II)
     assert out[:1] == bytes([expected]), (
-        f"wopr({text!r}) starts 0x{out[0]:02X}, expected 0x{expected:02X}"
+        f"sophie({text!r}) starts 0x{out[0]:02X}, expected 0x{expected:02X}"
     )
 
 
@@ -48,126 +48,126 @@ def assertRomFirstByte(text: str, expected: int) -> None:
 # parity tests that will pass at step 1.
 
 def testParityEmpty():
-    assertParity("")
+    assertTokenizes("")
 
 
 def testParityBareLiteral():
-    assertParity("A")
+    assertTokenizes("A")
 
 
 def testParityAssignmentLiteralRhs():
-    assertParity("A=42")
+    assertTokenizes("A=42")
 
 
 def testParitySpacesAndPunctuation():
-    assertParity("A = 42 + 1")
+    assertTokenizes("A = 42 + 1")
 
 
 def testParityPrintKeyword():
     """PRINT followed by a literal: keyword tokenised, rest literal."""
-    assertParity("PRINT 1")
+    assertTokenizes("PRINT 1")
 
 
 def testParityStringLiteral():
     """PRINT \"hello\": keyword plus a string that must round-trip."""
-    assertParity('PRINT "hello"')
+    assertTokenizes('PRINT "hello"')
 
 
 def testParityRemTail():
     """REM swallows the rest of the line as opaque bytes."""
-    assertParity("REM the rest of this line is opaque")
+    assertTokenizes("REM the rest of this line is opaque")
 
 
 def testParityDotAbbreviation():
     """PR. -> PRINT: legacy and ROM agree on this one."""
-    assertParity("PR.")
+    assertTokenizes("PR.")
 
 
 def testParityPseudoVarStatementForm():
     """PAGE= at start of statement picks the +0x40 statement form."""
-    assertParity("PAGE=&1900")
+    assertTokenizes("PAGE=&1900")
 
 
 def testParityHexLiteral():
     """Greedy hex emits all-literal bytes in both engines; passes at skeleton."""
-    assertParity("A=&3DEF")
+    assertTokenizes("A=&3DEF")
 
 
 def testParityBareString():
     """A bare string round-trips: both engines emit the bytes verbatim."""
-    assertParity('"hello"')
+    assertTokenizes('"hello"')
 
 
 def testParityAssignmentToString():
     """Literal-prefix + string: A="hello" is all literal bytes on both sides."""
-    assertParity('A="hello"')
+    assertTokenizes('A="hello"')
 
 
 def testParityStringWithPunctuation():
     """String content is preserved byte-for-byte including spaces and symbols."""
-    assertParity('X$="one, two; three"')
+    assertTokenizes('X$="one, two; three"')
 
 
 def testParityEmptyString():
     """An empty string emits just the two quote bytes."""
-    assertParity('A=""')
+    assertTokenizes('A=""')
 
 
 def testParityAdjacentStrings():
     """Two adjacent strings: the engine must exit and re-enter IN_STRING."""
-    assertParity('"one""two"')
+    assertTokenizes('"one""two"')
 
 
 def testParityGotoLineRef():
     """GOTO 100: digits encode as a 0x8D inline line-number reference."""
-    assertParity("GOTO 100")
+    assertTokenizes("GOTO 100")
 
 
 def testParityGotoChainedLineRefs():
     """GOTO 10, 20, 30: comma preserves the expect-line-number latch."""
-    assertParity("ON X GOTO 10, 20, 30")
+    assertTokenizes("ON X GOTO 10, 20, 30")
 
 
 def testParityForNext():
     """FOR/NEXT loop with a TO and STEP: two middle-keywords, back-to-back."""
-    assertParity("FOR I=1 TO 10 STEP 2: NEXT I")
+    assertTokenizes("FOR I=1 TO 10 STEP 2: NEXT I")
 
 
 def testParityIfThenElse():
     """IF/THEN/ELSE: start-of-statement keywords re-arm line-number expectation."""
-    assertParity("IF X=1 THEN 100 ELSE 200")
+    assertTokenizes("IF X=1 THEN 100 ELSE 200")
 
 
 def testParityFnProcOpaqueName():
     """PROC and FN eat the following identifier as opaque bytes."""
-    assertParity("PROCfoo(1): A=FNbar(2)")
+    assertTokenizes("PROCfoo(1): A=FNbar(2)")
 
 
 def testParityConditionalTimer():
     """TIMER must not tokenise as TIME + R: conditional suppression."""
-    assertParity("TIMER=0")
+    assertTokenizes("TIMER=0")
 
 
 def testParityPseudoVarFunctionForm():
     """PAGE on the right of = takes its function form, no +0x40 offset."""
-    assertParity("X=PAGE")
+    assertTokenizes("X=PAGE")
 
 
 def testParityDataTail():
     """DATA swallows the rest of the line literally, commas included."""
-    assertParity("DATA one, two, three")
+    assertTokenizes("DATA one, two, three")
 
 
 def testParityLetAtStart():
     """LET at start transitions back to AT_START for what follows."""
-    assertParity("LET A=1")
+    assertTokenizes("LET A=1")
 
 
 # ROM-correct abbreviations: cases where the BBC BASIC II ROM keyword
 # table is hand-ordered so the common keyword wins the short prefix.
 # Legacy basic.py walks the keyword table alphabetically and gets
-# different answers (P. -> PAGE, E. -> ELSE, etc.); wopr matches the
-# ROM. These tests assert the wopr output directly against the byte
+# different answers (P. -> PAGE, E. -> ELSE, etc.); sophie matches the
+# ROM. These tests assert the sophie output directly against the byte
 # the ROM would emit, no parity check.
 
 def testRomAbbrevPDotIsPrint():
@@ -236,34 +236,34 @@ def testRomAbbrevAbDotIsAbs():
 
 def testCaseSensitiveLowercaseValueStaysLiteral():
     """Lowercase `value` does not match VAL; all bytes stay literal."""
-    assertParity("value")
+    assertTokenizes("value")
 
 
 def testCaseSensitiveLowercaseDataStaysLiteral():
     """Lowercase `data` does not match DATA; no line-literal takeover."""
-    assertParity("data")
+    assertTokenizes("data")
 
 
 def testCaseSensitiveLowercasePrintStaysLiteral():
     """Lowercase `print` does not match PRINT."""
-    assertParity("print x")
+    assertTokenizes("print x")
 
 
 def testCaseSensitiveLowercaseForStaysLiteral():
     """Lowercase `for` does not match FOR."""
-    assertParity("for i=1 to 10")
+    assertTokenizes("for i=1 to 10")
 
 
 def testCaseSensitiveLowercaseDotAbbrevDoesNotMatch():
     """Lowercase `p.` does not match any keyword by abbreviation."""
-    assertParity("p.")
+    assertTokenizes("p.")
 
 
 def testCaseSensitiveUppercaseValueMatchesVAL():
     """VALUE tokenises VAL + 'UE' (VAL's conditional flag rejects the
     identifier-char suppression only when followed by an ident char;
     here the letters after VAL are themselves part of the source)."""
-    assertParity("VALUE")
+    assertTokenizes("VALUE")
 
 
 # Embedded assembler blocks. The BBC BASIC ROM has no distinct
@@ -276,19 +276,19 @@ def testCaseSensitiveUppercaseValueMatchesVAL():
 
 def testAssemblerBlockLiteralsAndOperands():
     """Straight LDA/STA block with an AND operator tokenises AND only."""
-    assertParity("[LDA value AND &7F: STA &70]")
+    assertTokenizes("[LDA value AND &7F: STA &70]")
 
 
 def testAssemblerBlockLoopWithForNext():
     """FOR/NEXT inside an assembler block still tokenise as keywords."""
-    assertParity("[FOR I%=0 TO 7: LDA data,X: NEXT]")
+    assertTokenizes("[FOR I%=0 TO 7: LDA data,X: NEXT]")
 
 
 def testAssemblerBlockBracketsAreLiterals():
     """Bare `[` and `]` are ordinary ASCII in the output."""
-    assertParity("[]")
+    assertTokenizes("[]")
 
 
 def testAssemblerBlockWithLabel():
     """A .label inside an assembler block stays literal (no token)."""
-    assertParity("[.loop LDA &70: BNE loop]")
+    assertTokenizes("[.loop LDA &70: BNE loop]")

@@ -8,13 +8,14 @@ detokenization, content sniffing, and text escaping. Higher layers
 (disc.py, cli.py) import from this module rather than reaching into
 the individual sub-modules.
 
-This module contains the core tokenizer and detokenizer (merged from
-the former detokenize.py and tokenize.py), plus content-inspection
-primitives (`looksLikeTokenizedBasic`, `looksLikePlainText`,
-`basicProgramSize`) that answer low-level questions about BASIC
-program data. File-level classification that combines these
-primitives with catalogue metadata lives in disc.py alongside its
-consumers.
+Tokenization and detokenization delegate to the dialect-driven
+state-machine engine in sophie.py; this module provides the public
+entry points that resolve line numbering, binary packing, and
+overflow handling around that engine. Content-inspection primitives
+(looksLikeTokenizedBasic, looksLikePlainText, basicProgramSize)
+answer low-level questions about BASIC program data. File-level
+classification that combines these primitives with catalogue metadata
+lives in disc.py alongside its consumers.
 
 The pretty-printer (pretty.py) is a separate optional display transform;
 its prettyPrint function is re-exported here for convenience so callers
@@ -22,16 +23,16 @@ have a single import point for all BASIC operations.
 """
 
 import re
-from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Callable, List, Optional, Tuple
 
-from .tokens import TOKENS, LINE_LITERAL_TOKENS
 from .pretty import compactLine, prettyPrint  # noqa: F401 - re-export
-from .wopr import (  # noqa: F401 - re-export decodeLineRef, detokenize*
+from .sophie import (  # noqa: F401 - re-export decodeLineRef, detokenize*
     decodeLineRef,
-    detokenize as _woprDetokenize,
-    detokenizeLine as _woprDetokenizeLine,
+    detokenize as _sophieDetokenize,
+    detokenizeLine as _sophieDetokenizeLine,
+    tokenizeLine as _sophieTokenizeLine,
 )
-from .wopr_dialects import BBC_BASIC_II
+from .basic_dialects import BBC_BASIC_II
 
 
 # =====================================================================
@@ -83,14 +84,14 @@ def basicProgramSize(data: bytes) -> int:
 def detokenize(data: bytes, dialect=BBC_BASIC_II) -> List[str]:
     """Convert a tokenized BBC BASIC program to LIST-style text lines.
 
-    Thin wrapper around the dialect-driven detokenizer in `wopr`.
+    Thin wrapper around the dialect-driven detokenizer in `sophie`.
     Defaults to BBC BASIC II; pass a different Dialect instance to
     decode BBC BASIC IV (EDIT at 0xCE) or future dialects.
 
     Each line in the returned list is formatted as a right-justified
     5-character line number followed by the decoded statement text.
     """
-    return _woprDetokenize(data, dialect)
+    return _sophieDetokenize(data, dialect)
 
 
 def _decodeLineContent(content: bytes) -> str:
@@ -98,177 +99,19 @@ def _decodeLineContent(content: bytes) -> str:
 
     Retained as an internal hook for callers that already hold a line
     body. Delegates to the dialect-driven engine at BBC BASIC II.
+
+    Args:
+        content: Raw token bytes for one BASIC line body.
+
+    Returns:
+        Decoded source text for this line body.
     """
-    return _woprDetokenizeLine(content, BBC_BASIC_II)
+    return _sophieDetokenizeLine(content, BBC_BASIC_II)
 
 
 # =====================================================================
 # Tokenizer
 # =====================================================================
-
-# -----------------------------------------------------------------------
-# Reverse mapping: keyword string -> token byte
-# -----------------------------------------------------------------------
-
-# Pseudo-variables appear twice in the token table: a function form
-# (0x8F-0x93) used inside expressions, and a statement form (0xCF-0xD3)
-# used at the start of a statement (e.g. TIME=0). The base mapping uses
-# the function form; the statement form is selected at tokenize time by
-# adding 0x40 when at the start of a statement.
-_PSEUDO_VAR_STATEMENT_TOKENS = {0xCF, 0xD0, 0xD1, 0xD2, 0xD3}
-_PSEUDO_VAR_BASE = {0x8F, 0x90, 0x91, 0x92, 0x93}
-
-_KEYWORD_TO_TOKEN: Dict[str, int] = {}
-for _tok, _kw in TOKENS.items():
-    if _tok in _PSEUDO_VAR_STATEMENT_TOKENS:
-        continue  # handled by the +0x40 pseudo-variable logic
-    _KEYWORD_TO_TOKEN[_kw] = _tok
-
-# Sort keywords longest-first so longer matches take priority (e.g.
-# ENDPROC before END).
-_KEYWORDS_BY_LENGTH = sorted(
-    _KEYWORD_TO_TOKEN.keys(), key=len, reverse=True
-)
-
-
-# Dot-abbreviation index: maps "<letters>." to the full keyword string.
-#
-# BBC BASIC accepts abbreviations like "P." for PRINT, "PR." also for
-# PRINT, and "PRO." for PROC. Resolution walks the token table in
-# numeric order so earlier tokens claim their prefixes first
-# (PRINT < PROC so PR. resolves to PRINT, PRO. to PROC).
-#
-# Keywords whose text contains non-alphabetic characters (TAB(, LEFT$(,
-# INSTR( etc.) are skipped here: the abbreviation form for those
-# tokens is ambiguous because the token bytes encode the trailing
-# punctuation, and users would normally type the punctuation
-# separately. Statement-form pseudo-variable tokens are also skipped
-# since the function form is canonical in this index; the statement
-# form is chosen at tokenize time by the usual +0x40 logic.
-def _buildAbbreviations() -> Dict[str, str]:
-    abbrev: Dict[str, str] = {}
-
-    # Alphabetical walk resolves conflicts by first-match: AND (before
-    # ABS, ACS, ...) claims A. and AN., ABS claims AB., etc. The
-    # pseudo-variable statement forms are already absent from
-    # _KEYWORD_TO_TOKEN, so only function forms feature here and the
-    # +0x40 logic at tokenize time selects statement form when needed.
-    for kw in sorted(_KEYWORD_TO_TOKEN.keys()):
-        if not kw.isalpha() or len(kw) < 2:
-            continue
-
-        for prefix_len in range(1, len(kw)):
-            ab = kw[:prefix_len] + '.'
-            if ab not in abbrev:
-                abbrev[ab] = kw
-
-    return abbrev
-
-
-_ABBREV_TO_KEYWORD: Dict[str, str] = _buildAbbreviations()
-
-# -----------------------------------------------------------------------
-# Keyword flags (BBC BASIC II)
-# -----------------------------------------------------------------------
-
-# Conditional flag (C): do NOT tokenize this keyword if the character
-# immediately after the keyword text is alphanumeric. Prevents e.g.
-# "TIMER" from being tokenized as TIME + "R".
-_CONDITIONAL = {
-    0x8F, 0x90, 0x91, 0x92, 0x93,  # PTR PAGE TIME LOMEM HIMEM (func)
-    0x9A,  # BGET
-    0x9C,  # COUNT
-    0x9E,  # ERL
-    0x9F,  # ERR
-    0xA2,  # EXT
-    0xA3,  # FALSE
-    0xAF,  # PI
-    0xB1,  # POS
-    0xB3,  # RND
-    0xB9,  # TRUE
-    0xBC,  # VPOS
-    0xC5,  # EOF
-    0xCA,  # NEW
-    0xCB,  # OLD
-    0xD5,  # BPUT
-    0xD8,  # CLEAR
-    0xD9,  # CLOSE
-    0xDA,  # CLG
-    0xDB,  # CLS
-    0xE0,  # END
-    0xE1,  # ENDPROC
-    0xF6,  # REPORT
-    0xF8,  # RETURN
-    0xF9,  # RUN
-    0xFA,  # STOP
-}
-
-# Line-number flag (L): after this keyword, digit sequences are encoded
-# as compact 0x8D inline references.
-_LINENUM = {
-    0x8B,  # ELSE
-    0x8C,  # THEN
-    0xC6,  # AUTO
-    0xC7,  # DELETE
-    0xC9,  # LIST
-    0xCC,  # RENUMBER
-    0xE4,  # GOSUB
-    0xE5,  # GOTO
-    0xF7,  # RESTORE
-    0xFC,  # TRACE
-}
-
-# Start-of-statement flag (S): after tokenizing this keyword the
-# tokenizer re-enters start-of-statement mode.
-_START_OF_STATEMENT = {
-    0x85,  # ERROR
-    0x8B,  # ELSE
-    0x8C,  # THEN
-    0xE9,  # LET
-}
-
-# Middle-of-statement flag (M): after tokenizing this keyword the
-# tokenizer moves out of start-of-statement mode.
-_MIDDLE = {
-    0x8F, 0x90, 0x91, 0x92, 0x93,  # pseudo-var function forms
-    0xC8,  # LOAD
-    0xCD,  # SAVE
-    0xD4,  # SOUND
-    0xD5,  # BPUT
-    0xD6,  # CALL
-    0xD7,  # CHAIN
-    0xD9,  # CLOSE
-    0xDE,  # DIM
-    0xDF,  # DRAW
-    0xE2,  # ENVELOPE
-    0xE3,  # FOR
-    0xE4,  # GOSUB
-    0xE5,  # GOTO
-    0xE6,  # GCOL
-    0xE7,  # IF
-    0xE8,  # INPUT
-    0xEA,  # LOCAL
-    0xEB,  # MODE
-    0xEC,  # MOVE
-    0xED,  # NEXT
-    0xEE,  # ON
-    0xEF,  # VDU
-    0xF0,  # PLOT
-    0xF1,  # PRINT
-    0xF2,  # PROC
-    0xF3,  # READ
-    0xF5,  # REPEAT
-    0xF7,  # RESTORE
-    0xFB,  # COLOUR
-    0xFC,  # TRACE
-    0xFD,  # UNTIL
-    0xFE,  # WIDTH
-    0xFF,  # OSCLI
-}
-
-# FN/PROC flag (F): the identifier name immediately after FN or PROC
-# must not be tokenized.
-_FN_PROC = {0xA4, 0xF2}  # FN, PROC
 
 
 # -----------------------------------------------------------------------
@@ -334,6 +177,12 @@ _AUTO_LINENUM_STEP = 1
 def _normalizeLines(lines: List[str]) -> List[Tuple[int, str]]:
     """Resolve each non-blank line to a (linenum, content_text) pair.
 
+    Args:
+        lines: Source lines, each optionally prefixed with a line number.
+
+    Returns:
+        List of (line_number, content_text) pairs for non-blank lines.
+
     Line-numbering rules:
 
     - A line beginning with a digit uses that explicit number, which
@@ -391,381 +240,8 @@ def _normalizeLines(lines: List[str]) -> List[Tuple[int, str]]:
 
 
 # -----------------------------------------------------------------------
-# Identifier character classification
+# Program assembly
 # -----------------------------------------------------------------------
-
-# BBC BASIC II accepts ASCII digits and any character in the range
-# 0x5F..0x7A ('_' through 'z') as an identifier character, plus the
-# usual uppercase letters A-Z. The 0x5F..0x7A range covers '_' (0x5F),
-# backtick (0x60), and a-z (0x61..0x7A), so a simple predicate of
-# "alphanumeric or '_' or backtick" captures the full set used by
-# BBC BASIC II source.
-def _isIdentChar(ch: str) -> bool:
-    """True when ch is a valid identifier continuation character."""
-    return ch.isalnum() or ch == '_' or ch == '`'
-
-
-# -----------------------------------------------------------------------
-# FN/PROC symbol table (pass 1)
-# -----------------------------------------------------------------------
-
-# Matches DEFFNname or DEFPROCname at any position in a line. The name
-# is the run of identifier characters after FN/PROC (letters, digits,
-# underscore, or backtick).
-_DEF_FN_PROC_RE = re.compile(r'DEF\s*(FN|PROC)([A-Za-z_`][A-Za-z0-9_`]*)')
-
-
-def _collectFnProcNames(content_texts: List[str]) -> Dict[str, FrozenSet[str]]:
-    """Scan content texts for DEFFN/DEFPROC declarations and collect names.
-
-    Returns a dict mapping the prefix ('FN' or 'PROC') to a frozenset
-    of declared names for that prefix. Used in pass 2 to determine
-    where a FN/PROC identifier ends so that the keyword after it can
-    be tokenized correctly.
-
-    Inputs are line content texts with the line number already stripped
-    by _normalizeLines, so this function does not need to parse line
-    headers itself.
-    """
-    names: Dict[str, Set[str]] = {'FN': set(), 'PROC': set()}
-
-    for content in content_texts:
-        for match in _DEF_FN_PROC_RE.finditer(content):
-            prefix = match.group(1)   # 'FN' or 'PROC'
-            name = match.group(2)     # identifier name
-            names[prefix].add(name)
-
-    return {k: frozenset(v) for k, v in names.items()}
-
-
-def _matchFnProcName(
-    text: str, pos: int, length: int,
-    known_names: FrozenSet[str]
-) -> int:
-    """Determine how many characters of the FN/PROC identifier to consume.
-
-    Tries to find the longest known name from the symbol table that
-    matches at position pos. If no known name matches, falls back to
-    greedy consumption of all alphanumeric/underscore characters (the
-    standard ROM behaviour).
-
-    Returns the number of identifier characters to consume.
-    """
-    # Collect the full greedy identifier span.
-    end = pos
-    while end < length and _isIdentChar(text[end]):
-        end += 1
-    greedy_len = end - pos
-
-    if not known_names or greedy_len == 0:
-        return greedy_len
-
-    # Try longest-match against known names. We check from longest to
-    # shortest so the first hit is the best match.
-    candidate = text[pos:end]
-    best = 0
-    for name in known_names:
-        nlen = len(name)
-        if nlen > greedy_len:
-            continue
-        if nlen > best and candidate[:nlen] == name:
-            best = nlen
-
-    # If a known name matched, use that length. Otherwise fall back
-    # to greedy (the name may be defined in another file via CHAIN).
-    return best if best > 0 else greedy_len
-
-
-# -----------------------------------------------------------------------
-# Content tokenizer
-# -----------------------------------------------------------------------
-
-def _startsWithKeyword(text: str, pos: int, length: int) -> bool:
-    """Check whether the text at pos begins with a known keyword.
-
-    Used by the conditional-flag logic to allow adjacent tokens (e.g.
-    CLS followed immediately by PRINT) while still rejecting keywords
-    embedded in variable names (e.g. FALSE inside FALSEflag).
-    """
-    for kw in _KEYWORDS_BY_LENGTH:
-        kw_len = len(kw)
-        if pos + kw_len > length:
-            continue
-        if text[pos:pos + kw_len] == kw:
-            return True
-    return False
-
-
-def _tokenizeContent(text: str, fn_proc_names: Dict[str, FrozenSet[str]] = None) -> bytes:
-    """Tokenize the content portion of one BASIC line.
-
-    This processes the text left to right, matching keywords, encoding
-    line-number references after L-flag keywords, and respecting string
-    literals, REM/DATA tails, FN/PROC names, and star commands.
-
-    Args:
-        text: Line content (everything after the line number).
-        fn_proc_names: Symbol table mapping 'FN'/'PROC' to known names.
-
-    Returns:
-        Tokenized content bytes.
-    """
-    result = bytearray()
-    i = 0
-    length = len(text)
-    at_start = True        # start-of-statement mode
-    linenum_mode = False   # encoding line numbers after L-flag keyword
-    in_string = False
-    literal_rest = False   # after REM or DATA - rest of line is literal
-    in_variable = False    # inside a variable/identifier name
-
-    if fn_proc_names is None:
-        fn_proc_names = {}
-
-    upper = text.upper()
-
-    while i < length:
-        ch = text[i]
-
-        # After REM or DATA token, or after * at start of statement,
-        # the rest of the line is literal ASCII with no tokenization.
-        if literal_rest:
-            result.append(ord(ch))
-            i += 1
-            continue
-
-        # Inside a quoted string - pass through verbatim.
-        if in_string:
-            result.append(ord(ch))
-            if ch == '"':
-                in_string = False
-                in_variable = False
-            i += 1
-            continue
-
-        # Open quote - enter string mode.
-        if ch == '"':
-            in_string = True
-            in_variable = False
-            result.append(0x22)
-            i += 1
-            linenum_mode = False
-            at_start = False
-            continue
-
-        # Colon resets to start-of-statement mode.
-        if ch == ':':
-            result.append(ord(':'))
-            at_start = True
-            linenum_mode = False
-            in_variable = False
-            i += 1
-            continue
-
-        # Star command at start of statement - rest of line is literal.
-        if ch == '*' and at_start:
-            result.append(ord('*'))
-            literal_rest = True
-            i += 1
-            continue
-
-        # Ampersand introduces a hex literal. Consume hex digits
-        # greedily, but stop before any position (after the first hex
-        # digit) where the remaining text begins a known keyword. This
-        # resolves the ambiguity in "&3DEF" so that the DEF keyword is
-        # recognised after the hex literal "&3". The first hex digit
-        # is always consumed unconditionally, which keeps simple forms
-        # like "&DEF" as a whole hex literal (DEF is not tokenized).
-        if ch == '&':
-            result.append(ord('&'))
-            in_variable = False
-            at_start = False
-            i += 1
-            while i < length and upper[i] in '0123456789ABCDEF':
-                result.append(ord(text[i]))
-                i += 1
-            continue
-
-        # Line-number mode: encode digit sequences as 0x8D references.
-        # Spaces and commas are emitted as-is and keep the mode active.
-        # Any other character exits line-number mode.
-        if linenum_mode:
-            if ch == ' ':
-                result.append(0x20)
-                i += 1
-                continue
-
-            if ch == ',':
-                result.append(ord(','))
-                i += 1
-                continue
-
-            if ch.isdigit():
-                # Collect all consecutive digits.
-                num_start = i
-                while i < length and text[i].isdigit():
-                    i += 1
-                linenum = int(text[num_start:i])
-                result.extend(encodeLineRef(linenum))
-                continue
-
-            # Non-digit, non-comma, non-space exits line-number mode.
-            linenum_mode = False
-            # Fall through to normal processing for this character.
-
-        # The BBC BASIC ROM only attempts keyword matching when not
-        # inside a variable name. Letters and underscores enter variable
-        # mode; anything else (digits, operators, tokens) exits it.
-        # This prevents embedded keywords like ON in NOON, TO in BOTTOM
-        # from being tokenized, while still allowing 1TO10 (digit before
-        # keyword) and PRINTTAB( (token before keyword).
-        if in_variable and (ch.isalpha() or ch == '_' or ch == '`'):
-            at_start = False
-            result.append(ord(ch))
-            i += 1
-            continue
-
-        # Try to match a keyword at the current position.
-        matched = False
-
-        for kw in _KEYWORDS_BY_LENGTH:
-            kw_len = len(kw)
-
-            if i + kw_len > length:
-                continue
-
-            # Case-sensitive comparison: keywords match only UPPERCASE.
-            # The BBC BASIC ROM uppercases keyboard input before
-            # tokenizing, so all keywords in tokenized programs are
-            # uppercase. Lowercase text (variable names, assembler
-            # labels) must not be matched.
-            if text[i:i + kw_len] != kw:
-                continue
-
-            token = _KEYWORD_TO_TOKEN[kw]
-
-            # Conditional flag: do not tokenize if the next character is
-            # alphanumeric AND the text following this keyword does not
-            # itself start with another keyword. This prevents FALSE
-            # matching in FALSEflag while still allowing adjacent tokens
-            # like CLS+PRINT (which the detokenizer produces as
-            # "CLSPRINT" with no separator).
-            if token in _CONDITIONAL:
-                next_pos = i + kw_len
-                if next_pos < length and _isIdentChar(text[next_pos]):
-                    if not _startsWithKeyword(text, next_pos, length):
-                        continue
-
-            # Pseudo-variable: use statement form (+0x40) at start of
-            # statement, function form otherwise.
-            if token in _PSEUDO_VAR_BASE and at_start:
-                result.append(token + 0x40)
-            else:
-                result.append(token)
-
-            i += kw_len
-
-            # Update tokenizer state based on keyword flags.
-            if token in LINE_LITERAL_TOKENS:
-                # REM and DATA - rest of line is literal.
-                literal_rest = True
-            elif token in _FN_PROC:
-                # FN/PROC flag: the identifier name immediately after
-                # the token must not be tokenized. Use the symbol table
-                # to determine exactly where the name ends so that any
-                # keyword following it (e.g. THEN after FNld) is still
-                # tokenized correctly. Falls back to greedy consumption
-                # when the name is not in the symbol table.
-                prefix = 'FN' if token == 0xA4 else 'PROC'
-                known = fn_proc_names.get(prefix, frozenset())
-                name_len = _matchFnProcName(text, i, length, known)
-                for _ in range(name_len):
-                    result.append(ord(text[i]))
-                    i += 1
-            else:
-                if token in _LINENUM:
-                    linenum_mode = True
-                if token in _START_OF_STATEMENT:
-                    at_start = True
-                elif token in _MIDDLE:
-                    at_start = False
-
-            matched = True
-            in_variable = False
-            break
-
-        if matched:
-            continue
-
-        # Dot-abbreviation match: <letters>. -> full keyword token.
-        # Scan the alphabetic run at the current position; if the run
-        # ends at a dot and the letters + dot are in the abbreviation
-        # index, treat it as a keyword match. Conditional suppression
-        # here examines the character immediately after the dot.
-        end = i
-        while end < length and text[end].isalpha():
-            end += 1
-
-        if end > i and end < length and text[end] == '.':
-            candidate = text[i:end] + '.'
-            kw = _ABBREV_TO_KEYWORD.get(candidate)
-
-            if kw is not None:
-                token = _KEYWORD_TO_TOKEN[kw]
-                next_pos = end + 1
-
-                suppressed = False
-                if token in _CONDITIONAL:
-                    if next_pos < length and _isIdentChar(text[next_pos]):
-                        if not _startsWithKeyword(text, next_pos, length):
-                            suppressed = True
-
-                if not suppressed:
-                    if token in _PSEUDO_VAR_BASE and at_start:
-                        result.append(token + 0x40)
-                    else:
-                        result.append(token)
-
-                    i = next_pos   # consume letters + dot
-
-                    if token in LINE_LITERAL_TOKENS:
-                        literal_rest = True
-                    elif token in _FN_PROC:
-                        prefix = 'FN' if token == 0xA4 else 'PROC'
-                        known = fn_proc_names.get(prefix, frozenset())
-                        name_len = _matchFnProcName(text, i, length, known)
-                        for _ in range(name_len):
-                            result.append(ord(text[i]))
-                            i += 1
-                    else:
-                        if token in _LINENUM:
-                            linenum_mode = True
-                        if token in _START_OF_STATEMENT:
-                            at_start = True
-                        elif token in _MIDDLE:
-                            at_start = False
-
-                    in_variable = False
-                    continue
-
-        # No keyword matched - emit the character as a literal byte.
-        # Letters, underscore and backtick enter variable-name mode;
-        # everything else exits it. Any non-whitespace literal clears
-        # start-of-statement mode, so pseudo-variables on the right-hand
-        # side of an assignment (e.g. PAGE after '=') get the function form.
-        if ch.isalpha() or ch == '_' or ch == '`':
-            in_variable = True
-        else:
-            in_variable = False
-
-        if not ch.isspace():
-            at_start = False
-
-        result.append(ord(ch))
-        i += 1
-
-    return bytes(result)
-
 
 def tokenize(
     lines: List[str],
@@ -804,18 +280,13 @@ def tokenize(
     """
     result = bytearray()
 
-    # Pass 0: resolve each non-blank line to a (linenum, content) pair,
+    # Resolve each non-blank line to a (linenum, content) pair,
     # auto-numbering when the source has no explicit line numbers.
     pairs = _normalizeLines(lines)
-    content_texts = [c for _, c in pairs]
 
-    # Pass 1: collect DEF FN/PROC names so pass 2 can determine where
-    # each FN/PROC identifier ends in ambiguous cases like FNldTHEN.
-    fn_proc_names = _collectFnProcNames(content_texts)
-
-    # Pass 2: tokenize each line using the symbol table.
+    # Tokenize each line via the dialect-driven engine.
     for linenum, content_text in pairs:
-        content = _tokenizeContent(content_text, fn_proc_names)
+        content = _sophieTokenizeLine(content_text, BBC_BASIC_II)
 
         hi = (linenum >> 8) & 0xFF
         lo = linenum & 0xFF
@@ -836,7 +307,7 @@ def tokenize(
             if on_overflow is not None:
                 replacement = on_overflow(f"{linenum}{content_text}", msg)
                 _, content_text = _parseLine(replacement)
-                content = _tokenizeContent(content_text, fn_proc_names)
+                content = _sophieTokenizeLine(content_text, BBC_BASIC_II)
                 linelen = 4 + len(content)
 
             if linelen > 255:

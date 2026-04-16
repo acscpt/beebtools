@@ -20,8 +20,8 @@ in the dialect yet. A beebjit probe will close that gap.
 """
 
 from beebtools.tokens import TOKENS
-from beebtools.wopr import detokenizeLine, tokenizeLine
-from beebtools.wopr_dialects import BBC_BASIC_II, BBC_BASIC_IV
+from beebtools.sophie import detokenizeLine, tokenizeLine
+from beebtools.basic_dialects import BBC_BASIC_II, BBC_BASIC_IV
 
 
 _TOKEN_OF: dict = {}

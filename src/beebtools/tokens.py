@@ -5,7 +5,7 @@
 
 Single source of truth for which bytes mean which keywords and for
 the behavioural facts the tokenizer and detokenizer attach to each
-keyword. The tokenizer engine in `wopr.py` consumes a Dialect built
+keyword. The tokenizer engine in `sophie.py` consumes a Dialect built
 from these specs; the legacy detokenizer in `basic.py` reads the
 flat `TOKENS` byte-to-name dict.
 
