@@ -31,9 +31,11 @@ Adding a new state is one State entry plus one TRANSITIONS entry.
 Adding a new dialect is one Dialect instance.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Callable, Dict, FrozenSet, List, NamedTuple, Optional, Tuple
+
+from .tokens import Flag
 
 
 class State(IntEnum):
@@ -60,22 +62,14 @@ class Keyword:
     """One BBC BASIC keyword and the behaviours it triggers when matched.
 
     Each keyword in a dialect's table is one Keyword instance. The
-    engine reads the boolean flags directly: `kw.conditional`,
-    `kw.middle`, etc. The behavioural facts that the legacy tokenizer
-    scattered across multiple frozensets are gathered here per keyword,
-    one row per fact.
+    engine reads behaviour facts out of the `flags` frozenset; the
+    Flag enum (in tokens.py) is the single source of truth for the
+    vocabulary.
     """
 
     name: str
     token: int
-    conditional: bool = False         # suppress on trailing identifier char
-    middle: bool = False              # transitions AT_START -> MID_STATEMENT
-    startOfStatement: bool = False    # transitions back to AT_START
-    lineLiteral: bool = False         # rest of line is opaque (REM, DATA)
-    expectLineNumber: bool = False    # next digit run encodes as 0x8D ref
-    fnProc: bool = False              # next identifier is opaque user name
-    pseudoVarBase: bool = False       # +0x40 in AT_START gives statement form
-    commonAbbrev: bool = False        # ROM hand-ordering: claims short prefixes
+    flags: FrozenSet[Flag] = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True)
@@ -228,7 +222,7 @@ def _matchKeyword(ctx: Context) -> Optional[Match]:
         if text[pos:pos + kwLen] != name:
             continue
 
-        if kw.conditional and pos + kwLen < length:
+        if Flag.CONDITIONAL in kw.flags and pos + kwLen < length:
             if _isIdentChar(text[pos + kwLen]):
                 continue
 
@@ -279,24 +273,25 @@ def _applyKeyword(ctx: Context, match: Match, currentState: State) -> State:
     # Emit the token byte. Pseudo-variables (PAGE, TIME, etc.) get
     # the +0x40 statement form when matched at start-of-statement.
     atStart = (currentState == State.AT_START)
-    token = kw.token + 0x40 if (kw.pseudoVarBase and atStart) else kw.token
+    isPseudoVar = Flag.PSEUDO_VAR_BASE in kw.flags
+    token = kw.token + 0x40 if (isPseudoVar and atStart) else kw.token
     ctx.out.append(token)
     ctx.pos += match.consumed
 
     # FN/PROC: consume the user's procedure or function name as
     # opaque literal bytes (ROM greedy behaviour).
-    if kw.fnProc:
+    if Flag.FN_PROC in kw.flags:
         _consumeIdentifier(ctx)
 
     # Propagate line-number expectation from keyword flags.
-    ctx.expectLineNumber = kw.expectLineNumber
+    ctx.expectLineNumber = Flag.EXPECT_LINE_NUMBER in kw.flags
 
     # Determine the resulting state from keyword flags.
-    if kw.lineLiteral:
+    if Flag.LINE_LITERAL in kw.flags:
         return State.LINE_LITERAL
-    if kw.startOfStatement:
+    if Flag.START_OF_STATEMENT in kw.flags:
         return State.AT_START
-    if kw.middle:
+    if Flag.MIDDLE in kw.flags:
         return State.MID_STATEMENT
 
     return currentState
@@ -476,11 +471,11 @@ def _buildDecoderMaps(
 
         # Pseudo-variables have a second entry for the statement form
         # (function byte + 0x40) that decodes to the same name.
-        if kw.pseudoVarBase:
+        if Flag.PSEUDO_VAR_BASE in kw.flags:
             byteToName[kw.token + 0x40] = kw.name
 
         # Track which tokens absorb the rest of the line (REM, DATA).
-        if kw.lineLiteral:
+        if Flag.LINE_LITERAL in kw.flags:
             lineLiteral.add(kw.token)
 
     return byteToName, frozenset(lineLiteral)
