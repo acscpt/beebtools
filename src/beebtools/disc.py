@@ -36,6 +36,7 @@ from .basic import (
 )
 from .image import DiscImage, DiscSide, createImage, openImage
 from .inf import formatInf, parseInf, InfData, INF_X_START_SECTOR
+from .inf_translators import toStardotAccess
 
 
 # Characters that are illegal in Windows filenames, used when building
@@ -240,7 +241,7 @@ def formatEntryInf(entry: DiscEntry, data: Optional[bytes] = None) -> str:
     return formatInf(
         entry.directory, entry.name,
         entry.load_addr, entry.exec_addr,
-        entry.length, access_byte=entry.accessByte,
+        entry.length, access_byte=toStardotAccess(entry),
         extra_info=extras if extras else None,
     )
 
