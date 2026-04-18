@@ -23,14 +23,18 @@ Exceptions:
     ADFSFormatError -- raised when the disc image is structurally invalid
 """
 
+import warnings
 from dataclasses import dataclass, replace
-from typing import List, Optional, Tuple
+from enum import IntFlag
+from functools import singledispatch
+from typing import List, Optional, Tuple, Union
 
 from .boot import BootOption
 from .entry import (
     DiscCatalogue, DiscEntry, DiscError, DiscFile, DiscFormatError,
     DiscImage, DiscSide, isBasicExecAddr,
 )
+from .shared import BeebToolsWarning
 
 
 # -----------------------------------------------------------------------
@@ -45,6 +49,13 @@ ADFS_ENTRY_SIZE = 0x1A         # 26 bytes per directory entry
 ADFS_MAX_ENTRIES = 47          # maximum entries per directory
 ADFS_ROOT_SECTOR = 2           # root directory starts at sector 2
 ADFS_HUGO_MAGIC = b"Hugo"
+
+# The D flag lives at on-disc bit 3 (0x08) but is carried on
+# ADFSEntry.is_directory rather than in the access byte for the
+# purposes of the public AdfsAccessFlags type. This module-private
+# constant is used only at the on-disc encode/decode boundary so the
+# directory bit is preserved inside the stored access field.
+_ADFS_DIRECTORY_BIT = 0x08
 
 # Footer layout within a 0x500-byte directory block.
 _FOOTER_END_MARKER = 0x4CB     # 0x00 byte marking the end of entries
@@ -65,6 +76,293 @@ class ADFSError(DiscError):
 
 class ADFSFormatError(ADFSError, DiscFormatError):
     """Raised when a disc image is structurally invalid or corrupted."""
+
+
+# -----------------------------------------------------------------------
+# Access flags
+# -----------------------------------------------------------------------
+
+class AdfsAccessFlags(IntFlag):
+    """Symbolic access-permission bits for an ADFS entry.
+
+    Values are the physical on-disc bit positions used by the ADFS
+    directory entry format, so ``entry.access & AdfsAccessFlags.OWNER_L``
+    works directly without a translation step inside the format engine.
+
+    The on-disc D (directory) bit at value 0x08 is carried on
+    ``ADFSEntry.is_directory`` rather than in the access byte and has
+    no symbol here. The stardot .inf sidecar layout is a separate
+    concern handled by :mod:`beebtools.inf_translators`.
+    """
+
+    OWNER_R  = 0x01
+    OWNER_W  = 0x02
+    OWNER_L  = 0x04
+    OWNER_E  = 0x10
+    PUBLIC_R = 0x20
+    PUBLIC_W = 0x40
+    PUBLIC_E = 0x80
+
+
+# All bits this enum can represent, used to clear a byte in absolute
+# parse mode before ORing the requested bits back in.
+_ADFS_ACCESS_ALL = (
+    AdfsAccessFlags.OWNER_R | AdfsAccessFlags.OWNER_W
+    | AdfsAccessFlags.OWNER_L | AdfsAccessFlags.OWNER_E
+    | AdfsAccessFlags.PUBLIC_R | AdfsAccessFlags.PUBLIC_W
+    | AdfsAccessFlags.PUBLIC_E
+)
+
+# Bits that are not legal on a directory. Owner-W would recreate the
+# DWLR state; public bits (r/w/e) do not apply to directories per the
+# ADFS *ACCESS grammar.
+_ADFS_DIR_ILLEGAL_BITS = (
+    AdfsAccessFlags.OWNER_W
+    | AdfsAccessFlags.PUBLIC_R
+    | AdfsAccessFlags.PUBLIC_W
+    | AdfsAccessFlags.PUBLIC_E
+)
+
+# Single-letter spec grammar: uppercase is owner, lowercase is public.
+_ADFS_ACCESS_LETTERS = {
+    "R": AdfsAccessFlags.OWNER_R,
+    "W": AdfsAccessFlags.OWNER_W,
+    "L": AdfsAccessFlags.OWNER_L,
+    "E": AdfsAccessFlags.OWNER_E,
+    "r": AdfsAccessFlags.PUBLIC_R,
+    "w": AdfsAccessFlags.PUBLIC_W,
+    "e": AdfsAccessFlags.PUBLIC_E,
+}
+
+
+def _parseAdfsAccessSpec(
+    spec: str,
+) -> Tuple[AdfsAccessFlags, AdfsAccessFlags]:
+    """Parse an ADFS --access spec into ``(set_mask, clear_mask)``.
+
+    Grammar:
+
+    * **Absolute** (empty, or first character is a letter). Each letter
+      maps to its owner or public bit. A ``/`` is a cosmetic separator
+      that folds following uppercase letters to their public-case
+      equivalents. ``LWR/r`` and ``LWRr`` are equivalent. An empty
+      string clears every access bit.
+
+    * **Mutation** (first character is ``+`` or ``-``). A sequence of
+      ``+X`` / ``-X`` pairs, each adding or removing one bit. ``+L-W+R``
+      applies three mutations in order.
+
+    Returns a ``(set_mask, clear_mask)`` pair in on-disc bit positions.
+    Absolute specs set ``clear_mask`` to every representable bit so the
+    caller can compose with ``(current & ~clear_mask) | set_mask`` for
+    both modes uniformly.
+
+    Raises:
+        ADFSError: for D/d anywhere, mixed absolute/mutation forms,
+            unknown letters, or contradictory ``+L-L`` mutations.
+    """
+
+    # D is a type flag, not a permission bit: rejecting it here gives a
+    # clear diagnostic before either sub-parser sees the character.
+    if "D" in spec or "d" in spec:
+        raise ADFSError(
+            "D is a directory type flag, not an access permission. "
+            "Use 'mkdir' to create directories."
+        )
+
+    # Mode is picked by the first character: letter or empty is
+    # absolute, + or - is mutation. Anything else is a syntax error.
+    if spec == "" or spec[0].isalpha():
+        return _parseAdfsAbsolute(spec)
+
+    if spec[0] in "+-":
+        return _parseAdfsMutation(spec)
+
+    raise ADFSError(
+        f"--access value must start with a letter, '+', or '-', got {spec!r}"
+    )
+
+
+def _parseAdfsAbsolute(
+    spec: str,
+) -> Tuple[AdfsAccessFlags, AdfsAccessFlags]:
+    """Parse an absolute ADFS access spec (``LWR``, ``LWR/r``, ``""``).
+
+    Walks the spec once, accumulating bits into ``set_mask``. The
+    returned ``clear_mask`` covers every representable bit so the
+    caller's composition formula ``(current & ~clear_mask) | set_mask``
+    collapses to exact replacement.
+    """
+
+    # Accumulator for the bits the caller wants set. Bits are added
+    # one letter at a time as the loop walks the spec.
+    set_mask = AdfsAccessFlags(0)
+
+    # Tracks whether we have passed the cosmetic '/' separator. Every
+    # letter after the slash folds to its public-case equivalent.
+    after_slash = False
+
+    for ch in spec:
+
+        # Slash is a cosmetic divider, not a value. Flip the fold
+        # state and move on without consuming a bit.
+        if ch == "/":
+            after_slash = True
+            continue
+
+        # + and - inside an absolute spec means the caller tried to
+        # mix modes (e.g. "lr+W"); reject with a clear diagnostic.
+        if ch in "+-":
+            raise ADFSError(
+                "--access value must be either absolute (e.g. LWR) "
+                "or mutation (e.g. +L-W), not both"
+            )
+
+        # After the slash, fold any uppercase letter to its public
+        # equivalent so 'LWR/R' and 'LWR/r' behave identically.
+        folded = ch.lower() if after_slash else ch
+        bit = _ADFS_ACCESS_LETTERS.get(folded)
+
+        # Unknown letter - anything outside LWRElwre at this point.
+        # D/d was already rejected by the dispatcher.
+        if bit is None:
+            raise ADFSError(
+                f"invalid character {ch!r} in --access spec {spec!r}"
+            )
+
+        set_mask |= bit
+
+    # clear_mask is every representable bit so the caller's composition
+    # formula yields exact replacement: (current & 0) | set_mask.
+    return set_mask, _ADFS_ACCESS_ALL
+
+
+def _parseAdfsMutation(
+    spec: str,
+) -> Tuple[AdfsAccessFlags, AdfsAccessFlags]:
+    """Parse a mutation ADFS access spec (``+L-W``).
+
+    Walks the spec two characters at a time, splitting operator
+    (``+`` or ``-``) from letter. Each ``+X`` adds to ``set_mask``;
+    each ``-X`` adds to ``clear_mask``. Bits not named stay
+    untouched when the caller composes the masks with the current
+    access byte.
+    """
+
+    # Separate set and clear accumulators: bits the user wants on go
+    # in set_mask, bits they want off go in clear_mask.
+    set_mask = AdfsAccessFlags(0)
+    clear_mask = AdfsAccessFlags(0)
+
+    # Index walks in steps of two: op + letter. A while loop rather
+    # than pairwise iteration keeps the error messages precise about
+    # which position failed.
+    i = 0
+
+    while i < len(spec):
+        op = spec[i]
+
+        # A letter where we expected + or - means the user mixed
+        # absolute letters into a mutation spec (e.g. "+L-Wr").
+        if op not in "+-":
+            raise ADFSError(
+                "--access value must be either absolute (e.g. LWR) "
+                "or mutation (e.g. +L-W), not both"
+            )
+
+        # An operator with no following letter, or another operator
+        # straight after, means the spec is incomplete: "+", "+-L".
+        if i + 1 >= len(spec) or spec[i + 1] in "+-":
+            raise ADFSError(
+                "mutation form needs at least one +X or -X pair"
+            )
+
+        ch = spec[i + 1]
+        bit = _ADFS_ACCESS_LETTERS.get(ch)
+
+        # Unknown letter after the operator. D/d already rejected above.
+        if bit is None:
+            raise ADFSError(
+                f"invalid character {ch!r} in --access spec {spec!r}"
+            )
+
+        # Route the bit into the matching accumulator.
+        if op == "+":
+            set_mask |= bit
+        else:
+            clear_mask |= bit
+
+        i += 2
+
+    # Contradictory mutations like '+L-L' would resolve one way or
+    # the other depending on composition order; reject them instead.
+    conflict = set_mask & clear_mask
+
+    if conflict:
+        raise ADFSError(
+            f"--access spec {spec!r} both sets and clears the same bit"
+        )
+
+    return set_mask, clear_mask
+
+
+# -----------------------------------------------------------------------
+# Resolve an access argument to the new AdfsAccessFlags value
+# -----------------------------------------------------------------------
+#
+# ``applyAccess`` accepts either a grammar spec string or an
+# ``AdfsAccessFlags`` value. The three legal shapes (plus two error
+# shapes - wrong IntFlag subclass, wholly wrong type) are dispatched
+# here by runtime type rather than with an isinstance ladder inside
+# ``applyAccess``. Each per-type handler is small and focused; adding
+# a new input type is adding a new ``@register`` and nothing else.
+
+@singledispatch
+def _resolveAdfsAccess(
+    access: object, current: AdfsAccessFlags,
+) -> AdfsAccessFlags:
+    """Default handler: the caller passed an unsupported type.
+
+    Runs when the value is neither a ``str`` nor an ``IntFlag`` (and
+    therefore no registered handler matches). The specific-IntFlag
+    wrong-subclass case is handled by the ``IntFlag`` handler below.
+    """
+
+    raise TypeError(
+        f"access must be AdfsAccessFlags or str, "
+        f"got {type(access).__name__}"
+    )
+
+
+@_resolveAdfsAccess.register
+def _(access: str, current: AdfsAccessFlags) -> AdfsAccessFlags:
+    """String spec: parse the grammar and compose against ``current``."""
+
+    # Both modes (absolute and mutation) reduce to a (set, clear)
+    # pair, so the composition formula is the same for both.
+    set_mask, clear_mask = _parseAdfsAccessSpec(access)
+
+    return (current & ~clear_mask) | set_mask
+
+
+@_resolveAdfsAccess.register
+def _(access: AdfsAccessFlags, current: AdfsAccessFlags) -> AdfsAccessFlags:
+    """Native flag value: absolute replacement, ``current`` is ignored."""
+
+    return access
+
+
+@_resolveAdfsAccess.register
+def _(access: IntFlag, current: AdfsAccessFlags) -> AdfsAccessFlags:
+    """Wrong IntFlag subclass (e.g. ``DfsAccessFlags`` on an ADFS image).
+
+    AdfsAccessFlags is registered above, so dispatch only lands here
+    when ``access`` is an ``IntFlag`` of a different subclass.
+    """
+
+    raise ValueError(
+        f"expected AdfsAccessFlags, got {type(access).__name__}"
+    )
 
 
 # -----------------------------------------------------------------------
@@ -798,9 +1096,10 @@ class ADFSSide(DiscSide):
         # then truncate at the first 0x0D or NUL terminator.
         name = _decodeString(raw[offset : offset + 10])
 
-        # Decode access flags of interest.
-        locked = bool(access & 0x04)        # bit 2 = 'L'
-        is_directory = bool(access & 0x08)  # bit 3 = 'D'
+        # Decode access flags of interest. D lives outside AdfsAccessFlags
+        # (see _ADFS_DIRECTORY_BIT comment) so it reads as a literal here.
+        locked = bool(access & AdfsAccessFlags.OWNER_L)
+        is_directory = bool(access & _ADFS_DIRECTORY_BIT)
 
         load_addr = _read32le(raw, offset + 0x0A)
         exec_addr = _read32le(raw, offset + 0x0E)
@@ -1216,9 +1515,9 @@ class ADFSSide(DiscSide):
             start_sector = 0
 
         # Build the access bits: R + W by default, plus L if locked.
-        access = 0x03
+        access = int(AdfsAccessFlags.OWNER_R | AdfsAccessFlags.OWNER_W)
         if spec.locked:
-            access |= 0x04
+            access |= int(AdfsAccessFlags.OWNER_L)
 
         entry = ADFSEntry(
             name=leaf_name,
@@ -1298,12 +1597,13 @@ class ADFSSide(DiscSide):
         parent_sector, parent_dir, leaf_name = self._resolveParent(path)
 
         # Keep the 'access' bitmask in sync with the 'locked' bool.
-        # Bit 2 of access is the lock flag; _encodeEntryName reads
-        # access (not locked) when writing to disc.
-        if updated.locked and not (updated.access & 0x04):
-            updated = replace(updated, access=updated.access | 0x04)
-        elif not updated.locked and (updated.access & 0x04):
-            updated = replace(updated, access=updated.access & ~0x04)
+        # _encodeEntryName reads access (not locked) when writing to disc.
+        owner_l = int(AdfsAccessFlags.OWNER_L)
+
+        if updated.locked and not (updated.access & owner_l):
+            updated = replace(updated, access=updated.access | owner_l)
+        elif not updated.locked and (updated.access & owner_l):
+            updated = replace(updated, access=updated.access & ~owner_l)
 
         # Find the entry and replace it.
         name_upper = leaf_name.upper()
@@ -1331,6 +1631,82 @@ class ADFSSide(DiscSide):
         )
 
         self.writeDirectory(parent_sector, updated_dir)
+
+    def applyAccess(
+        self,
+        entry: 'DiscEntry',
+        access: Union[IntFlag, str],
+    ) -> None:
+        """Apply an access change to an ADFS entry on disc.
+
+        An ``AdfsAccessFlags`` value is an absolute replacement.
+        A ``str`` value is parsed with the ADFS --access grammar
+        (``LWR``, ``LWR/r``, ``""``, ``+L-W``) and composed against
+        the entry's current access byte.
+
+        Directory invariants are enforced here: owner-W and all
+        public bits are stripped with a ``BeebToolsWarning`` to keep
+        the directory state in the DLR-only window allowed by
+        ``*ACCESS``. The D bit is preserved from ``entry.is_directory``.
+
+        The updated entry is written back via :meth:`updateEntry`.
+        """
+
+        # An ADFSSide only mutates its own catalogue entries. A
+        # foreign entry is an API misuse, not a user-facing error.
+        if not isinstance(entry, ADFSEntry):
+            raise ValueError(
+                f"applyAccess on ADFSSide expected ADFSEntry, "
+                f"got {type(entry).__name__}"
+            )
+
+        # Strip the D bit before wrapping into AdfsAccessFlags: the
+        # enum does not model the directory flag, and leaving 0x08 in
+        # would be silently dropped (or rejected) by IntFlag depending
+        # on Python's flag-boundary mode. D is reapplied from
+        # is_directory at the end of the method.
+        current = AdfsAccessFlags(entry.access & ~_ADFS_DIRECTORY_BIT)
+
+        # Resolve the requested change via the module-level singledispatch
+        # helper. It routes str / AdfsAccessFlags / foreign-IntFlag /
+        # anything-else to four small dedicated handlers and returns the
+        # new absolute flag value.
+        new_flags = _resolveAdfsAccess(access, current)
+
+        # Directory invariant: owner-W and public bits are out of
+        # grammar on a directory. Stripping them here blocks the DWLR
+        # regression via both the CLI and library paths in one place.
+        if entry.is_directory:
+
+            illegal = new_flags & _ADFS_DIR_ILLEGAL_BITS
+
+            if illegal:
+
+                warnings.warn(
+                    f"stripping invalid access bits "
+                    f"{illegal!r} from directory {entry.fullName}",
+                    BeebToolsWarning,
+                    stacklevel=2,
+                )
+
+                new_flags &= ~_ADFS_DIR_ILLEGAL_BITS
+
+        # Compose the on-disc byte: AdfsAccessFlags bits plus the D
+        # flag for directories. Done as int arithmetic because the D
+        # bit is not part of the IntFlag enum and would otherwise be
+        # stripped by CONFORM boundary semantics.
+        new_access_byte = int(new_flags)
+
+        if entry.is_directory:
+            new_access_byte |= _ADFS_DIRECTORY_BIT
+
+        # Keep the boolean ``locked`` shortcut in sync with the bit so
+        # that `entry.locked` and `entry.access & OWNER_L` never drift.
+        new_locked = bool(new_flags & AdfsAccessFlags.OWNER_L)
+
+        # updateEntry handles the write-back and cycle increment.
+        updated = replace(entry, access=new_access_byte, locked=new_locked)
+        self.updateEntry(entry.fullName, updated)
 
     def renameFile(self, old_path: str, new_path: str) -> None:
         """Rename a file within the same directory.
@@ -1443,6 +1819,10 @@ class ADFSSide(DiscSide):
         # Create the directory entry with D + L + R access (DLR), matching
         # *CDIR. W is not a valid directory access bit per the ADFS *ACCESS
         # grammar.
+        dir_access = _ADFS_DIRECTORY_BIT | int(
+            AdfsAccessFlags.OWNER_L | AdfsAccessFlags.OWNER_R
+        )
+
         dir_entry = ADFSEntry(
             name=leaf_name,
             directory="",
@@ -1452,7 +1832,7 @@ class ADFSSide(DiscSide):
             start_sector=dir_sector,
             locked=True,
             is_directory=True,
-            access=0x0D,  # on-disc: D (0x08) + L (0x04) + R (0x01)
+            access=dir_access,
             sequence=0,
         )
 

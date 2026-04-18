@@ -17,8 +17,8 @@ This is a Contracts-layer module - no internal imports beyond boot.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import Enum
-from typing import Iterator, List, Optional, Tuple
+from enum import Enum, IntFlag
+from typing import Iterator, List, Optional, Tuple, Union
 
 from .boot import BootOption
 
@@ -298,6 +298,29 @@ class DiscSide(ABC):
         """Rename a file in the catalogue.
 
         Both paths must be fully qualified. The file data is not moved.
+        """
+
+    @abstractmethod
+    def applyAccess(self, entry: 'DiscEntry', access: Union[IntFlag, str]) -> None:
+        """Apply an access change to an entry on disc.
+
+        Accepts two input shapes:
+
+        * An ``IntFlag`` instance of this format's own access-flags
+          subclass. Treated as an absolute replacement: the flag
+          value becomes the entry's new on-disc access byte.
+
+        * A ``str`` spec in the format's own grammar. The spec is
+          parsed and composed against the entry's current access
+          byte to produce the new value.
+
+        Format-specific invariants are enforced here. Invalid input
+        raises ``DiscError``; soft errors emit ``BeebToolsWarning``
+        and are stripped from the effective value. Passing an
+        ``IntFlag`` of the wrong format-subclass raises
+        ``ValueError``.
+
+        The entry is rewritten to disc as a side effect.
         """
 
     def mkdir(self, path: str) -> None:
