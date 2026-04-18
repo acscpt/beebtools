@@ -5,11 +5,13 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.0] - 2026-04-18
 
 ### Added
 
 - `--access VALUE` flag on `attrib`. The VALUE is disc format specific.
+
+### Changed
 
 - `cat` shows each file's full access string in place of the old locked-only column.
 
