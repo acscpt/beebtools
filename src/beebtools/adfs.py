@@ -396,6 +396,16 @@ class ADFSEntry(DiscEntry):
         return self.access
 
     @property
+    def accessFlags(self) -> AdfsAccessFlags:
+        """Return the entry's access bits as ``AdfsAccessFlags``.
+
+        The D bit at 0x08 is not modelled by the IntFlag type and is
+        stripped here; ``is_directory`` carries that state separately.
+        """
+
+        return AdfsAccessFlags(self.access & ~_ADFS_DIRECTORY_BIT)
+
+    @property
     def fullName(self) -> str:
         """Full ADFS path, e.g. '$.GAMES.ELITE'."""
         if self.directory == "$":

@@ -154,6 +154,17 @@ class DiscEntry(ABC):
 
     @property
     @abstractmethod
+    def accessFlags(self) -> IntFlag:
+        """Return the entry's access bits as a format-specific IntFlag.
+
+        The concrete instance is the format's own ``IntFlag`` subclass.
+        Callers at higher layers treat the value as the abstract base
+        and round-trip it through :meth:`DiscSide.applyAccess` without
+        needing to know the concrete subclass.
+        """
+
+    @property
+    @abstractmethod
     def fullName(self) -> str:
         """Return the full path (directory + name) for this entry."""
 

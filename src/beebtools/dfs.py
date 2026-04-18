@@ -309,6 +309,16 @@ class DFSEntry(DiscEntry):
         return f"{self.directory}.{self.name}"
 
     @property
+    def accessFlags(self) -> DfsAccessFlags:
+        """Return the entry's access bits as ``DfsAccessFlags``.
+
+        DFS models only the lock state; the symbolic ``LOCKED`` flag
+        is set iff the entry's ``locked`` boolean is True.
+        """
+
+        return DfsAccessFlags.LOCKED if self.locked else DfsAccessFlags(0)
+
+    @property
     def isBasic(self) -> bool:
         """True if this entry looks like a BBC BASIC program.
 
