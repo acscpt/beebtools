@@ -1440,7 +1440,9 @@ class ADFSSide(DiscSide):
         raw = self._encodeDirectory(new_dir)
         self._writeSectors(dir_sector, raw)
 
-        # Create the directory entry with D + R + W + L access.
+        # Create the directory entry with D + L + R access (DLR), matching
+        # *CDIR. W is not a valid directory access bit per the ADFS *ACCESS
+        # grammar.
         dir_entry = ADFSEntry(
             name=leaf_name,
             directory="",
@@ -1448,9 +1450,9 @@ class ADFSSide(DiscSide):
             exec_addr=0,
             length=ADFS_DIR_LENGTH,
             start_sector=dir_sector,
-            locked=False,
+            locked=True,
             is_directory=True,
-            access=0x0F,  # R + W + L + D
+            access=0x0D,  # on-disc: D (0x08) + L (0x04) + R (0x01)
             sequence=0,
         )
 
