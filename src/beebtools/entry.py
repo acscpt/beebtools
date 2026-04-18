@@ -17,8 +17,8 @@ This is a Contracts-layer module - no internal imports beyond boot.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import Enum
-from typing import Iterator, List, Optional, Tuple
+from enum import Enum, IntFlag
+from typing import Iterator, List, Optional, Tuple, Union
 
 from .boot import BootOption
 
@@ -154,6 +154,27 @@ class DiscEntry(ABC):
 
     @property
     @abstractmethod
+    def accessFlags(self) -> IntFlag:
+        """Return the entry's access bits as a format-specific IntFlag.
+
+        The concrete instance is the format's own ``IntFlag`` subclass.
+        Callers at higher layers treat the value as the abstract base
+        and round-trip it through :meth:`DiscSide.applyAccess` without
+        needing to know the concrete subclass.
+        """
+
+    @property
+    @abstractmethod
+    def accessString(self) -> str:
+        """Return the entry's access bits as a human-readable string.
+
+        The format chooses its own letter vocabulary and ordering.
+        Empty string when no bits are set. Intended for display only;
+        not parsed back as input.
+        """
+
+    @property
+    @abstractmethod
     def fullName(self) -> str:
         """Return the full path (directory + name) for this entry."""
 
@@ -220,6 +241,12 @@ class DiscFile:
     byte-exact rebuilds and for round-tripping copy-protected discs
     that declare overlapping sector allocations (typically Level 9
     games). A value of None means the engine picks a sector normally.
+
+    ``access`` carries the full format-native access byte when the
+    caller has one (typically from an ``.inf`` sidecar). When None,
+    format engines fall back to their sensible default - ADFS uses
+    owner R+W (plus L if ``locked``); DFS uses L bit 3 if ``locked``.
+    ``locked`` is kept for callers that only care about the lock flag.
     """
 
     path: str
@@ -228,6 +255,7 @@ class DiscFile:
     exec_addr: int = 0
     locked: bool = False
     start_sector: Optional[int] = None
+    access: Optional[int] = None
 
 
 # -----------------------------------------------------------------------
@@ -298,6 +326,29 @@ class DiscSide(ABC):
         """Rename a file in the catalogue.
 
         Both paths must be fully qualified. The file data is not moved.
+        """
+
+    @abstractmethod
+    def applyAccess(self, entry: 'DiscEntry', access: Union[IntFlag, str]) -> None:
+        """Apply an access change to an entry on disc.
+
+        Accepts two input shapes:
+
+        * An ``IntFlag`` instance of this format's own access-flags
+          subclass. Treated as an absolute replacement: the flag
+          value becomes the entry's new on-disc access byte.
+
+        * A ``str`` spec in the format's own grammar. The spec is
+          parsed and composed against the entry's current access
+          byte to produce the new value.
+
+        Format-specific invariants are enforced here. Invalid input
+        raises ``DiscError``; soft errors emit ``BeebToolsWarning``
+        and are stripped from the effective value. Passing an
+        ``IntFlag`` of the wrong format-subclass raises
+        ``ValueError``.
+
+        The entry is rewritten to disc as a side effect.
         """
 
     def mkdir(self, path: str) -> None:

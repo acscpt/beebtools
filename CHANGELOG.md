@@ -5,6 +5,22 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `--access VALUE` flag on `attrib`. The VALUE is disc format specific.
+
+- `cat` shows each file's full access string in place of the old locked-only column.
+
+### Fixed
+
+- `mkdir` creates ADFS directories with valid `DLR` access.
+
+- `.inf` sidecars for ADFS files now use the stardot access-byte layout.
+
+- `build` preserves the full access byte across extract/rebuild instead of resetting ADFS files to R+W(+L).
+
 ## [0.10.0] - 2026-04-16
 
 ### Added

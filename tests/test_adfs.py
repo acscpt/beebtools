@@ -1560,7 +1560,11 @@ class TestMkdir:
         dirs = [e for e in cat.entries if e.isDirectory]
         assert len(dirs) == 1
         assert dirs[0].name == "GAMES"
-        assert dirs[0].access == 0x0F
+        # DLR is the valid directory access per the ADFS *ACCESS grammar.
+        # W on a directory is not settable and would recreate the DWLR bug.
+        # On-disc layout: D=0x08, L=0x04, R=0x01.
+        assert dirs[0].access == 0x0D
+        assert dirs[0].isDirectory is True
 
     def testCreateNestedDirectories(self):
         """Creating a second-level directory inside a first-level directory should succeed."""
@@ -1780,9 +1784,9 @@ class TestDirectoryParsing:
             image.sides[0].readDirectory(ADFS_ROOT_SECTOR)
 
     def testAccessBitsDecodedCorrectly(self):
-        """Access bits packed into the high bit of name bytes should be decoded into the entry's access field."""
-        # Create an entry with 'L' (locked, bit 2) and 'D' (directory, bit 3).
-        access = 0x0F  # bits 0-3 set: R, W, L, D
+        """Access bits on all 10 name bytes of an entry should decode correctly into the flags visible on the returned entry."""
+        # Set bits 0-3: R, W, L, D. Access byte = 0x0F.
+        access = 0x0F
         entry_blob = _makeDirectoryEntry(
             name="SUBDIR",
             access=access,
@@ -2365,6 +2369,20 @@ class TestCmdCatAdfs:
 
         assert "README" in output
         assert "00001000" in output
+
+    def testShowsAdfsAccessString(self, tmp_path):
+        """cmdCat prints the full ADFS access string, not just a lock flag."""
+        # access=0x25: R (0x01) + L (0x04) + r (0x20) = LR/r.
+        image_data = _adfsWithFiles([
+            {"name": "LOCKED", "data": b"x", "access": 0x25},
+            {"name": "WRITE", "data": b"x", "access": 0x03},  # R+W
+        ])
+        output = self._runCat(tmp_path, image_data)
+
+        # Column header and both access forms appear in the listing.
+        assert "Access" in output
+        assert "LR/r" in output
+        assert "WR" in output
 
     def testShowsDirType(self, tmp_path):
         """cmdCat should distinguish directory entries from files in its output."""

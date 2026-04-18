@@ -24,6 +24,7 @@ import os
 import re
 import warnings as _warnings
 from dataclasses import dataclass, replace
+from enum import IntFlag
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from .boot import BootOption
@@ -36,6 +37,7 @@ from .basic import (
 )
 from .image import DiscImage, DiscSide, createImage, openImage
 from .inf import formatInf, parseInf, InfData, INF_X_START_SECTOR
+from .inf_translators import toStardotAccess, fromStardotAccessForSide
 
 
 # Characters that are illegal in Windows filenames, used when building
@@ -240,7 +242,7 @@ def formatEntryInf(entry: DiscEntry, data: Optional[bytes] = None) -> str:
     return formatInf(
         entry.directory, entry.name,
         entry.load_addr, entry.exec_addr,
-        entry.length, access_byte=entry.accessByte,
+        entry.length, access_byte=toStardotAccess(entry),
         extra_info=extras if extras else None,
     )
 
@@ -1503,6 +1505,11 @@ def _walkSourceTree(
                     stacklevel=2,
                 )
 
+        # The .inf carries the stardot-layout access byte; format
+        # engines expect the native on-disc layout. Translate here so
+        # format engines stay agnostic of the stardot format.
+        native_access = fromStardotAccessForSide(side, inf.access_byte)
+
         side.addFile(DiscFile(
             path=inf.fullName,
             data=data,
@@ -1510,6 +1517,7 @@ def _walkSourceTree(
             exec_addr=inf.exec_addr,
             locked=inf.locked,
             start_sector=start_sector,
+            access=native_access,
         ))
 
     # Pass 4: write placed files in end-sector ascending order.
@@ -1680,6 +1688,8 @@ class FileAttribs:
     exec_addr: int
     length: int
     locked: bool
+    access_flags: IntFlag
+    access_string: str
 
 
 def getFileAttribs(
@@ -1693,7 +1703,8 @@ def getFileAttribs(
         side:       Disc side (0 or 1, default 0).
 
     Returns:
-        FileAttribs with name, addresses, length, and locked status.
+        FileAttribs with name, addresses, length, locked status, and
+        the format-specific access-flag value.
 
     Raises:
         DiscError: If the file is not found.
@@ -1712,6 +1723,8 @@ def getFileAttribs(
                 exec_addr=entry.exec_addr,
                 length=entry.length,
                 locked=entry.locked,
+                access_flags=entry.accessFlags,
+                access_string=entry.accessString,
             )
 
     raise DiscError(f"File '{path}' not found")
@@ -1724,23 +1737,42 @@ def setFileAttribs(
     locked: Optional[bool] = None,
     load_addr: Optional[int] = None,
     exec_addr: Optional[int] = None,
+    access_flags: Optional[Union[IntFlag, str]] = None,
 ) -> None:
     """Set file attributes on an existing disc image.
 
     Only the attributes that are not None are changed. The file's data
     is not moved - only the catalogue entry is updated.
 
+    ``access_flags`` accepts either an ``IntFlag`` of the image's
+    format-specific subclass (absolute replacement) or a string spec
+    in the format's own grammar (parsed and composed against the
+    current access byte). Mutually exclusive with ``locked``.
+
     Args:
-        image_path: Path to a disc image file.
-        filename:   File path on the disc (e.g. '$.MYPROG').
-        side:       Disc side (0 or 1, default 0).
-        locked:     New locked status, or None to leave unchanged.
-        load_addr:  New load address, or None to leave unchanged.
-        exec_addr:  New exec address, or None to leave unchanged.
+        image_path:   Path to a disc image file.
+        filename:     File path on the disc (e.g. '$.MYPROG').
+        side:         Disc side (0 or 1, default 0).
+        locked:       New locked status, or None to leave unchanged.
+        load_addr:    New load address, or None to leave unchanged.
+        exec_addr:    New exec address, or None to leave unchanged.
+        access_flags: New access-flag value (IntFlag) or grammar spec
+                      (str), or None to leave unchanged.
 
     Raises:
-        DiscError: If the file is not found.
+        DiscError:  If the file is not found.
+        ValueError: If ``access_flags`` and ``locked`` are both set,
+                    or if ``access_flags`` is an ``IntFlag`` of the
+                    wrong format.
     """
+
+    # Mutual exclusion at the orchestration boundary. They say the
+    # same thing two ways and combining them would be ambiguous.
+    if access_flags is not None and locked is not None:
+        raise ValueError(
+            "access_flags and locked are mutually exclusive"
+        )
+
     image = openImage(image_path)
     side_obj = image[side]
     path = qualifyDiscPath(filename)
@@ -1757,7 +1789,20 @@ def setFileAttribs(
     if target is None:
         raise DiscError(f"File '{path}' not found")
 
-    # Build the replacement fields dict - only include changed values.
+    # Apply the access change first if one was requested. It writes
+    # through to the in-memory catalogue via updateEntry, so we re-read
+    # the target before any subsequent field updates.
+    if access_flags is not None:
+
+        side_obj.applyAccess(target, access_flags)
+
+        # Refresh the target: applyAccess rewrote the access byte and
+        # the paired ``locked`` boolean, and any further updates below
+        # must start from that new state.
+        target = side_obj[path]
+
+    # Build the replacement fields dict for any remaining attribute
+    # changes - only include values that were explicitly supplied.
     changes = {}
 
     if locked is not None:
@@ -1769,11 +1814,13 @@ def setFileAttribs(
     if exec_addr is not None:
         changes["exec_addr"] = exec_addr
 
-    if not changes:
-        return
+    if changes:
+        updated = replace(target, **changes)
+        side_obj.updateEntry(path, updated)
 
-    updated = replace(target, **changes)
-    side_obj.updateEntry(path, updated)
+    # If nothing was actually changed, skip the expensive write-back.
+    if access_flags is None and not changes:
+        return
 
     _writeBack(image, image_path)
 
