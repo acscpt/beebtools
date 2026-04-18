@@ -241,6 +241,12 @@ class DiscFile:
     byte-exact rebuilds and for round-tripping copy-protected discs
     that declare overlapping sector allocations (typically Level 9
     games). A value of None means the engine picks a sector normally.
+
+    ``access`` carries the full format-native access byte when the
+    caller has one (typically from an ``.inf`` sidecar). When None,
+    format engines fall back to their sensible default - ADFS uses
+    owner R+W (plus L if ``locked``); DFS uses L bit 3 if ``locked``.
+    ``locked`` is kept for callers that only care about the lock flag.
     """
 
     path: str
@@ -249,6 +255,7 @@ class DiscFile:
     exec_addr: int = 0
     locked: bool = False
     start_sector: Optional[int] = None
+    access: Optional[int] = None
 
 
 # -----------------------------------------------------------------------

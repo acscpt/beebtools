@@ -20,9 +20,9 @@ format engines (``adfs.py``, ``dfs.py``) stay agnostic of stardot.
 
 from functools import singledispatch
 
-from .adfs import ADFSEntry
-from .dfs import DFSEntry
-from .entry import DiscEntry
+from .adfs import ADFSEntry, ADFSSide
+from .dfs import DFSEntry, DFSSide
+from .entry import DiscEntry, DiscSide
 
 
 # =======================================================================
@@ -156,5 +156,59 @@ def _(entry: DFSEntry, stardot_byte: int) -> int:
     read it as ``bool(result & 0x08)`` and set ``DFSEntry.locked``
     accordingly.
     """
+
+    return _STARDOT_L if (stardot_byte & _STARDOT_L) else 0x00
+
+
+# =======================================================================
+# Side-keyed stardot -> native translation
+# =======================================================================
+#
+# At build time (disc.py reading .inf sidecars) we have a DiscSide but
+# no DiscEntry yet - the entry is created by addFile. This overload
+# dispatches on the side type so orchestration can translate the .inf
+# stardot byte to the native on-disc byte before handing it to addFile,
+# keeping format engines stardot-agnostic.
+
+@singledispatch
+def fromStardotAccessForSide(
+    side: DiscSide, stardot_byte: int, is_directory: bool = False,
+) -> int:
+    """Return the native on-disc access byte for a given side.
+
+    ``is_directory`` lets callers fold ADFS's D bit in without needing
+    an actual entry; build-path callers always pass False because
+    directory .inf files don't travel via addFile.
+    """
+
+    raise NotImplementedError(
+        f"no stardot access translator registered for "
+        f"{type(side).__name__}"
+    )
+
+
+@fromStardotAccessForSide.register
+def _(
+    side: ADFSSide, stardot_byte: int, is_directory: bool = False,
+) -> int:
+    """Translate a stardot byte to the ADFS on-disc layout."""
+
+    disc = 0
+
+    for disc_bit, stardot_bit in _ADFS_STARDOT_MAP:
+        if stardot_byte & stardot_bit:
+            disc |= disc_bit
+
+    if is_directory:
+        disc |= 0x08
+
+    return disc
+
+
+@fromStardotAccessForSide.register
+def _(
+    side: DFSSide, stardot_byte: int, is_directory: bool = False,
+) -> int:
+    """Return the DFS lock bit (0x08) if the stardot L bit is set."""
 
     return _STARDOT_L if (stardot_byte & _STARDOT_L) else 0x00

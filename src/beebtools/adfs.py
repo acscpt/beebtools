@@ -1631,10 +1631,20 @@ class ADFSSide(DiscSide):
         else:
             start_sector = 0
 
-        # Build the access bits: R + W by default, plus L if locked.
-        access = int(ADFSAccessFlags.OWNER_R | ADFSAccessFlags.OWNER_W)
-        if spec.locked:
-            access |= int(ADFSAccessFlags.OWNER_L)
+        # Honour an explicit access byte from the caller (typically
+        # sourced from a .inf sidecar on rebuild). Fall back to the
+        # R+W default (plus L if locked) when no byte is supplied, so
+        # callers that construct DiscFile from scratch get a sensible
+        # default. The D bit is always cleared - files are never
+        # directories, and mkdir is the correct path for making those.
+        if spec.access is not None:
+            access = spec.access & ~_ADFS_DIRECTORY_BIT
+            entry_locked = bool(access & int(ADFSAccessFlags.OWNER_L))
+        else:
+            access = int(ADFSAccessFlags.OWNER_R | ADFSAccessFlags.OWNER_W)
+            if spec.locked:
+                access |= int(ADFSAccessFlags.OWNER_L)
+            entry_locked = spec.locked
 
         entry = ADFSEntry(
             name=leaf_name,
@@ -1643,7 +1653,7 @@ class ADFSSide(DiscSide):
             exec_addr=spec.exec_addr,
             length=len(data),
             start_sector=start_sector,
-            locked=spec.locked,
+            locked=entry_locked,
             is_directory=False,
             access=access,
             sequence=0,

@@ -37,7 +37,7 @@ from .basic import (
 )
 from .image import DiscImage, DiscSide, createImage, openImage
 from .inf import formatInf, parseInf, InfData, INF_X_START_SECTOR
-from .inf_translators import toStardotAccess
+from .inf_translators import toStardotAccess, fromStardotAccessForSide
 
 
 # Characters that are illegal in Windows filenames, used when building
@@ -1505,6 +1505,11 @@ def _walkSourceTree(
                     stacklevel=2,
                 )
 
+        # The .inf carries the stardot-layout access byte; format
+        # engines expect the native on-disc layout. Translate here so
+        # format engines stay agnostic of the stardot format.
+        native_access = fromStardotAccessForSide(side, inf.access_byte)
+
         side.addFile(DiscFile(
             path=inf.fullName,
             data=data,
@@ -1512,6 +1517,7 @@ def _walkSourceTree(
             exec_addr=inf.exec_addr,
             locked=inf.locked,
             start_sector=start_sector,
+            access=native_access,
         ))
 
     # Pass 4: write placed files in end-sector ascending order.

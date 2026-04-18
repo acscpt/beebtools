@@ -980,6 +980,14 @@ class DFSSide(DiscSide):
                     f"({available} bytes available)"
                 )
 
+        # Honour an explicit access byte (typically from a .inf on
+        # rebuild). DFS only models the lock bit, so anything else in
+        # spec.access is ignored by design.
+        if spec.access is not None:
+            entry_locked = bool(spec.access & int(DFSAccessFlags.LOCKED))
+        else:
+            entry_locked = spec.locked
+
         # Build the catalogue entry.
         entry = DFSEntry(
             name=name,
@@ -988,7 +996,7 @@ class DFSSide(DiscSide):
             exec_addr=spec.exec_addr,
             length=len(data),
             start_sector=start_sector,
-            locked=spec.locked,
+            locked=entry_locked,
         )
 
         # Write file data to the allocated sectors.

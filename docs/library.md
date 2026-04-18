@@ -403,17 +403,19 @@ Title length is validated against the format limit (12 for DFS, 19 for ADFS).
 ## Reading and setting file attributes
 
 The `getFileAttribs` and `setFileAttribs` functions read and modify
-individual file attributes (locked, load address, exec address) on an
-existing disc image.
+individual file attributes (access bits, load address, exec address) on
+an existing disc image.
 
 ```python
 from beebtools import getFileAttribs, setFileAttribs
 
 # Read attributes
 attribs = getFileAttribs("mydisc.ssd", "T.MYPROG")
-print(f"Load: {attribs.load_addr:08X}")
-print(f"Exec: {attribs.exec_addr:08X}")
+print(f"Load:   {attribs.load_addr:08X}")
+print(f"Exec:   {attribs.exec_addr:08X}")
 print(f"Locked: {attribs.locked}")
+print(f"Access: {attribs.access_string}")   # 'L' on DFS, 'LR/r' on ADFS
+print(f"Flags:  {attribs.access_flags!r}")  # format-specific IntFlag value
 
 # Lock a file
 setFileAttribs("mydisc.ssd", "T.MYPROG", locked=True)
@@ -423,6 +425,42 @@ setFileAttribs("mydisc.ssd", "T.MYPROG", load_addr=0x1900, exec_addr=0x8023)
 ```
 
 Only the attributes passed as non-None are changed; others are left intact.
+
+### Access flags
+
+`access_flags` accepts either a grammar string (same syntax as the
+`attrib --access` CLI flag) or a format-specific `IntFlag` value.
+Passing a string composes against the file's current access byte; passing
+an `IntFlag` replaces it absolutely.
+
+```python
+from beebtools import setFileAttribs, ADFSAccessFlags, DFSAccessFlags
+
+# ADFS: grammar string - absolute replacement
+setFileAttribs("game.adf", "$.GAMES.ELITE", access_flags="LR/r")
+
+# ADFS: grammar string - mutation
+setFileAttribs("game.adf", "$.GAMES.ELITE", access_flags="+L-W")
+
+# ADFS: IntFlag - absolute replacement
+setFileAttribs(
+    "game.adf", "$.GAMES.ELITE",
+    access_flags=(
+        ADFSAccessFlags.OWNER_L
+        | ADFSAccessFlags.OWNER_R
+        | ADFSAccessFlags.PUBLIC_R
+    ),
+)
+
+# DFS: only the LOCKED bit is meaningful
+setFileAttribs("mydisc.ssd", "T.MYPROG", access_flags=DFSAccessFlags.LOCKED)
+```
+
+`access_flags` and `locked` are mutually exclusive - pass one at a time.
+Applying a `DFSAccessFlags` value to an ADFS image (or vice versa)
+raises `ValueError`. Unknown letters in an ADFS grammar string are
+emitted as a `BeebToolsWarning` and skipped rather than erroring;
+contradictions (`L+W`, `+L-L`) still raise `ADFSError`.
 
 ## Renaming files
 

@@ -1902,6 +1902,69 @@ class TestAdfsExtractRebuildRoundTrip:
             rebuilt_data = rebuilt_image.sides[0].readFile(rebuilt_entry)
             assert orig_data == rebuilt_data, f"Data mismatch for {entry.fullName}"
 
+    def testExtractAndRebuildPreservesAdfsAccessByte(self, tmp_path) -> None:
+        """Non-default ADFS access bits survive extract -> build round-trip."""
+
+        image = createAdfsImage(title="ACCESSRT")
+        side = image.sides[0]
+
+        # Default addFile gives R+W; stamp a richer access pattern
+        # (owner L+R + public r on A, owner L+W+R on B) via applyAccess
+        # so we have something non-trivial to round-trip.
+        side.addFile(DiscFile("$.A", b"AAAA", load_addr=0, exec_addr=0))
+        side.addFile(DiscFile("$.B", b"BBBB", load_addr=0, exec_addr=0))
+
+        cat = side.readCatalogue()
+        side.applyAccess(
+            next(e for e in cat.entries if e.fullName == "$.A"),
+            "LR/r",
+        )
+        side.applyAccess(
+            next(e for e in cat.entries if e.fullName == "$.B"),
+            "LWR",
+        )
+
+        # Capture the originals after the access changes so we compare
+        # the final on-disc state, not the pre-applyAccess snapshot.
+        original_path = str(tmp_path / "original.adf")
+        with open(original_path, "wb") as f:
+            f.write(image.serialize())
+
+        orig_image = openAdfsImage(original_path)
+        orig_by_name = {
+            e.fullName: e
+            for e in orig_image.sides[0].readCatalogue().entries
+        }
+
+        extract_dir = str(tmp_path / "extracted")
+        extractAll(original_path, extract_dir, write_inf=True)
+
+        rebuilt_bytes = buildImage(
+            source_dir=extract_dir, output_path="rebuilt.adf",
+            title="ACCESSRT",
+        )
+
+        rebuilt_path = str(tmp_path / "rebuilt.adf")
+        with open(rebuilt_path, "wb") as f:
+            f.write(rebuilt_bytes)
+
+        rebuilt = openAdfsImage(rebuilt_path)
+        rebuilt_by_name = {
+            e.fullName: e for e in rebuilt.sides[0].readCatalogue().entries
+        }
+
+        # Access flags survive the round-trip. Compare via accessFlags
+        # (which masks off the D bit) so the test is independent of the
+        # on-disc directory bit layout.
+        assert (
+            rebuilt_by_name["$.A"].accessFlags
+            == orig_by_name["$.A"].accessFlags
+        )
+        assert (
+            rebuilt_by_name["$.B"].accessFlags
+            == orig_by_name["$.B"].accessFlags
+        )
+
 
 # =======================================================================
 # cmdTitle - DFS

@@ -174,11 +174,24 @@ def cmdCat(args: Namespace) -> None:
         if not listing.entries:
             print("  (empty)")
         else:
-            # Dynamic column width for ADFS hierarchical names.
+            # Dynamic column widths. The name column grows with ADFS
+            # hierarchical paths; the access column grows with ADFS
+            # owner/public combinations like LWR/wre.
             max_name = max(len(ce.entry.fullName) for ce in listing.entries)
             col_width = max(12, max_name + 2)
 
-            print(f"    {'Name':<{col_width}s} {'Load':>8s} {'Exec':>8s} {'Length':>8s}  {'Type'}")
+            max_access = max(
+                (len(ce.entry.accessString) for ce in listing.entries),
+                default=0,
+            )
+            access_width = max(6, max_access)
+
+            print(
+                f"  {'Access':<{access_width}s}  "
+                f"{'Name':<{col_width}s} "
+                f"{'Load':>8s} {'Exec':>8s} {'Length':>8s}  "
+                f"{'Type'}"
+            )
 
             for ce in listing.entries:
                 e = ce.entry
@@ -191,13 +204,17 @@ def cmdCat(args: Namespace) -> None:
                 else:
                     ftype = ""
 
-                lock_char = "L" if e.locked else " "
-                lock = _colour(lock_char, _RED, use_colour and e.locked)
+                access_text = e.accessString or "-"
+                access = _colour(
+                    f"{access_text:<{access_width}s}",
+                    _RED, use_colour and e.locked,
+                )
                 load   = _colour(f"{e.load_addr:08X}",   _GREY, use_colour)
                 exec_  = _colour(f"{e.exec_addr:08X}",   _GREY, use_colour)
                 length = _colour(f"{e.length:08X}", _GREY, use_colour)
                 print(
-                    f"  {lock} {e.fullName:<{col_width - 1}s} "
+                    f"  {access}  "
+                    f"{e.fullName:<{col_width}s} "
                     f"{load} "
                     f"{exec_} "
                     f"{length}  "

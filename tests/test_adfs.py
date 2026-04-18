@@ -2370,6 +2370,20 @@ class TestCmdCatAdfs:
         assert "README" in output
         assert "00001000" in output
 
+    def testShowsAdfsAccessString(self, tmp_path):
+        """cmdCat prints the full ADFS access string, not just a lock flag."""
+        # access=0x25: R (0x01) + L (0x04) + r (0x20) = LR/r.
+        image_data = _adfsWithFiles([
+            {"name": "LOCKED", "data": b"x", "access": 0x25},
+            {"name": "WRITE", "data": b"x", "access": 0x03},  # R+W
+        ])
+        output = self._runCat(tmp_path, image_data)
+
+        # Column header and both access forms appear in the listing.
+        assert "Access" in output
+        assert "LR/r" in output
+        assert "WR" in output
+
     def testShowsDirType(self, tmp_path):
         """cmdCat should distinguish directory entries from files in its output."""
         # Create a directory entry (access bit 3 = 0x08).
