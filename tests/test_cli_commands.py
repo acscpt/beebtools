@@ -15,7 +15,7 @@ from argparse import Namespace
 import pytest
 
 from beebtools import BeebToolsWarning
-from beebtools.dfs import createDiscImage, openDiscImage, DFSError
+from beebtools.dfs import createDiscImage, openDiscImage, DFSError, DFSAccessFlags
 from beebtools.entry import DiscFile, DiscError
 from beebtools.disc import (
     extractAll, buildImage, formatDirectoryInf,
@@ -24,12 +24,13 @@ from beebtools.disc import (
     renameFile, compactDisc, makeDirectory,
 )
 from beebtools.boot import BootOption
-from beebtools.adfs import openAdfsImage
+from beebtools.adfs import openAdfsImage, ADFSAccessFlags, ADFSError
 from beebtools.inf import formatInf, parseInf, INF_X_START_SECTOR
 from beebtools.cli import (
     cmdCreate, cmdAdd, cmdDelete, cmdBuild,
     cmdTitle, cmdBoot, cmdDisc, cmdAttrib, cmdRename,
     cmdCompact, cmdMkdir,
+    _loadResourceBundles,
 )
 
 
@@ -2296,7 +2297,7 @@ class TestCmdAttrib:
         img = self._createSsdWithFile(tmp_path)
         args = Namespace(
             image=img, filename="T.MYPROG", side=0,
-            locked=None, load=None, exec_addr=None,
+            locked=None, access=None, load=None, exec_addr=None,
         )
 
         buf = io.StringIO()
@@ -2345,7 +2346,7 @@ class TestCmdAttrib:
         img = self._createSsdWithFile(tmp_path)
         args = Namespace(
             image=img, filename="T.MYPROG", side=0,
-            locked=True, load="031900", exec_addr="038023",
+            locked=True, access=None, load="031900", exec_addr="038023",
         )
 
         buf = io.StringIO()
@@ -2436,6 +2437,424 @@ class TestCmdAttribAdfs:
         entry = image.sides[0]["$.MYFILE"]
         data = image.sides[0].readFile(entry)
         assert data == b"\xAA\xBB\xCC"
+
+
+# =======================================================================
+# attrib --access grammar (ADFS)
+# =======================================================================
+
+class TestAttribAccessAdfs:
+
+    def _createAdfWithFile(self, tmp_path, name: str = "$.MYFILE") -> str:
+        """Create an ADFS image with one file and return its path."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "prog.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\xAA\xBB\xCC")
+
+        args = Namespace(
+            image=out, file=data_path, name=name,
+            load="2000", exec_addr="3000", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        return out
+
+    def testAbsoluteOwnerOnly(self, tmp_path) -> None:
+        """Absolute spec replaces the byte with only the owner bits."""
+        img = self._createAdfWithFile(tmp_path)
+
+        setFileAttribs(img, "$.MYFILE", access_flags="LR")
+
+        attribs = getFileAttribs(img, "$.MYFILE")
+        assert attribs.access_flags == (
+            ADFSAccessFlags.OWNER_L | ADFSAccessFlags.OWNER_R
+        )
+        assert attribs.access_string == "LR"
+        assert attribs.locked is True
+
+    def testAbsoluteSlashFoldsToPublic(self, tmp_path) -> None:
+        """Letters after '/' fold to their public-case equivalents."""
+        img = self._createAdfWithFile(tmp_path)
+
+        setFileAttribs(img, "$.MYFILE", access_flags="LR/R")
+
+        attribs = getFileAttribs(img, "$.MYFILE")
+        # 'R' after the slash is folded to 'r' (PUBLIC_R).
+        assert ADFSAccessFlags.OWNER_L in attribs.access_flags
+        assert ADFSAccessFlags.OWNER_R in attribs.access_flags
+        assert ADFSAccessFlags.PUBLIC_R in attribs.access_flags
+
+    def testAbsoluteMixedCaseNoSlash(self, tmp_path) -> None:
+        """Mixed case without a slash still maps owner vs public by case."""
+        img = self._createAdfWithFile(tmp_path)
+
+        setFileAttribs(img, "$.MYFILE", access_flags="LRr")
+
+        attribs = getFileAttribs(img, "$.MYFILE")
+        assert attribs.access_string == "LR/r"
+
+    def testAbsoluteEmptyClearsAllBits(self, tmp_path) -> None:
+        """Empty absolute spec clears the access byte entirely."""
+        img = self._createAdfWithFile(tmp_path)
+        setFileAttribs(img, "$.MYFILE", access_flags="LR")
+
+        setFileAttribs(img, "$.MYFILE", access_flags="")
+
+        attribs = getFileAttribs(img, "$.MYFILE")
+        assert int(attribs.access_flags) == 0
+        assert attribs.access_string == ""
+
+    def testMutationAddsAndRemoves(self, tmp_path) -> None:
+        """+L-W+R applies each mutation in order."""
+        img = self._createAdfWithFile(tmp_path)
+
+        # Start from WR (the default access the addFile path produces).
+        setFileAttribs(img, "$.MYFILE", access_flags="+L-W+R")
+
+        attribs = getFileAttribs(img, "$.MYFILE")
+        assert ADFSAccessFlags.OWNER_L in attribs.access_flags
+        assert ADFSAccessFlags.OWNER_W not in attribs.access_flags
+        assert ADFSAccessFlags.OWNER_R in attribs.access_flags
+
+    def testDLetterRejected(self, tmp_path) -> None:
+        """D is a directory-type flag and must not be settable."""
+        img = self._createAdfWithFile(tmp_path)
+
+        with pytest.raises(ADFSError, match="D is a directory"):
+            setFileAttribs(img, "$.MYFILE", access_flags="LD")
+
+    def testLowerDRejected(self, tmp_path) -> None:
+        """Lowercase 'd' rejected with the same error as 'D'."""
+        img = self._createAdfWithFile(tmp_path)
+
+        with pytest.raises(ADFSError, match="D is a directory"):
+            setFileAttribs(img, "$.MYFILE", access_flags="+d")
+
+    def testMixedAbsoluteAndMutationRejected(self, tmp_path) -> None:
+        """'L+W' combines absolute and mutation forms - error."""
+        img = self._createAdfWithFile(tmp_path)
+
+        with pytest.raises(ADFSError, match="absolute.*mutation"):
+            setFileAttribs(img, "$.MYFILE", access_flags="L+W")
+
+    def testMutationPlusMinusSameBitRejected(self, tmp_path) -> None:
+        """'+L-L' sets and clears the same bit - ambiguous, reject."""
+        img = self._createAdfWithFile(tmp_path)
+
+        with pytest.raises(ADFSError, match="sets and clears"):
+            setFileAttribs(img, "$.MYFILE", access_flags="+L-L")
+
+
+# =======================================================================
+# attrib --access grammar (DFS)
+# =======================================================================
+
+class TestAttribAccessDfs:
+
+    def _createSsdWithFile(self, tmp_path) -> str:
+        """Create an SSD with one file and return its path."""
+        out = str(tmp_path / "disc.ssd")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "prog.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"\x01\x02\x03\x04")
+
+        args = Namespace(
+            image=out, file=data_path, name="T.MYPROG",
+            load="1900", exec_addr="8023", locked=False,
+            inf=False, side=0, basic=False,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+
+        return out
+
+    def testAbsoluteLLocks(self, tmp_path) -> None:
+        """'L' as an absolute spec locks the file."""
+        img = self._createSsdWithFile(tmp_path)
+
+        setFileAttribs(img, "T.MYPROG", access_flags="L")
+
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert attribs.locked is True
+        assert attribs.access_string == "L"
+
+    def testAbsoluteEmptyUnlocks(self, tmp_path) -> None:
+        """Empty absolute spec unlocks the file on DFS."""
+        img = self._createSsdWithFile(tmp_path)
+        setFileAttribs(img, "T.MYPROG", locked=True)
+
+        setFileAttribs(img, "T.MYPROG", access_flags="")
+
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert attribs.locked is False
+
+    def testAbsoluteLockedWord(self, tmp_path) -> None:
+        """'LOCKED' is accepted as a synonym for 'L'."""
+        img = self._createSsdWithFile(tmp_path)
+
+        setFileAttribs(img, "T.MYPROG", access_flags="LOCKED")
+
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert attribs.locked is True
+
+    def testNonLLettersWarnAndStrip(self, tmp_path) -> None:
+        """Non-L letters emit a warning and are stripped on DFS."""
+        img = self._createSsdWithFile(tmp_path)
+
+        with pytest.warns(BeebToolsWarning, match="non-L"):
+            setFileAttribs(img, "T.MYPROG", access_flags="LWR")
+
+        # L still applied; W and R silently dropped after warning.
+        attribs = getFileAttribs(img, "T.MYPROG")
+        assert attribs.locked is True
+
+
+# =======================================================================
+# setFileAttribs library API - IntFlag pass-through
+# =======================================================================
+
+class TestSetFileAttribsFlagClass:
+
+    def _makeDfs(self, tmp_path) -> str:
+        out = str(tmp_path / "disc.ssd")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "d.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"x")
+        args = Namespace(
+            image=out, file=data_path, name="T.FILE",
+            load="0", exec_addr="0", locked=False,
+            inf=False, side=0, basic=False,
+        )
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+        return out
+
+    def _makeAdf(self, tmp_path) -> str:
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "d.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"x")
+        args = Namespace(
+            image=out, file=data_path, name="$.FILE",
+            load="0", exec_addr="0", locked=False,
+            inf=False, side=0, basic=False,
+        )
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+        return out
+
+    def testAdfsIntFlagAbsolute(self, tmp_path) -> None:
+        """IntFlag argument is an absolute replacement on ADFS."""
+        img = self._makeAdf(tmp_path)
+
+        setFileAttribs(
+            img, "$.FILE",
+            access_flags=ADFSAccessFlags.OWNER_L | ADFSAccessFlags.OWNER_R,
+        )
+
+        attribs = getFileAttribs(img, "$.FILE")
+        assert attribs.access_flags == (
+            ADFSAccessFlags.OWNER_L | ADFSAccessFlags.OWNER_R
+        )
+
+    def testDfsIntFlagLocks(self, tmp_path) -> None:
+        """DFSAccessFlags.LOCKED sets the lock bit on DFS."""
+        img = self._makeDfs(tmp_path)
+
+        setFileAttribs(img, "T.FILE", access_flags=DFSAccessFlags.LOCKED)
+
+        attribs = getFileAttribs(img, "T.FILE")
+        assert attribs.locked is True
+
+    def testDfsIntFlagZeroUnlocks(self, tmp_path) -> None:
+        """DFSAccessFlags(0) absolute clears the lock bit."""
+        img = self._makeDfs(tmp_path)
+        setFileAttribs(img, "T.FILE", locked=True)
+
+        setFileAttribs(img, "T.FILE", access_flags=DFSAccessFlags(0))
+
+        attribs = getFileAttribs(img, "T.FILE")
+        assert attribs.locked is False
+
+    def testDfsFlagOnAdfsImageRaises(self, tmp_path) -> None:
+        """Passing the wrong format's flag type raises ValueError."""
+        img = self._makeAdf(tmp_path)
+
+        with pytest.raises(ValueError, match="ADFSAccessFlags"):
+            setFileAttribs(
+                img, "$.FILE", access_flags=DFSAccessFlags.LOCKED,
+            )
+
+    def testAdfsFlagOnDfsImageRaises(self, tmp_path) -> None:
+        """Passing the wrong format's flag type raises ValueError."""
+        img = self._makeDfs(tmp_path)
+
+        with pytest.raises(ValueError, match="DFSAccessFlags"):
+            setFileAttribs(
+                img, "T.FILE", access_flags=ADFSAccessFlags.OWNER_L,
+            )
+
+    def testAccessAndLockedMutuallyExclusive(self, tmp_path) -> None:
+        """access_flags and locked together is ambiguous - raise."""
+        img = self._makeDfs(tmp_path)
+
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            setFileAttribs(
+                img, "T.FILE",
+                locked=True, access_flags=DFSAccessFlags.LOCKED,
+            )
+
+
+# =======================================================================
+# ADFS directory DWLR regression guard
+# =======================================================================
+
+class TestAdfsDirectoryAccessWarn:
+
+    def testDirectoryStripsOwnerWAndPublicBits(self, tmp_path) -> None:
+        """Owner-W and public bits on a directory are warn-and-stripped."""
+        out = str(tmp_path / "disc.adf")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        # makeDirectory from the high-level API creates a subdirectory.
+        makeDirectory(out, "$.SUB")
+
+        # Ask for LWR/r - spec would set owner-L, owner-W, owner-R,
+        # and public-r. The applyAccess path must strip owner-W and
+        # all public bits on a directory (DWLR regression guard).
+        with pytest.warns(BeebToolsWarning):
+            setFileAttribs(out, "$.SUB", access_flags="LWR/r")
+
+        attribs = getFileAttribs(out, "$.SUB")
+        assert ADFSAccessFlags.OWNER_W not in attribs.access_flags
+        assert ADFSAccessFlags.PUBLIC_R not in attribs.access_flags
+        # Owner-L and owner-R survive; directory marker is reapplied.
+        assert ADFSAccessFlags.OWNER_L in attribs.access_flags
+        assert ADFSAccessFlags.OWNER_R in attribs.access_flags
+        assert attribs.access_string.startswith("D")
+
+
+# =======================================================================
+# cmdAttrib --access through the CLI wrapper
+# =======================================================================
+
+class TestCmdAttribAccess:
+
+    def _createSsdWithFile(self, tmp_path) -> str:
+        out = str(tmp_path / "disc.ssd")
+        args = Namespace(output=out, tracks=80, title="", boot=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdCreate(args)
+
+        data_path = str(tmp_path / "d.bin")
+        with open(data_path, "wb") as f:
+            f.write(b"x")
+        args = Namespace(
+            image=out, file=data_path, name="T.F",
+            load="0", exec_addr="0", locked=False,
+            inf=False, side=0, basic=False,
+        )
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAdd(args)
+        return out
+
+    def testCmdAttribAccessThroughSetter(self, tmp_path) -> None:
+        """cmdAttrib passes --access down to setFileAttribs."""
+        img = self._createSsdWithFile(tmp_path)
+        args = Namespace(
+            image=img, filename="T.F", side=0,
+            locked=None, access="L", load=None, exec_addr=None,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAttrib(args)
+
+        attribs = getFileAttribs(img, "T.F")
+        assert attribs.locked is True
+        assert "access='L'" in buf.getvalue()
+
+    def testCmdAttribGetterPrintsAccessLine(self, tmp_path) -> None:
+        """Getter output includes an Access: line."""
+        img = self._createSsdWithFile(tmp_path)
+        setFileAttribs(img, "T.F", locked=True)
+
+        args = Namespace(
+            image=img, filename="T.F", side=0,
+            locked=None, access=None, load=None, exec_addr=None,
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmdAttrib(args)
+
+        output = buf.getvalue()
+        assert "Access: L" in output
+
+
+# =======================================================================
+# _loadResourceBundles discovery
+# =======================================================================
+
+class TestLoadResourceBundles:
+
+    def testBothFormatsContribute(self) -> None:
+        """Both adfs_resources and dfs_resources are discovered."""
+        merged = _loadResourceBundles("cli")
+
+        assert "attrib.access" in merged
+        body = merged["attrib.access"]
+        assert "ADFS:" in body
+        assert "DFS:" in body
+
+    def testOrderingDeterministic(self) -> None:
+        """Module discovery is sorted alphabetically - ADFS before DFS."""
+        merged = _loadResourceBundles("cli")
+
+        body = merged["attrib.access"]
+        assert body.index("ADFS:") < body.index("DFS:")
+
+    def testUnknownConsumerReturnsEmpty(self) -> None:
+        """A consumer key that no module declares yields an empty dict."""
+        merged = _loadResourceBundles("no-such-consumer")
+
+        assert merged == {}
 
 
 # =======================================================================

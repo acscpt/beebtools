@@ -165,6 +165,16 @@ class DiscEntry(ABC):
 
     @property
     @abstractmethod
+    def accessString(self) -> str:
+        """Return the entry's access bits as a human-readable string.
+
+        The format chooses its own letter vocabulary and ordering.
+        Empty string when no bits are set. Intended for display only;
+        not parsed back as input.
+        """
+
+    @property
+    @abstractmethod
     def fullName(self) -> str:
         """Return the full path (directory + name) for this entry."""
 

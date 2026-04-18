@@ -9,12 +9,16 @@ and 'build' subcommands and the main() entry point.
 
 import argparse
 import contextlib
+import importlib
 import os
+import pkgutil
 import re
 import sys
 import warnings
 from argparse import Namespace
-from typing import Optional
+from typing import Dict, Optional
+
+import beebtools
 
 from .boot import BootOption
 from .entry import DiscError, DiscFile, FileType
@@ -59,6 +63,52 @@ def _colour(text: str, code: str, enabled: bool) -> str:
     if not enabled:
         return text
     return f"{code}{text}{_RESET}"
+
+
+def _loadResourceBundles(consumer: str = "cli") -> Dict[str, str]:
+    """Merge ``RESOURCES[consumer]`` from every ``*_resources`` module.
+
+    Walks ``beebtools.__path__`` with ``pkgutil.iter_modules``, imports
+    each module whose name ends in ``_resources``, and collects the
+    entries under the requested consumer key into a single flat dict.
+    When multiple bundles contribute the same key, their values are
+    concatenated so every format's help block reaches the user.
+    """
+
+    merged: Dict[str, str] = {}
+
+    # Sort by module name so output ordering is deterministic across
+    # runs and platforms instead of depending on filesystem order.
+    module_names = sorted(
+        info.name for info in pkgutil.iter_modules(beebtools.__path__)
+        if info.name.endswith("_resources")
+    )
+
+    for module_name in module_names:
+
+        module = importlib.import_module(f"beebtools.{module_name}")
+
+        # Resource modules are expected to expose a ``RESOURCES`` dict
+        # keyed by consumer name. Missing or malformed modules are
+        # ignored rather than exploding at startup.
+        resources = getattr(module, "RESOURCES", None)
+        if not isinstance(resources, dict):
+            continue
+
+        bundle = resources.get(consumer)
+        if not isinstance(bundle, dict):
+            continue
+
+        # Concatenate on key clashes so each format's block contributes
+        # to the combined text. A blank line separates existing content
+        # from the newcomer for legibility in aggregated help output.
+        for key, value in bundle.items():
+            if key in merged:
+                merged[key] = merged[key].rstrip("\n") + "\n\n" + value
+            else:
+                merged[key] = value
+
+    return merged
 
 
 # Colour mapping for classified file types in the catalogue listing.
@@ -572,6 +622,7 @@ def cmdAttrib(args: Namespace) -> None:
     """
     has_mutations = (
         args.locked is not None
+        or args.access is not None
         or args.load is not None
         or args.exec_addr is not None
     )
@@ -586,12 +637,15 @@ def cmdAttrib(args: Namespace) -> None:
             locked=args.locked,
             load_addr=load_addr,
             exec_addr=exec_addr,
+            access_flags=args.access,
         )
 
         # Confirm what was changed.
         parts = []
         if args.locked is not None:
             parts.append("locked" if args.locked else "unlocked")
+        if args.access is not None:
+            parts.append(f"access={args.access!r}")
         if load_addr is not None:
             parts.append(f"load={load_addr:08X}")
         if exec_addr is not None:
@@ -604,11 +658,13 @@ def cmdAttrib(args: Namespace) -> None:
 
         lock_str = "L" if attribs.locked else "-"
         lock_display = _colour(lock_str, _RED, use_colour and attribs.locked)
+        access_display = attribs.access_string if attribs.access_string else "-"
         print(f"File:   {attribs.fullName}")
         print(f"Load:   {attribs.load_addr:08X}")
         print(f"Exec:   {attribs.exec_addr:08X}")
         print(f"Length: {attribs.length:08X}")
         print(f"Locked: {lock_display}")
+        print(f"Access: {access_display}")
 
 
 # ---------------------------------------------------------------------------
@@ -852,8 +908,20 @@ def main() -> None:
                         help="Disc side for DFS (default: 0; ignored for ADFS)")
 
     # -- attrib subcommand --
+    # The --access help text is assembled from every *_resources
+    # module so each format contributes its own grammar block without
+    # the CLI naming format engines directly.
+    cli_resources = _loadResourceBundles("cli")
+    access_help_body = cli_resources.get("attrib.access", "")
+    access_help = (
+        "Set access flags using format-specific grammar.\n"
+        "Mutually exclusive with --locked / --unlocked.\n\n"
+        + access_help_body
+    )
+
     p_attrib = sub.add_parser(
-        "attrib", help="Read or set file attributes")
+        "attrib", help="Read or set file attributes",
+        formatter_class=argparse.RawTextHelpFormatter)
     p_attrib.add_argument("image",
                           help="Path to disc image (.ssd, .dsd, .adf, or .adl)")
     p_attrib.add_argument("filename",
@@ -865,6 +933,8 @@ def main() -> None:
     lock_group.add_argument("--unlocked", action="store_const", const=False,
                             dest="locked",
                             help="Unlock the file")
+    lock_group.add_argument("--access", default=None, dest="access",
+                            help=access_help)
     p_attrib.add_argument("--load", default=None,
                           help="Load address in hex (e.g. FF1900)")
     p_attrib.add_argument("--exec", dest="exec_addr", default=None,

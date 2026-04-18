@@ -1683,6 +1683,7 @@ class FileAttribs:
     length: int
     locked: bool
     access_flags: IntFlag
+    access_string: str
 
 
 def getFileAttribs(
@@ -1717,6 +1718,7 @@ def getFileAttribs(
                 length=entry.length,
                 locked=entry.locked,
                 access_flags=entry.accessFlags,
+                access_string=entry.accessString,
             )
 
     raise DiscError(f"File '{path}' not found")

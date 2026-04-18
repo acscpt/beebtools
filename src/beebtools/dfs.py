@@ -55,7 +55,7 @@ class DFSFormatError(DFSError, DiscFormatError):
 # Access flags
 # -----------------------------------------------------------------------
 
-class DfsAccessFlags(IntFlag):
+class DFSAccessFlags(IntFlag):
     """Symbolic access-permission bits for a DFS entry.
 
     DFS has a single access flag (locked). The on-disc encoding lives
@@ -69,7 +69,7 @@ class DfsAccessFlags(IntFlag):
 
 def _parseDfsAccessSpec(
     spec: str,
-) -> Tuple[DfsAccessFlags, DfsAccessFlags]:
+) -> Tuple[DFSAccessFlags, DFSAccessFlags]:
     """Parse a DFS --access spec into ``(set_mask, clear_mask)``.
 
     DFS has a narrower grammar than ADFS because the only meaningful
@@ -85,20 +85,20 @@ def _parseDfsAccessSpec(
     DFS side.
 
     Returns a ``(set_mask, clear_mask)`` pair. Absolute specs set
-    ``clear_mask`` to ``DfsAccessFlags.LOCKED`` so the caller can
+    ``clear_mask`` to ``DFSAccessFlags.LOCKED`` so the caller can
     compose with ``(current & ~clear_mask) | set_mask`` uniformly.
     """
 
     # Empty absolute spec clears lock (same intent as *ACCESS with
     # no letters on a real Beeb).
     if spec == "":
-        return DfsAccessFlags(0), DfsAccessFlags.LOCKED
+        return DFSAccessFlags(0), DFSAccessFlags.LOCKED
 
     # Full-word synonym for L, accepted case-insensitively. Handled
     # before the per-character walk so 'LOCKED' is not treated as a
     # sequence of non-L letters to warn about.
     if spec.upper() == "LOCKED":
-        return DfsAccessFlags.LOCKED, DfsAccessFlags.LOCKED
+        return DFSAccessFlags.LOCKED, DFSAccessFlags.LOCKED
 
     # Mode dispatch: + or - starts mutation; a letter starts absolute.
     first = spec[0]
@@ -116,7 +116,7 @@ def _parseDfsAccessSpec(
 
 def _parseDfsAbsolute(
     spec: str,
-) -> Tuple[DfsAccessFlags, DfsAccessFlags]:
+) -> Tuple[DFSAccessFlags, DFSAccessFlags]:
     """Parse an absolute DFS access spec; warn and strip non-L letters.
 
     DFS only models a lock flag, so any letter other than L or l is
@@ -125,7 +125,7 @@ def _parseDfsAbsolute(
     disc set (DFS + ADFS) still locks the DFS files.
     """
 
-    set_mask = DfsAccessFlags(0)
+    set_mask = DFSAccessFlags(0)
 
     # Non-L letters collected for a single aggregated warning - less
     # noise than warning per-letter, and the user sees exactly which
@@ -144,7 +144,7 @@ def _parseDfsAbsolute(
             )
 
         if ch in "Ll":
-            set_mask |= DfsAccessFlags.LOCKED
+            set_mask |= DFSAccessFlags.LOCKED
         else:
             ignored.append(ch)
 
@@ -159,12 +159,12 @@ def _parseDfsAbsolute(
 
     # clear_mask is LOCKED (the only representable DFS bit) so the
     # caller's composition formula yields exact replacement.
-    return set_mask, DfsAccessFlags.LOCKED
+    return set_mask, DFSAccessFlags.LOCKED
 
 
 def _parseDfsMutation(
     spec: str,
-) -> Tuple[DfsAccessFlags, DfsAccessFlags]:
+) -> Tuple[DFSAccessFlags, DFSAccessFlags]:
     """Parse a DFS mutation spec (``+L`` / ``-L``); warn-and-strip other letters.
 
     Same warn-and-strip policy as absolute mode: non-L mutation pairs
@@ -173,8 +173,8 @@ def _parseDfsMutation(
     thing on the DFS side.
     """
 
-    set_mask = DfsAccessFlags(0)
-    clear_mask = DfsAccessFlags(0)
+    set_mask = DFSAccessFlags(0)
+    clear_mask = DFSAccessFlags(0)
 
     # Non-L pairs (e.g. '+R', '-w') collected for a single warning.
     ignored: List[str] = []
@@ -208,9 +208,9 @@ def _parseDfsMutation(
         if ch in "Ll":
 
             if op == "+":
-                set_mask |= DfsAccessFlags.LOCKED
+                set_mask |= DFSAccessFlags.LOCKED
             else:
-                clear_mask |= DfsAccessFlags.LOCKED
+                clear_mask |= DFSAccessFlags.LOCKED
 
         else:
             ignored.append(op + ch)
@@ -238,28 +238,28 @@ def _parseDfsMutation(
 
 
 # -----------------------------------------------------------------------
-# Resolve an access argument to the new DfsAccessFlags value
+# Resolve an access argument to the new DFSAccessFlags value
 # -----------------------------------------------------------------------
 #
 # ``applyAccess`` accepts either a grammar spec string or a
-# ``DfsAccessFlags`` value. Dispatch is by runtime type so each input
+# ``DFSAccessFlags`` value. Dispatch is by runtime type so each input
 # shape lives in its own small handler rather than an isinstance
 # ladder inside ``applyAccess``.
 
 @singledispatch
 def _resolveDfsAccess(
-    access: object, current: DfsAccessFlags,
-) -> DfsAccessFlags:
+    access: object, current: DFSAccessFlags,
+) -> DFSAccessFlags:
     """Default handler: the caller passed an unsupported type."""
 
     raise TypeError(
-        f"access must be DfsAccessFlags or str, "
+        f"access must be DFSAccessFlags or str, "
         f"got {type(access).__name__}"
     )
 
 
 @_resolveDfsAccess.register
-def _(access: str, current: DfsAccessFlags) -> DfsAccessFlags:
+def _(access: str, current: DFSAccessFlags) -> DFSAccessFlags:
     """String spec: parse the grammar and compose against ``current``."""
 
     set_mask, clear_mask = _parseDfsAccessSpec(access)
@@ -268,18 +268,18 @@ def _(access: str, current: DfsAccessFlags) -> DfsAccessFlags:
 
 
 @_resolveDfsAccess.register
-def _(access: DfsAccessFlags, current: DfsAccessFlags) -> DfsAccessFlags:
+def _(access: DFSAccessFlags, current: DFSAccessFlags) -> DFSAccessFlags:
     """Native flag value: absolute replacement, ``current`` is ignored."""
 
     return access
 
 
 @_resolveDfsAccess.register
-def _(access: IntFlag, current: DfsAccessFlags) -> DfsAccessFlags:
+def _(access: IntFlag, current: DFSAccessFlags) -> DFSAccessFlags:
     """Wrong IntFlag subclass (e.g. ``AdfsAccessFlags`` on a DFS image)."""
 
     raise ValueError(
-        f"expected DfsAccessFlags, got {type(access).__name__}"
+        f"expected DFSAccessFlags, got {type(access).__name__}"
     )
 
 
@@ -309,14 +309,24 @@ class DFSEntry(DiscEntry):
         return f"{self.directory}.{self.name}"
 
     @property
-    def accessFlags(self) -> DfsAccessFlags:
-        """Return the entry's access bits as ``DfsAccessFlags``.
+    def accessFlags(self) -> DFSAccessFlags:
+        """Return the entry's access bits as ``DFSAccessFlags``.
 
         DFS models only the lock state; the symbolic ``LOCKED`` flag
         is set iff the entry's ``locked`` boolean is True.
         """
 
-        return DfsAccessFlags.LOCKED if self.locked else DfsAccessFlags(0)
+        return DFSAccessFlags.LOCKED if self.locked else DFSAccessFlags(0)
+
+    @property
+    def accessString(self) -> str:
+        """Render the access bits as a display string.
+
+        DFS has only one meaningful bit, so this is ``L`` when the
+        file is locked and empty otherwise.
+        """
+
+        return "L" if self.locked else ""
 
     @property
     def isBasic(self) -> bool:
@@ -1092,7 +1102,7 @@ class DFSSide(DiscSide):
     ) -> None:
         """Apply an access change to a DFS catalogue entry.
 
-        A ``DfsAccessFlags`` value is an absolute replacement. A
+        A ``DFSAccessFlags`` value is an absolute replacement. A
         ``str`` value is parsed with the DFS --access grammar
         (``L``, ``LOCKED``, ``""``, ``+L``, ``-L``) and composed
         against the entry's current locked state.
@@ -1115,18 +1125,18 @@ class DFSSide(DiscSide):
         # Promote it to the symbolic flag so the composition formula
         # used by the dispatcher below is identical to ADFS.
         current = (
-            DfsAccessFlags.LOCKED if entry.locked else DfsAccessFlags(0)
+            DFSAccessFlags.LOCKED if entry.locked else DFSAccessFlags(0)
         )
 
         # Resolve the requested change via the module-level singledispatch
-        # helper. It routes str / DfsAccessFlags / foreign-IntFlag /
+        # helper. It routes str / DFSAccessFlags / foreign-IntFlag /
         # anything-else to four small dedicated handlers and returns the
         # new absolute flag value.
         new_flags = _resolveDfsAccess(access, current)
 
         # Collapse back to the boolean DFSEntry expects. The bit-7
         # on-disc encoding is reapplied inside writeCatalogue.
-        new_locked = bool(new_flags & DfsAccessFlags.LOCKED)
+        new_locked = bool(new_flags & DFSAccessFlags.LOCKED)
 
         # updateEntry handles the write-back and cycle increment.
         updated = replace(entry, locked=new_locked)
