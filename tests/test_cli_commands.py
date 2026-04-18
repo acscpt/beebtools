@@ -2527,19 +2527,35 @@ class TestAttribAccessAdfs:
         assert ADFSAccessFlags.OWNER_W not in attribs.access_flags
         assert ADFSAccessFlags.OWNER_R in attribs.access_flags
 
-    def testDLetterRejected(self, tmp_path) -> None:
-        """D is a directory-type flag and must not be settable."""
+    def testDLetterWarnedAndIgnored(self, tmp_path) -> None:
+        """D is a directory type flag; warn, ignore, apply the rest."""
         img = self._createAdfWithFile(tmp_path)
 
-        with pytest.raises(ADFSError, match="D is a directory"):
+        with pytest.warns(BeebToolsWarning, match="directory type flag"):
             setFileAttribs(img, "$.MYFILE", access_flags="LD")
 
-    def testLowerDRejected(self, tmp_path) -> None:
-        """Lowercase 'd' rejected with the same error as 'D'."""
+        attribs = getFileAttribs(img, "$.MYFILE")
+        assert ADFSAccessFlags.OWNER_L in attribs.access_flags
+
+    def testLowerDWarnedAndIgnored(self, tmp_path) -> None:
+        """Lowercase 'd' warns the same way as 'D' in a mutation spec."""
         img = self._createAdfWithFile(tmp_path)
 
-        with pytest.raises(ADFSError, match="D is a directory"):
-            setFileAttribs(img, "$.MYFILE", access_flags="+d")
+        with pytest.warns(BeebToolsWarning, match="directory type flag"):
+            setFileAttribs(img, "$.MYFILE", access_flags="+L+d")
+
+        attribs = getFileAttribs(img, "$.MYFILE")
+        assert ADFSAccessFlags.OWNER_L in attribs.access_flags
+
+    def testUnknownLetterWarnedAndIgnored(self, tmp_path) -> None:
+        """Non-access letters (not D) warn under a generic message."""
+        img = self._createAdfWithFile(tmp_path)
+
+        with pytest.warns(BeebToolsWarning, match="non-access letters"):
+            setFileAttribs(img, "$.MYFILE", access_flags="LQ")
+
+        attribs = getFileAttribs(img, "$.MYFILE")
+        assert ADFSAccessFlags.OWNER_L in attribs.access_flags
 
     def testMixedAbsoluteAndMutationRejected(self, tmp_path) -> None:
         """'L+W' combines absolute and mutation forms - error."""

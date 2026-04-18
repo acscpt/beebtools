@@ -16,6 +16,6 @@ RESOURCES = {
             "  Absolute: LWR, LWR/r, LWRr, \"\" (no access)\n"
             "  Mutation: +L, -W, +L-W+R\n"
             "  Case: uppercase=owner, lowercase=public\n"
-            "  D is not settable; use 'mkdir' for directories.\n",
+            "  Letters outside LWRE/wre (including D) are ignored with a warning.\n",
     },
 }

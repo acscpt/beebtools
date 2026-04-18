@@ -81,6 +81,10 @@ The access byte is emitted as 2-digit hex. Common values:
 For ADFS, all 8 bits carry meaning per the ADFS access model
 (R/W/E/L and owner/public).
 
+**NOTE** The stardot access-byte layout does not always match the bit positions
+a particular disc format uses. .inf sidecars always use the stardot layout
+documented here.
+
 ## Extra-info keys
 
 Everything after the fixed fields is a sequence of `KEY=value` pairs,

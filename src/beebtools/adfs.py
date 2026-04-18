@@ -175,17 +175,11 @@ def _parseAdfsAccessSpec(
     both modes uniformly.
 
     Raises:
-        ADFSError: for D/d anywhere, mixed absolute/mutation forms,
-            unknown letters, or contradictory ``+L-L`` mutations.
+        ADFSError: for mixed absolute/mutation forms or contradictory
+            ``+L-L`` mutations. Unknown letters (including ``D`` / ``d``)
+            are warned and skipped rather than erroring, to match the
+            DFS parser's warn-and-continue policy.
     """
-
-    # D is a type flag, not a permission bit: rejecting it here gives a
-    # clear diagnostic before either sub-parser sees the character.
-    if "D" in spec or "d" in spec:
-        raise ADFSError(
-            "D is a directory type flag, not an access permission. "
-            "Use 'mkdir' to create directories."
-        )
 
     # Mode is picked by the first character: letter or empty is
     # absolute, + or - is mutation. Anything else is a syntax error.
@@ -209,6 +203,11 @@ def _parseAdfsAbsolute(
     returned ``clear_mask`` covers every representable bit so the
     caller's composition formula ``(current & ~clear_mask) | set_mask``
     collapses to exact replacement.
+
+    Non-access letters are collected and surfaced in a single
+    aggregated warning rather than erroring, matching the DFS parser.
+    ``D`` / ``d`` are called out separately in the warning because they
+    are the directory type flag (created via ``mkdir``), not junk.
     """
 
     # Accumulator for the bits the caller wants set. Bits are added
@@ -218,6 +217,11 @@ def _parseAdfsAbsolute(
     # Tracks whether we have passed the cosmetic '/' separator. Every
     # letter after the slash folds to its public-case equivalent.
     after_slash = False
+
+    # Two separate buckets for foreign letters so the warning can
+    # distinguish "D is a type flag" from "Q is just unknown".
+    d_letters: List[str] = []
+    other_letters: List[str] = []
 
     for ch in spec:
 
@@ -240,14 +244,16 @@ def _parseAdfsAbsolute(
         folded = ch.lower() if after_slash else ch
         bit = _ADFS_ACCESS_LETTERS.get(folded)
 
-        # Unknown letter - anything outside LWRElwre at this point.
-        # D/d was already rejected by the dispatcher.
-        if bit is None:
-            raise ADFSError(
-                f"invalid character {ch!r} in --access spec {spec!r}"
-            )
+        if bit is not None:
+            set_mask |= bit
+            continue
 
-        set_mask |= bit
+        if ch in "Dd":
+            d_letters.append(ch)
+        else:
+            other_letters.append(ch)
+
+    _warnAdfsIgnored(spec, d_letters, other_letters)
 
     # clear_mask is every representable bit so the caller's composition
     # formula yields exact replacement: (current & 0) | set_mask.
@@ -264,12 +270,22 @@ def _parseAdfsMutation(
     each ``-X`` adds to ``clear_mask``. Bits not named stay
     untouched when the caller composes the masks with the current
     access byte.
+
+    Non-access letters are collected and surfaced in a single
+    aggregated warning rather than erroring, matching the DFS parser.
+    ``D`` / ``d`` are called out separately in the warning because they
+    are the directory type flag (created via ``mkdir``), not junk.
     """
 
     # Separate set and clear accumulators: bits the user wants on go
     # in set_mask, bits they want off go in clear_mask.
     set_mask = ADFSAccessFlags(0)
     clear_mask = ADFSAccessFlags(0)
+
+    # Two buckets for ignored pairs so the warning can distinguish
+    # D/d (directory type flag) from other foreign letters.
+    d_pairs: List[str] = []
+    other_pairs: List[str] = []
 
     # Index walks in steps of two: op + letter. A while loop rather
     # than pairwise iteration keeps the error messages precise about
@@ -297,22 +313,25 @@ def _parseAdfsMutation(
         ch = spec[i + 1]
         bit = _ADFS_ACCESS_LETTERS.get(ch)
 
-        # Unknown letter after the operator. D/d already rejected above.
-        if bit is None:
-            raise ADFSError(
-                f"invalid character {ch!r} in --access spec {spec!r}"
-            )
+        if bit is not None:
 
-        # Route the bit into the matching accumulator.
-        if op == "+":
-            set_mask |= bit
+            # Route the bit into the matching accumulator.
+            if op == "+":
+                set_mask |= bit
+            else:
+                clear_mask |= bit
+
+        elif ch in "Dd":
+            d_pairs.append(op + ch)
         else:
-            clear_mask |= bit
+            other_pairs.append(op + ch)
 
         i += 2
 
     # Contradictory mutations like '+L-L' would resolve one way or
     # the other depending on composition order; reject them instead.
+    # Only applies to bits we actually recognised; ignored pairs never
+    # reach the accumulators so they can't trigger a false conflict.
     conflict = set_mask & clear_mask
 
     if conflict:
@@ -320,7 +339,44 @@ def _parseAdfsMutation(
             f"--access spec {spec!r} both sets and clears the same bit"
         )
 
+    _warnAdfsIgnored(spec, d_pairs, other_pairs)
+
     return set_mask, clear_mask
+
+
+def _warnAdfsIgnored(
+    spec: str, d_items: List[str], other_items: List[str],
+) -> None:
+    """Emit one aggregated warning for non-access letters in an ADFS spec.
+
+    D/d are called out separately: they are the directory type flag
+    (created via ``mkdir``), not junk, so the warning names that fact
+    instead of lumping them in with unknown letters. Everything else
+    foreign is listed together under a generic message.
+    """
+
+    if not d_items and not other_items:
+        return
+
+    parts: List[str] = []
+
+    if other_items:
+        parts.append(
+            f"ignoring non-access letters {''.join(other_items)!r}"
+        )
+
+    if d_items:
+        parts.append(
+            f"ignoring {''.join(d_items)!r} "
+            f"(directory type flag, not an access permission; "
+            f"use 'mkdir' to create directories)"
+        )
+
+    warnings.warn(
+        f"ADFS --access spec {spec!r}: " + "; ".join(parts),
+        BeebToolsWarning,
+        stacklevel=3,
+    )
 
 
 # -----------------------------------------------------------------------

@@ -5,6 +5,18 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `--access VALUE` flag on `attrib`. The VALUE is disc format specific.
+
+### Fixed
+
+- `mkdir` creates ADFS directories with valid `DLR` access.
+
+- `.inf` sidecars for ADFS files now use the stardot access-byte layout.
+
 ## [0.10.0] - 2026-04-16
 
 ### Added
