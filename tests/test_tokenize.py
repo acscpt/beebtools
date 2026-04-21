@@ -11,8 +11,9 @@ binary for a range of BASIC constructs.
 
 import pytest
 
-from beebtools import detokenize, tokenize
+from beebtools import detokenize, tokenize, strictMode
 from beebtools.basic import encodeLineRef, _parseLine
+from beebtools.shared import BeebToolsWarning
 from beebtools.sophie import tokenizeLine
 from beebtools.basic_dialects import BBC_BASIC_II
 
@@ -1135,15 +1136,36 @@ def testMixedModeAllowsNumberlessAfterNumbered():
     assert data == expected
 
 
-def testExplicitNumbersMustStrictlyIncrease():
-    """Explicit line numbers out of order raise ValueError."""
-    with pytest.raises(ValueError, match="must increase"):
-        tokenize(["20 PRINT", "10 END"])
+def testExplicitNumbersNonMonotonicWarnsByDefault():
+    """Default (ROM-faithful) mode warns and emits lines in source order.
+
+    Real discs contain programs with non-monotonic or duplicate line
+    numbers (manual line-record patching, self-modifying loaders).
+    BBC BASIC runs them in physical order, so round-trip must preserve
+    source order rather than reject the program.
+    """
+    with pytest.warns(BeebToolsWarning, match="must increase"):
+        data = tokenize(["20 PRINT", "10 END"])
+    # Two line records emitted in source order.
+    assert data.startswith(b"\x0d\x00\x14")
+    assert b"\x0d\x00\x0a" in data[3:]
 
 
-def testExplicitNumberMustBeatAutoCounter():
-    """An explicit number that has been overtaken by the auto-counter errors."""
-    # After three numberless lines (1, 2, 3), an explicit "3 ..." tries
-    # to reuse 3 which is not strictly greater than last_line.
-    with pytest.raises(ValueError, match="must increase"):
+def testExplicitNumbersMustStrictlyIncreaseUnderStrict():
+    """strictMode() restores the spec-compliance raise."""
+    with strictMode():
+        with pytest.raises(ValueError, match="must increase"):
+            tokenize(["20 PRINT", "10 END"])
+
+
+def testExplicitNumberOvertakenByAutoCounterWarnsByDefault():
+    """Auto-counter overtaking an explicit number warns, not raises."""
+    with pytest.warns(BeebToolsWarning, match="must increase"):
         tokenize(["PRINT", "PRINT", "PRINT", "3 END"])
+
+
+def testExplicitNumberOvertakenByAutoCounterRaisesUnderStrict():
+    """Under strict mode the auto-counter overtake still raises."""
+    with strictMode():
+        with pytest.raises(ValueError, match="must increase"):
+            tokenize(["PRINT", "PRINT", "PRINT", "3 END"])

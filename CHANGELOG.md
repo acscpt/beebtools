@@ -5,6 +5,14 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `tokenize` tolerates non-monotonic line numbers (warns by default; `strictMode()` still raises).
+
+- `tokenize` preserves embedded CR/LF inside a line record instead of truncating at the first stray byte.
+
 ## [0.11.0] - 2026-04-18
 
 ### Added

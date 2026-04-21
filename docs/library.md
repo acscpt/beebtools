@@ -216,6 +216,14 @@ data = tokenize([
 ])
 ```
 
+Duplicate or decreasing line numbers are tolerated by default.
+Real discs contain programs whose line numbers are not strictly
+monotonic (manual line-record patching, self-modifying loaders)
+and BBC BASIC runs them because it executes lines in physical
+order. `tokenize` emits a `BeebToolsWarning` and preserves source
+ordering; wrap the call in `strictMode()` to raise `ValueError`
+instead.
+
 ### Retokenizing plain-text BASIC on the way in
 
 `addFileTo()` wraps `side.addFile()` with optional retokenization - if
