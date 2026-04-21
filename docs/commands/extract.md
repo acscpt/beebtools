@@ -38,31 +38,36 @@ When `-o` is omitted, raw bytes go directly to stdout for piping.
 
 BBC BASIC programs can contain non-ASCII bytes - most commonly teletext
 control codes (0x80-0x9F) embedded in `PRINT` strings for colour and
-graphics effects. By default these are replaced with `?` when extracting
-to plain text, which is lossy. The `-t`/`--text` option controls how
-these bytes are handled.
+graphics effects. The `-t`/`--text` option controls how these bytes are
+handled. The default is `escape`, which writes them as `\xHH` so the
+extracted file is both plain ASCII and byte-exact on rebuild.
 
 | Mode | Encoding | Lossless | Description |
 | --- | --- | --- | --- |
-| `ascii` | ASCII | No | Non-ASCII bytes replaced with `?` (default) |
+| `escape` | ASCII | Yes | Non-ASCII bytes written as `\xHH` notation (default) |
 | `utf8` | UTF-8 | Yes | Raw bytes preserved as UTF-8 |
-| `escape` | ASCII | Yes | Non-ASCII bytes written as `\xHH` notation |
+| `ascii` | ASCII | No | Non-ASCII bytes replaced with `?` (opt-in, lossy) |
 
-The `escape` mode is useful when you need the file to remain plain ASCII
-but want a lossless round-trip. The `build` command auto-detects escaped
-files and reverses the encoding when retokenizing, so all three modes
-round-trip correctly through extract/build.
+The `build` command auto-detects escaped files and reverses the encoding
+when retokenizing, so both lossless modes round-trip correctly through
+extract/build. `ascii` is destructive: the replacement `?` bytes are
+indistinguishable from real `?` characters, so a rebuild cannot recover
+the originals.
 
 ```bash
-# Default (lossy) - teletext codes become '?'
+# Default (lossless) - \x81, \x83 etc.
 beebtools extract mydisc.dsd T.LOTTERY -o lottery.bas
 
 # UTF-8 (lossless) - raw bytes preserved
 beebtools extract mydisc.dsd T.LOTTERY -o lottery.bas -t utf8
 
-# Escaped (lossless, plain ASCII) - \x81, \x83 etc.
-beebtools extract mydisc.dsd T.LOTTERY -o lottery.bas -t escape
+# ASCII (lossy) - teletext codes become '?'
+beebtools extract mydisc.dsd T.LOTTERY -o lottery.bas -t ascii
 ```
+
+> **Behaviour change (Unreleased):** the default was `ascii` in 0.11.0
+> and earlier. If you depend on the old lossy output, pass `-t ascii`
+> explicitly.
 
 ## Bulk extract
 
@@ -193,6 +198,6 @@ Ambiguous filename 'LOADER' - specify with full path.
   compatibility; emits a deprecation warning. Will be removed in a
   future release. Use `--no-inf` to suppress sidecars
 
-- `-t` / `--text` - text encoding for BASIC `.bas` files: `ascii` (lossy,
-  default), `utf8` (lossless), `escape` (`\xHH` notation, lossless).
-  See [Text modes](#text-modes) above
+- `-t` / `--text` - text encoding for BASIC `.bas` files: `escape`
+  (`\xHH` notation, lossless, default), `utf8` (lossless), `ascii`
+  (lossy, opt-in). See [Text modes](#text-modes) above

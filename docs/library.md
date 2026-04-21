@@ -266,6 +266,11 @@ assert restored == line
 The `writeBasicText()` and `readBasicText()` helpers use this internally
 when `text_mode="escape"` is specified.
 
+`extractFile()` and `extractAll()` default to `text_mode="escape"`,
+giving a byte-exact extract/build round-trip out of the box. Pass
+`text_mode="ascii"` to opt into the old lossy behaviour (replaces
+non-ASCII bytes with `?`); pass `text_mode="utf8"` for UTF-8 output.
+
 ## Creating and building disc images
 
 Create blank disc images programmatically, add files one at a time, or

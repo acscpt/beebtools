@@ -95,9 +95,9 @@ and faithfully reproduced in the rebuilt image.
 - Retokenize plain-text BASIC back to binary - enabling a full
   detokenize-edit-retokenize workflow
 
-- Text mode control for BASIC extraction: lossless UTF-8, escaped `\xHH`
-  notation, or default ASCII - preserves teletext control codes and other
-  non-ASCII bytes embedded in `PRINT` strings
+- Text mode control for BASIC extraction: lossless `\xHH` escape (default),
+  lossless UTF-8, or lossy ASCII - preserves teletext control codes and
+  other non-ASCII bytes embedded in `PRINT` strings
 
 - Pretty-printer: add operator spacing to make terse BASIC readable
   - Anti-listing trap preservation: `*|` traps kept intact for lossless round-tripping
@@ -126,6 +126,17 @@ python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
+
+## Behaviour change in the upcoming release
+
+`extract` now defaults to **lossless** output. Non-ASCII bytes in BASIC
+`PRINT` strings (teletext control codes, graphics characters) are written
+as `\xHH` escape sequences, and `build` decodes them back on rebuild so
+the extract/build cycle round-trips byte-exact with no flags.
+
+Through 0.11.0 the default was `-t ascii`, which silently replaced those
+bytes with `?`. If your workflow depends on the old lossy output, pass
+`-t ascii` explicitly.
 
 ## Commands
 
@@ -166,7 +177,7 @@ beebtools extract mydisc.dsd -a --pretty -d output/
 # Extract everything with .inf sidecars preserving file metadata
 beebtools extract mydisc.dsd -a -d output/
 
-# Preserve teletext control codes in BASIC strings (lossless UTF-8)
+# Default extraction is lossless (`-t escape`); opt into UTF-8 with:
 beebtools extract mydisc.dsd T.LOTTERY -o lottery.bas -t utf8
 
 # List an ADFS disc catalogue

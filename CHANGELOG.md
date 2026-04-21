@@ -7,11 +7,19 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `extract` default text mode is now `escape` (lossless); the old lossy `ascii` default is opt-in via `-t ascii`.
+
+- `.txt` files rebuild with BBC CR (0x0D) line terminators regardless of editor line-ending convention.
+
 ### Fixed
 
 - `tokenize` tolerates non-monotonic line numbers (warns by default; `strictMode()` still raises).
 
 - `tokenize` preserves embedded CR/LF inside a line record instead of truncating at the first stray byte.
+
+- `extractAll` creates the output directory for empty disc sides so the root `.inf` is written.
 
 ## [0.11.0] - 2026-04-18
 

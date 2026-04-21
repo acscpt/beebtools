@@ -270,7 +270,7 @@ def cmdExtract(args: Namespace) -> None:
         args: Parsed argparse namespace for the 'extract' subcommand.
     """
     # Default text_mode for callers that build a Namespace directly.
-    text_mode = getattr(args, "text_mode", "ascii")
+    text_mode = getattr(args, "text_mode", "escape")
 
     # --all routes to the bulk extractor.
     if args.all:
@@ -793,10 +793,10 @@ def main() -> None:
     p_extract.add_argument("--mkdirs", action="store_true",
                            help="Create subdirectories from Acorn paths instead of flat layout")
     p_extract.add_argument("-t", "--text", choices=["ascii", "utf8", "escape"],
-                           default="ascii", dest="text_mode",
+                           default="escape", dest="text_mode",
                            help="Text encoding for BASIC .bas files: "
-                                "ascii (lossy, default), utf8 "
-                                "(lossless), escape (\\xHH notation, lossless). "
+                                "escape (\\xHH notation, lossless, default), "
+                                "utf8 (lossless), ascii (lossy). "
                                 "Controls how non-ASCII bytes such as teletext "
                                 "control codes in PRINT strings are written")
 
