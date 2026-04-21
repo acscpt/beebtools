@@ -451,7 +451,7 @@ def extractFile(
     image_path: str,
     filename: str,
     pretty: bool = False,
-    text_mode: str = "ascii",
+    text_mode: str = "escape",
 ) -> ExtractedFile:
     """Extract a single file from a disc image by name.
 
@@ -466,6 +466,8 @@ def extractFile(
                     or bare 'MYPROG').
         pretty:     Apply pretty-printer spacing to BASIC output.
         text_mode:  Encoding for BASIC text ('ascii', 'utf8', 'escape').
+                    Default 'escape' round-trips exactly; 'ascii' is
+                    lossy (non-ASCII becomes '?') and must be opted in.
 
     Returns:
         ExtractedFile with the file data and metadata.
@@ -840,7 +842,7 @@ def extractAll(
     out_dir: str,
     pretty: bool = False,
     write_inf: bool = True,
-    text_mode: str = "ascii",
+    text_mode: str = "escape",
     layout: str = "flat",
 ) -> List[Dict[str, Union[str, int]]]:
     """Extract every file from a disc image into a directory.
@@ -848,6 +850,10 @@ def extractAll(
     BASIC programs are saved as .bas plain text files.
     Plain text files are saved as .txt with CR normalised to LF.
     Binary files are saved as .bin raw bytes.
+
+    The defaults are lossless: text_mode='escape' preserves non-ASCII
+    bytes (teletext control codes, etc.) as \\xHH sequences, and the
+    matching buildImage converts .txt line endings back to CR.
 
     The default flat layout puts all files in one directory using the
     full Acorn path as the filename (e.g. $.BOOT.bas, T.DATA.bin,
@@ -867,9 +873,9 @@ def extractAll(
         pretty:     Apply pretty-printer spacing to BASIC output when True.
         write_inf:  Write .inf sidecar files alongside extracted files.
         text_mode:  How non-ASCII bytes in BASIC strings are written:
-                    'ascii'  -- replace with '?' (lossy, default)
+                    'escape' -- \\xHH notation (lossless, plain ASCII, default)
                     'utf8'   -- write as UTF-8 (lossless)
-                    'escape' -- \\xHH notation (lossless, plain ASCII)
+                    'ascii'  -- replace with '?' (lossy, opt-in)
         layout:     'flat' (default) puts all files in one directory;
                     'hierarchical' creates subdirectories from Acorn paths.
 
@@ -1009,6 +1015,11 @@ def extractAll(
                 side_root = os.path.join(out_dir, f"side{side.side}")
             else:
                 side_root = out_dir
+
+            # An empty side still needs its directory created so the
+            # root .inf can be written; sides with files got this for
+            # free from the per-file writes above.
+            os.makedirs(side_root, exist_ok=True)
 
             dir_inf_line = formatDirectoryInf(
                 cat.title, cat.boot_option,
@@ -1441,6 +1452,14 @@ def _walkSourceTree(
 
         with open(path, "rb") as handle:
             data = handle.read()
+
+        # BBC text files terminate lines with CR (0x0D). Extract
+        # normalises CR to LF for editor-friendliness, so restore CR
+        # here. Any CRLF (saved by Windows editors) or lone LF (Unix)
+        # collapses to a single CR. A file already using CR is
+        # unchanged. This keeps the .txt round-trip byte-exact.
+        if fs_leaf.endswith(".txt"):
+            data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r")
 
         # Retokenize .bas files back to BBC BASIC binary format. The
         # extract step detokenizes BASIC programs into plain text,

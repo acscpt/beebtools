@@ -216,6 +216,14 @@ data = tokenize([
 ])
 ```
 
+Duplicate or decreasing line numbers are tolerated by default.
+Real discs contain programs whose line numbers are not strictly
+monotonic (manual line-record patching, self-modifying loaders)
+and BBC BASIC runs them because it executes lines in physical
+order. `tokenize` emits a `BeebToolsWarning` and preserves source
+ordering; wrap the call in `strictMode()` to raise `ValueError`
+instead.
+
 ### Retokenizing plain-text BASIC on the way in
 
 `addFileTo()` wraps `side.addFile()` with optional retokenization - if
@@ -257,6 +265,11 @@ assert restored == line
 
 The `writeBasicText()` and `readBasicText()` helpers use this internally
 when `text_mode="escape"` is specified.
+
+`extractFile()` and `extractAll()` default to `text_mode="escape"`,
+giving a byte-exact extract/build round-trip out of the box. Pass
+`text_mode="ascii"` to opt into the old lossy behaviour (replaces
+non-ASCII bytes with `?`); pass `text_mode="utf8"` for UTF-8 output.
 
 ## Creating and building disc images
 

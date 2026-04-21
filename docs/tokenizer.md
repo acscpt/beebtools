@@ -60,6 +60,14 @@ implicit numbering interleave freely, so numbered GOTO/GOSUB targets
 coexist with unnumbered source. The engine itself sees ordinary
 numbered lines regardless of how the numbers were assigned.
 
+Real discs occasionally contain programs with duplicate or
+decreasing line numbers (manual line-record patching, self-modifying
+loaders, trick listings). BBC BASIC executes lines in physical
+order, so these programs still run. Under the default ROM-faithful
+mode, `tokenize` emits a `BeebToolsWarning` and preserves the source
+ordering; `strictMode()` restores a hard `ValueError` for callers
+that want spec-compliance checks.
+
 
 ## 2. What a token is
 

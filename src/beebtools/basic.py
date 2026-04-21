@@ -23,9 +23,12 @@ have a single import point for all BASIC operations.
 """
 
 import re
+import warnings as _warnings
 from typing import Callable, List, Optional, Tuple
 
 from .pretty import compactLine, prettyPrint  # noqa: F401 - re-export
+from .shared import BeebToolsWarning
+from .validation import isStrict
 from .sophie import (  # noqa: F401 - re-export decodeLineRef, detokenize*
     decodeLineRef,
     detokenize as _sophieDetokenize,
@@ -144,7 +147,14 @@ def encodeLineRef(linenum: int) -> bytes:
 # Line parsing
 # -----------------------------------------------------------------------
 
-_LINE_RE = re.compile(r"^\s*(\d+)(.*)")
+# re.DOTALL so ``.`` in the content group matches embedded newlines
+# too.  The tokenizer fans a ``\n`` out into a fresh record anyway, but
+# without DOTALL a stray CR or LF glued onto a line during splitlines()
+# would truncate the captured content at the first such byte and drop
+# the rest of the statement.  With DOTALL the whole remainder of the
+# string after the leading digits is captured verbatim, and the caller
+# decides how to tokenize it.
+_LINE_RE = re.compile(r"^\s*(\d+)(.*)", re.DOTALL)
 
 
 def _parseLine(line: str) -> Tuple[int, str]:
@@ -217,11 +227,23 @@ def _normalizeLines(lines: List[str]) -> List[Tuple[int, str]]:
         if stripped_left[0].isdigit():
             linenum, content_text = _parseLine(line)
             if linenum <= last_line:
-                raise ValueError(
+                # Real discs contain programs with non-monotonic or
+                # duplicate line numbers (manual line-record patching,
+                # self-modifying loaders, etc.). BBC BASIC executes in
+                # physical order so these programs still run. Emit the
+                # line as the source says under default (ROM-faithful)
+                # mode; raise only when strictMode() enforces the spec.
+                msg = (
                     f"Line numbers must increase: line {linenum} is "
                     f"not greater than previous line {last_line}"
                 )
-            last_line = linenum
+                if isStrict():
+                    raise ValueError(msg)
+                _warnings.warn(msg, BeebToolsWarning, stacklevel=3)
+            # Track the highest line number seen so a later implicit
+            # (auto-numbered) line still lands above everything
+            # previously written, even after a non-monotonic run.
+            last_line = max(last_line, linenum)
         else:
             linenum = (
                 _AUTO_LINENUM_START

@@ -130,6 +130,17 @@ any extra flags.
 See [A Field Guide to Non-standard BBC Micro Disc Images](../inf-and-nonstandard-discs.md)
 for the full story.
 
+## Text files: line endings and `\xHH` escapes
+
+`.txt` files are written to the disc with BBC-native CR (0x0D) line
+terminators. The builder accepts source with any convention (CR, LF,
+or CRLF) and normalises on the way in, so a `.txt` extracted by
+`beebtools` and edited in any editor round-trips byte-exact.
+
+`.bas` files saved with the default `escape` text mode contain `\xHH`
+escape sequences for non-ASCII bytes. The builder decodes them back to
+the original bytes automatically when retokenizing - no flag required.
+
 ## BASIC source without line numbers
 
 When the builder retokenizes a `.bas` file, it accepts source with or
