@@ -870,10 +870,10 @@ class DFSSide(DiscSide):
     def freeSpace(self) -> int:
         """Return the number of free bytes available on this side.
 
-        Free space is the contiguous gap between sector 2 (the first
-        usable data sector) and the lowest-numbered sector occupied by
-        any file. This matches the standard DFS free space calculation
-        and represents the maximum size of a new file that can be added.
+        Free space is the contiguous gap between the sector immediately
+        after the highest-addressed file and the end of the disc. This
+        matches BBC DFS, which allocates files from sector 2 upward and
+        leaves free space at the top of the disc.
 
         Gaps left by deleted files in the middle of the disc are not
         counted. Use compact() to reclaim those gaps first.
@@ -882,21 +882,34 @@ class DFSSide(DiscSide):
             Free space in bytes.
         """
         cat = self.readCatalogue()
-        lowest = self._lowestUsedSector(cat)
-        free_sectors = lowest - 2
+        next_free = self._nextFreeSector(cat)
+        free_sectors = cat.disc_size - next_free
 
         return free_sectors * SECTOR_SIZE
 
-    def _lowestUsedSector(self, cat: DFSCatalogue) -> int:
-        """Return the lowest sector number occupied by any file.
+    def _nextFreeSector(self, cat: DFSCatalogue) -> int:
+        """Return the lowest sector number not occupied by any file.
 
-        If no files exist, returns disc_size (i.e. one past the last
-        sector), meaning the entire data area is free.
+        With bottom-up allocation this is sector 2 on an empty disc, or
+        one past the end sector of the highest-addressed file otherwise.
+        Zero-length files contribute no sectors.
         """
         if not cat.entries:
-            return cat.disc_size
+            return 2
 
-        return min(e.start_sector for e in cat.entries)
+        highest_end = 2
+
+        for e in cat.entries:
+            if e.length == 0:
+                continue
+
+            sectors = (e.length + SECTOR_SIZE - 1) // SECTOR_SIZE
+            end = e.start_sector + sectors
+
+            if end > highest_end:
+                highest_end = end
+
+        return highest_end
 
     # -------------------------------------------------------------------
     # File operations
@@ -906,7 +919,9 @@ class DFSSide(DiscSide):
         """Add a file to this disc side.
 
         Validates the filename, checks for duplicates, allocates sectors
-        from the top of free space downward, writes the file data, and
+        from the bottom of free space upward (matching BBC DFS, which
+        places the first file at sector 2 and each subsequent file
+        immediately after the previous), writes the file data, and
         updates the catalogue with an incremented cycle number.
 
         The path in spec must be in DFS format: a single directory
@@ -938,14 +953,16 @@ class DFSSide(DiscSide):
         if len(cat.entries) >= 31:
             raise DFSError("Catalogue is full (31 files maximum)")
 
-        # Allocate sectors from the top of free space downward, unless
-        # the caller has supplied an explicit placement hint in which
-        # case we write the file at that exact sector and skip the
-        # free-space check. Placed writes are used for round-tripping
-        # copy-protected discs (Level 9 games) where two catalogue
-        # entries legitimately claim overlapping sector ranges. Byte
-        # consistency in the overlap region is the caller's
-        # responsibility; this method does not validate it.
+        # Allocate sectors from sector 2 upward, packing each new file
+        # immediately after the highest-addressed existing file. This
+        # matches the behaviour of BBC DFS and avoids leaving an unused
+        # gap at the start of the data area that would slow down disc
+        # loads. The caller may override allocation by supplying an
+        # explicit start_sector hint; placed writes are used for
+        # round-tripping copy-protected discs (Level 9 games) where two
+        # catalogue entries legitimately claim overlapping sector
+        # ranges. Byte consistency in the overlap region is the
+        # caller's responsibility; this method does not validate it.
         data = spec.data
         if len(data) == 0:
             sectors_needed = 0
@@ -970,11 +987,11 @@ class DFSSide(DiscSide):
                     f"{cat.disc_size})"
                 )
         else:
-            lowest = self._lowestUsedSector(cat)
-            start_sector = lowest - sectors_needed
+            start_sector = self._nextFreeSector(cat)
+            end_sector = start_sector + sectors_needed - 1
 
-            if start_sector < 2:
-                available = (lowest - 2) * SECTOR_SIZE
+            if start_sector + sectors_needed > cat.disc_size:
+                available = (cat.disc_size - start_sector) * SECTOR_SIZE
                 raise DFSError(
                     f"Not enough free space for {len(data)} bytes "
                     f"({available} bytes available)"
@@ -1200,10 +1217,11 @@ class DFSSide(DiscSide):
     def compact(self) -> int:
         """Defragment file storage by closing gaps between files.
 
-        Files are packed toward the top of the disc (highest sectors)
-        so that all free space is contiguous below. The catalogue is
-        rewritten with updated start sectors and an incremented cycle
-        number.
+        Files are packed toward sector 2 (lowest usable sector) so that
+        all free space is contiguous at the top of the disc. The
+        relative order of files (by ascending start sector) is
+        preserved. The catalogue is rewritten with updated start
+        sectors and an incremented cycle number.
 
         Returns:
             Number of bytes freed by compaction (zero if already packed).
@@ -1215,18 +1233,18 @@ class DFSSide(DiscSide):
 
         free_before = self.freeSpace()
 
-        # Process files from highest start sector to lowest, packing each
-        # one immediately below the previous. This preserves the catalogue
-        # descending order and avoids data corruption because we read each
-        # file's data before writing to the new location.
-        sorted_desc = sorted(
-            cat.entries, key=lambda e: e.start_sector, reverse=True
+        # Process files from lowest start sector to highest, packing
+        # each one immediately after the previous. We process in
+        # ascending order so reads of each file's data happen before
+        # any write that could overlap its old location.
+        sorted_asc = sorted(
+            cat.entries, key=lambda e: e.start_sector
         )
 
-        next_free_top = cat.disc_size
+        next_free_bottom = 2
         new_entries = []
 
-        for entry in sorted_desc:
+        for entry in sorted_asc:
             if entry.length == 0:
                 # Zero-length files need no sectors. Place them at the
                 # current boundary so they sort correctly.
@@ -1236,14 +1254,14 @@ class DFSSide(DiscSide):
                     load_addr=entry.load_addr,
                     exec_addr=entry.exec_addr,
                     length=0,
-                    start_sector=next_free_top,
+                    start_sector=next_free_bottom,
                     locked=entry.locked,
                 )
                 new_entries.append(new_entry)
                 continue
 
             sectors_needed = (entry.length + SECTOR_SIZE - 1) // SECTOR_SIZE
-            new_start = next_free_top - sectors_needed
+            new_start = next_free_bottom
 
             if new_start != entry.start_sector:
                 # Read from old location, write to new location.
@@ -1262,7 +1280,11 @@ class DFSSide(DiscSide):
             else:
                 new_entries.append(entry)
 
-            next_free_top = new_start
+            next_free_bottom = new_start + sectors_needed
+
+        # Maintain the catalogue convention of descending start sector
+        # order (highest sector first), matching addFile().
+        new_entries.sort(key=lambda e: e.start_sector, reverse=True)
 
         new_cat = DFSCatalogue(
             title=cat.title,
