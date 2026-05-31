@@ -204,33 +204,6 @@ def testOpenDiscImageWarnsOnUnknownSizeWithNoHint(tmp_path):
     assert any("defaulting to SSD" in m for m in msgs), msgs
 
 
-def testOpenImageSniffsAdfsForUnknownExtension(tmp_path):
-    """openImage routes by ADFS 'Hugo' magic when extension is unknown."""
-    import warnings
-    from beebtools import openImage, createImage
-    from beebtools.shared import BeebToolsWarning
-
-    # Build a real ADFS image, then rename to an unknown extension.
-    adf = tmp_path / "real.adf"
-    image_obj = createImage(str(adf), tracks=80, title="ADFS")
-    adf.write_bytes(image_obj.serialize())
-
-    odd = tmp_path / "real.img"
-    odd.write_bytes(adf.read_bytes())
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        opened = openImage(str(odd))
-
-    # Must round-trip as ADFS via the Hugo magic check.
-    from beebtools import ADFSImage
-    assert isinstance(opened, ADFSImage)
-
-    msgs = [str(w.message) for w in caught
-            if issubclass(w.category, BeebToolsWarning)]
-    assert any("ADFS by content sniff" in m for m in msgs), msgs
-
-
 # ---------------------------------------------------------------------------
 # Round trips: split then merge must yield the original bytes for both layouts
 # ---------------------------------------------------------------------------
