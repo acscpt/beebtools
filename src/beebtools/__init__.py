@@ -39,6 +39,7 @@ Tier 1, high-level operations (start here):
     openImage, createImage, createImageFile
     readCatalogue, extractFile, extractAll, search, buildImage
     addFile, deleteFile, renameFile, compactDisc, makeDirectory
+    splitImage, mergeImages
     getTitle, setTitle, getBoot, setBoot, discInfo
     getFileAttribs, setFileAttribs
 
@@ -62,6 +63,7 @@ Tier 4, format-specific:
     DFSEntry, DFSCatalogue, DFSSide, DFSImage
     DFSError, DFSFormatError
     openDiscImage, createDiscImage, validateDfsName, splitDfsPath
+    splitDsd, mergeDsd  (DFS-only DSD/SSD conversion)
 
     ADFSEntry, ADFSCatalogue, ADFSDirectory, ADFSFreeSpaceMap
     ADFSSide, ADFSImage
@@ -141,6 +143,8 @@ from .dfs import (
     createDiscImage,
     validateDfsName,
     splitDfsPath,
+    splitDsd,
+    mergeDsd,
 )
 from .adfs import (
     ADFSEntry,
@@ -171,6 +175,7 @@ from .disc import (
     getTitle, setTitle, getBoot, setBoot, discInfo, DiscInfo,
     getFileAttribs, setFileAttribs, FileAttribs,
     deleteFile, renameFile, compactDisc, makeDirectory,
+    splitImage, mergeImages,
 )
 from .cli import main
 
@@ -191,6 +196,8 @@ __all__ = [
     "renameFile",
     "compactDisc",
     "makeDirectory",
+    "splitImage",
+    "mergeImages",
     "getTitle",
     "setTitle",
     "getBoot",
@@ -251,6 +258,8 @@ __all__ = [
     "createDiscImage",
     "validateDfsName",
     "splitDfsPath",
+    "splitDsd",
+    "mergeDsd",
     # ADFS
     "ADFSEntry",
     "ADFSCatalogue",

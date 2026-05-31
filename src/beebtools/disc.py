@@ -1974,3 +1974,53 @@ def makeDirectory(
     side_obj.mkdir(path)
 
     _writeBack(image, image_path)
+
+
+# -------------------------------------------------------------------
+# split / merge: convert between a double-sided image and two halves
+# -------------------------------------------------------------------
+#
+# These are format-agnostic from the CLI's point of view, but the
+# only format that currently supports them is DFS (DSD <-> two SSDs).
+# Extension-based dispatch lives in image.py alongside openImage /
+# createImage; the wrappers here keep cli.py free of any direct
+# import from format-specific modules.
+
+from .image import splitImage as _splitImage, mergeImages as _mergeImages
+
+
+def splitImage(
+    source: str,
+    *output_names: str,
+    sequential: bool = False,
+    force: bool = False,
+) -> Tuple[str, str]:
+    """Split a double-sided disc image into two single-sided halves.
+
+    Thin wrapper around :func:`beebtools.image.splitImage`. See that
+    function for the full argument and error semantics.
+    """
+
+    return _splitImage(
+        source, *output_names,
+        sequential=sequential, force=force,
+    )
+
+
+def mergeImages(
+    side0_path: str,
+    side1_path: str,
+    output: str,
+    sequential: bool = False,
+    force: bool = False,
+) -> str:
+    """Combine two single-sided disc images into one double-sided image.
+
+    Thin wrapper around :func:`beebtools.image.mergeImages`. See that
+    function for the full argument and error semantics.
+    """
+
+    return _mergeImages(
+        side0_path, side1_path, output,
+        sequential=sequential, force=force,
+    )

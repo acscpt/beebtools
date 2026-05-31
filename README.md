@@ -158,6 +158,10 @@ own detailed reference page.
 | [`disc`](https://github.com/acscpt/beebtools/blob/main/docs/commands/disc.md) | Print disc summary or set disc properties |
 | [`attrib`](https://github.com/acscpt/beebtools/blob/main/docs/commands/attrib.md) | Read or set file attributes |
 | [`rename`](https://github.com/acscpt/beebtools/blob/main/docs/commands/rename.md) | Rename a file on a disc image |
+| [`compact`](https://github.com/acscpt/beebtools/blob/main/docs/commands/compact.md) | Defragment a DFS disc image |
+| [`mkdir`](https://github.com/acscpt/beebtools/blob/main/docs/commands/mkdir.md) | Create a subdirectory on an ADFS disc image |
+| [`split`](https://github.com/acscpt/beebtools/blob/main/docs/commands/split.md) | Split a DSD image into two SSD halves |
+| [`merge`](https://github.com/acscpt/beebtools/blob/main/docs/commands/merge.md) | Merge two SSD images into a single DSD |
 
 ## Usage
 
@@ -245,6 +249,12 @@ beebtools rename mydisc.ssd T.MYPROG T.NEWNAME
 
 # Move to a different DFS directory prefix
 beebtools rename mydisc.ssd $.MYPROG T.MYPROG
+
+# Split a double-sided DSD into two SSD halves
+beebtools split mydisc.dsd
+
+# Merge two SSDs back into a single DSD
+beebtools merge front.ssd back.ssd combined.dsd
 ```
 
 ## Pretty-printer

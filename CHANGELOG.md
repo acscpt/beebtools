@@ -5,7 +5,11 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.12.0] - Unreleased
+## [0.12.0] - 2026-05-31
+
+### Added
+
+- `split` and `merge` subcommands convert a double-sided disc image to a pair of single-sided images and back. DFS DSD is supported in both the standard interleaved layout and (via `--seq`) the concatenated layout. ADFS is rejected with a clear error: an `.adl` is a single filesystem spanning two surfaces, not two separable discs.
 
 ### Fixed
 

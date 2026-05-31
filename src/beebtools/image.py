@@ -23,8 +23,11 @@ from .adfs import (
     createAdfsImage, openAdfsImage,
 )
 from .boot import BootOption
-from .dfs import DFSFormatError, createDiscImage, openDiscImage
-from .entry import DiscImage, DiscSide
+from .dfs import (
+    DFSFormatError, createDiscImage, openDiscImage,
+    splitDsd, mergeDsd,
+)
+from .entry import DiscImage, DiscSide, DiscError
 
 
 __all__ = [
@@ -32,6 +35,8 @@ __all__ = [
     "DiscSide",
     "openImage",
     "createImage",
+    "splitImage",
+    "mergeImages",
 ]
 
 
@@ -141,4 +146,83 @@ def createImage(
     raise DFSFormatError(
         f"Unrecognised disc image extension '{ext}'. "
         f"Expected .ssd, .dsd, .adf, or .adl"
+    )
+
+
+# ---------------------------------------------------------------------------
+# split / merge dispatch
+# ---------------------------------------------------------------------------
+#
+# Routing rules differ slightly from openImage / createImage: extension
+# is used only as a positive *block* for ADFS, not as the sole signal
+# for DFS. Real-world disc images frequently carry odd extensions
+# (.img, .disc, no extension at all), so anything that is not
+# unambiguously ADFS is passed through to the DFS layer where the
+# byte length is validated against the legal SSD / DSD capacities.
+# That gives genuine content-based dispatch without needing a full
+# format-sniffing layer, because DFS already raises a clear DiscError
+# on any file whose size does not match a real DFS capacity.
+#
+# ADFS is rejected with a tailored message because an .adl is a single
+# filesystem spanning two surfaces - it cannot be split into two
+# independent discs, so the operation is undefined rather than merely
+# unimplemented.
+
+
+def _rejectAdfsForSplitMerge(path: str, role: str) -> None:
+    """Block ADFS extensions from split / merge with a clear message.
+
+    Anything else - known DFS extensions, unknown extensions, no
+    extension at all - is allowed through; size validation in the
+    DFS layer will reject genuinely invalid files.
+    """
+
+    ext = _extractExtension(path)
+
+    if ext in _ADFS_EXTENSIONS:
+        raise DiscError(
+            f"split and merge are not supported on ADFS images "
+            f"({role} {path!r}); ADFS .adl images are a single "
+            f"filesystem spanning two surfaces, not two separable discs"
+        )
+
+
+def splitImage(source, *output_names, sequential=False, force=False):
+    """Split a double-sided disc image into two single-sided halves.
+
+    Dispatches by content: any input that is not an ADFS image is
+    handed to the DFS engine, which validates the byte length and
+    rejects anything that is not a legal DSD capacity. This means
+    files with unconventional extensions (.img, .disc, none at all)
+    are accepted as long as their contents are a real DSD.
+    """
+
+    _rejectAdfsForSplitMerge(source, "source")
+
+    return splitDsd(
+        source, *output_names,
+        sequential=sequential, force=force,
+    )
+
+
+def mergeImages(side0_path, side1_path, output, sequential=False, force=False):
+    """Combine two single-sided disc images into one double-sided image.
+
+    Dispatches by content for the two inputs and by extension for the
+    output (which does not yet exist on disc). ADFS extensions on any
+    path are rejected; anything else flows through to DFS where size
+    validation enforces real SSD capacities.
+    """
+
+    # Validate every path before touching the filesystem so a wrong
+    # extension is reported immediately and consistently. The output
+    # path is checked here even though it does not exist yet, because
+    # writing DFS bytes to a .adl path would be silently misleading.
+    _rejectAdfsForSplitMerge(side0_path, "side-0 image")
+    _rejectAdfsForSplitMerge(side1_path, "side-1 image")
+    _rejectAdfsForSplitMerge(output, "output image")
+
+    return mergeDsd(
+        side0_path, side1_path, output,
+        sequential=sequential, force=force,
     )
