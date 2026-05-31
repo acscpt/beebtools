@@ -33,6 +33,7 @@ from .disc import (
     getTitle, setTitle, getBoot, setBoot, discInfo,
     getFileAttribs, setFileAttribs,
     deleteFile, renameFile, compactDisc, makeDirectory,
+    splitImage, mergeImages,
 )
 
 
@@ -727,6 +728,40 @@ def cmdMkdir(args: Namespace) -> None:
     print(f"Created directory {args.path}")
 
 
+def cmdSplit(args: Namespace) -> None:
+    """Split a DSD image into two SSD halves.
+
+    Args:
+        args: Parsed argparse namespace for the 'split' subcommand.
+    """
+    # Pass through the user's optional output names verbatim so disc.py
+    # can apply its 0/1/2-argument naming rules.
+    out0, out1 = splitImage(
+        args.source,
+        *args.outputs,
+        sequential=args.seq,
+        force=args.force,
+    )
+    print(f"Wrote {out0}")
+    print(f"Wrote {out1}")
+
+
+def cmdMerge(args: Namespace) -> None:
+    """Merge two SSD images into a single DSD.
+
+    Args:
+        args: Parsed argparse namespace for the 'merge' subcommand.
+    """
+    out = mergeImages(
+        args.side0,
+        args.side1,
+        args.output,
+        sequential=args.seq,
+        force=args.force,
+    )
+    print(f"Wrote {out}")
+
+
 _default_formatwarning = warnings.formatwarning
 
 
@@ -989,6 +1024,41 @@ def main() -> None:
                          choices=[0, 1],
                          help="Disc side (default: 0; ignored for ADFS)")
 
+    # -- split subcommand --
+    p_split = sub.add_parser(
+        "split",
+        help="Split a DSD image into two SSD halves",
+        description=(
+            "Split a DSD disc image into two SSD files. With no output "
+            "name, derives '<source>-side0.ssd' and '<source>-side1.ssd'. "
+            "With one output name, derives '<name>-side0.ssd' and "
+            "'<name>-side1.ssd'. With two output names, uses both "
+            "verbatim."
+        ),
+    )
+    p_split.add_argument("source", help="Path to source .dsd image")
+    p_split.add_argument("outputs", nargs="*",
+                         help="Optional output stem, or two explicit .ssd paths")
+    p_split.add_argument("--seq", action="store_true",
+                         help="Treat source as sequential (side 0 followed by "
+                              "side 1) rather than interleaved track-by-track")
+    p_split.add_argument("-f", "--force", action="store_true",
+                         help="Overwrite existing output files")
+
+    # -- merge subcommand --
+    p_merge = sub.add_parser(
+        "merge",
+        help="Merge two SSD images into a single DSD",
+    )
+    p_merge.add_argument("side0", help="Path to side-0 .ssd image")
+    p_merge.add_argument("side1", help="Path to side-1 .ssd image")
+    p_merge.add_argument("output", help="Path to write .dsd image")
+    p_merge.add_argument("--seq", action="store_true",
+                         help="Write sequential layout (side 0 followed by "
+                              "side 1) rather than interleaved track-by-track")
+    p_merge.add_argument("-f", "--force", action="store_true",
+                         help="Overwrite an existing output file")
+
     args = parser.parse_args()
 
     try:
@@ -1020,6 +1090,10 @@ def main() -> None:
             cmdCompact(args)
         elif args.command == "mkdir":
             cmdMkdir(args)
+        elif args.command == "split":
+            cmdSplit(args)
+        elif args.command == "merge":
+            cmdMerge(args)
         else:
             parser.print_help()
     except Exception as e:

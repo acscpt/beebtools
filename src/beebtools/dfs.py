@@ -20,11 +20,12 @@ Exceptions:
     DFSFormatError -- raised when the disc image is structurally invalid
 """
 
+import os
 import warnings as _warnings
 from dataclasses import dataclass, replace
 from enum import IntFlag
 from functools import singledispatch
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Sequence, Tuple, Union
 
 from .boot import BootOption
 from .entry import (
@@ -1347,6 +1348,175 @@ class DFSImage(DiscImage):
         return bytes(self._data)
 
     # -------------------------------------------------------------------
+    # DSD <-> SSD layout conversion
+    # -------------------------------------------------------------------
+
+    # A DFS track is always 10 sectors of 256 bytes on a single
+    # surface; a DSD track therefore occupies twice that in the image
+    # because both surfaces are interleaved.
+    _TRACK_BYTES = SECTORS_PER_TRACK * SECTOR_SIZE
+
+    # The two physical DFS capacities, keyed by total DSD byte length.
+    _DSD_SIZES = {
+        40 * SECTORS_PER_TRACK * SECTOR_SIZE * 2: 40,
+        80 * SECTORS_PER_TRACK * SECTOR_SIZE * 2: 80,
+    }
+
+    def split(
+        self, sequential: bool = False,
+    ) -> Tuple["DFSImage", "DFSImage"]:
+        """Split a DSD image into two single-sided DFSImage instances.
+
+        Args:
+            sequential: If True, treat the backing store as a plain
+                        concatenation (entire side 0 followed by entire
+                        side 1) rather than the standard track-by-track
+                        interleave used by ``.dsd`` files.
+
+        Returns:
+            A ``(side0, side1)`` tuple of fresh single-sided DFSImages.
+
+        Raises:
+            DFSError: If this image is not double-sided, or its backing
+                      store is not a recognised DSD capacity.
+        """
+
+        # Only DSD images carry a second surface to split out.
+        if not self._is_dsd:
+            raise DFSError("split() requires a double-sided (DSD) image")
+
+        # Validate against the legal DSD capacities so callers get a
+        # clear diagnostic instead of a silently truncated output.
+        size = len(self._data)
+        tracks = self._DSD_SIZES.get(size)
+
+        if tracks is None:
+            raise DFSError(
+                f"Not a valid DSD image: {size} bytes (expected "
+                f"{40 * SECTORS_PER_TRACK * SECTOR_SIZE * 2} or "
+                f"{80 * SECTORS_PER_TRACK * SECTOR_SIZE * 2})"
+            )
+
+        # Sequential layout is a straight halving.
+        if sequential:
+            half = size // 2
+            side0_bytes = bytes(self._data[:half])
+            side1_bytes = bytes(self._data[half:])
+        else:
+            side0_bytes, side1_bytes = self._deinterleave(
+                self._data, tracks,
+            )
+
+        return (
+            DFSImage(bytearray(side0_bytes), is_dsd=False),
+            DFSImage(bytearray(side1_bytes), is_dsd=False),
+        )
+
+    @classmethod
+    def merge(
+        cls,
+        side0: "DFSImage",
+        side1: "DFSImage",
+        sequential: bool = False,
+    ) -> "DFSImage":
+        """Combine two single-sided DFSImages into one DSD image.
+
+        Args:
+            side0:      DFSImage that will become side 0 of the DSD.
+            side1:      DFSImage that will become side 1 of the DSD.
+            sequential: If True, write the concatenated layout (side 0
+                        followed by side 1) instead of the standard
+                        track-by-track interleave.
+
+        Returns:
+            A fresh double-sided DFSImage.
+
+        Raises:
+            DFSError: If either input is not single-sided, the two
+                      sides differ in size, or the size is not a
+                      recognised SSD capacity.
+        """
+
+        # Both inputs must be SSDs: merging a DSD into another disc
+        # makes no sense and almost certainly indicates a caller bug.
+        if side0._is_dsd or side1._is_dsd:
+            raise DFSError("merge() requires two single-sided (SSD) images")
+
+        # A DSD has a single track count that applies to both surfaces,
+        # so the two SSDs must be the same length.
+        if len(side0._data) != len(side1._data):
+            raise DFSError(
+                f"SSD sizes differ: side 0 is {len(side0._data)} bytes, "
+                f"side 1 is {len(side1._data)} bytes"
+            )
+
+        # Validate that the matched size is one of the two legal SSD
+        # capacities (which are the DSD capacities halved).
+        ssd_sizes = {
+            sz // 2: tracks for sz, tracks in cls._DSD_SIZES.items()
+        }
+        tracks = ssd_sizes.get(len(side0._data))
+
+        if tracks is None:
+            raise DFSError(
+                f"Not a valid SSD size: {len(side0._data)} bytes "
+                f"(expected {40 * SECTORS_PER_TRACK * SECTOR_SIZE} or "
+                f"{80 * SECTORS_PER_TRACK * SECTOR_SIZE})"
+            )
+
+        # Apply the chosen layout.
+        if sequential:
+            merged = bytes(side0._data) + bytes(side1._data)
+        else:
+            merged = cls._interleave(side0._data, side1._data, tracks)
+
+        return DFSImage(bytearray(merged), is_dsd=True)
+
+    @classmethod
+    def _deinterleave(
+        cls, data: bytes, tracks: int,
+    ) -> Tuple[bytes, bytes]:
+        """Split interleaved DSD bytes into the two surface streams.
+
+        The on-disc layout is track 0 side 0, track 0 side 1, track 1
+        side 0, track 1 side 1, ... so walking the data in 2560-byte
+        chunks and alternating destinations recovers each SSD stream.
+        """
+
+        side0 = bytearray()
+        side1 = bytearray()
+
+        # One iteration per physical track copies both surfaces.
+        for track in range(tracks):
+            base = track * cls._TRACK_BYTES * 2
+            side0 += data[base : base + cls._TRACK_BYTES]
+            side1 += data[
+                base + cls._TRACK_BYTES : base + cls._TRACK_BYTES * 2
+            ]
+
+        return bytes(side0), bytes(side1)
+
+    @classmethod
+    def _interleave(
+        cls, side0: bytes, side1: bytes, tracks: int,
+    ) -> bytes:
+        """Combine two SSD byte streams into an interleaved DSD image.
+
+        Inverse of :meth:`_deinterleave`: emit each track's side-0
+        slice followed immediately by the matching side-1 slice.
+        """
+
+        out = bytearray()
+
+        # Walk both surfaces a track at a time in lock-step.
+        for track in range(tracks):
+            base = track * cls._TRACK_BYTES
+            out += side0[base : base + cls._TRACK_BYTES]
+            out += side1[base : base + cls._TRACK_BYTES]
+
+        return bytes(out)
+
+    # -------------------------------------------------------------------
     # Python data model
     # -------------------------------------------------------------------
 
@@ -1363,19 +1533,25 @@ class DFSImage(DiscImage):
 def openDiscImage(path: str) -> DFSImage:
     """Open a disc image file and return a DFSImage.
 
-    Format is inferred from the file extension:
-        .ssd  -- single-sided, one side
-        .dsd  -- double-sided interleaved, two sides
+    Format detection prefers extension when it is unambiguous, but
+    falls back to content sniffing so files with non-standard names
+    (e.g. ``.img`` or no extension) still open correctly:
+
+      * ``.ssd`` -- always single-sided
+      * ``.dsd`` -- always double-sided interleaved
+      * anything else -- inferred from the file size, with the
+        ambiguous 204800-byte case (SSD 80t vs DSD 40t) resolved by
+        reading the catalogue's recorded sector count.
 
     Raises:
-        DFSFormatError: If the image is too small for its format.
+        DFSFormatError:    If the image is too small for any DFS format.
         FileNotFoundError: If the path does not exist.
     """
     with open(path, "rb") as f:
         raw = f.read()
 
     ext = path.lower()
-    is_dsd = ext.endswith(".dsd")
+    is_dsd = _detectIsDsd(ext, raw)
 
     # A DFS catalogue occupies sectors 0 and 1 (512 bytes). For DSD,
     # track 0 contains both sides interleaved (20 sectors = 5120 bytes).
@@ -1389,6 +1565,89 @@ def openDiscImage(path: str) -> DFSImage:
         )
 
     return DFSImage(bytearray(raw), is_dsd)
+
+
+def _detectIsDsd(ext_lower: str, raw: bytes) -> bool:
+    """Decide whether a disc image is DSD or SSD.
+
+    The file bytes are canonical; the extension is treated as a hint
+    that the bytes may confirm or contradict. The algorithm is:
+
+      1. Sniff the format from the byte length (and, for the
+         ambiguous 204800-byte case, from the catalogue's recorded
+         sector count).
+      2. Compare the sniffed verdict against any extension hint.
+      3. Emit a ``BeebToolsWarning`` if the extension contradicts the
+         bytes, or if no signal at all is available and we are
+         falling back to a default.
+
+    The bytes always win when they are conclusive. The extension only
+    decides when content sniffing is genuinely ambiguous (the
+    204800-byte case with an absent or unreadable catalogue).
+    """
+
+    # Extract the extension hint, if any. Empty string means none.
+    if ext_lower.endswith(".dsd"):
+        ext_hint: Optional[bool] = True
+    elif ext_lower.endswith(".ssd"):
+        ext_hint = False
+    else:
+        ext_hint = None
+
+    size = len(raw)
+    ssd_40 = 40 * SECTORS_PER_TRACK * SECTOR_SIZE
+    ssd_80 = 80 * SECTORS_PER_TRACK * SECTOR_SIZE
+    dsd_40 = ssd_80                       # 204800: ambiguous
+    dsd_80 = 80 * SECTORS_PER_TRACK * SECTOR_SIZE * 2
+
+    # Unambiguous sizes: bytes are conclusive.
+    sniffed: Optional[bool] = None
+
+    if size == ssd_40:
+        sniffed = False
+    elif size == dsd_80:
+        sniffed = True
+    elif size == dsd_40:
+        # 204800 bytes matches both SSD 80t and DSD 40t. Peek at the
+        # side-0 catalogue: sector 1 holds the total-sector count
+        # (low byte at offset 7, high two bits in offset 6 bits 0-1).
+        # A recorded count of 400 means 40 tracks, which at this size
+        # must be DSD; 800 means 80 tracks, which must be SSD.
+        if len(raw) >= 2 * SECTOR_SIZE:
+            cat_sec1 = raw[SECTOR_SIZE : 2 * SECTOR_SIZE]
+            sector_count = cat_sec1[7] | ((cat_sec1[6] & 0x03) << 8)
+
+            if sector_count == 40 * SECTORS_PER_TRACK:
+                sniffed = True
+            elif sector_count == 80 * SECTORS_PER_TRACK:
+                sniffed = False
+
+    # If bytes gave a conclusive answer, reconcile with the hint.
+    if sniffed is not None:
+        if ext_hint is not None and ext_hint != sniffed:
+            actual = "DSD" if sniffed else "SSD"
+            named = "DSD" if ext_hint else "SSD"
+            _warnings.warn(
+                f"Image contents are {actual} but file is named .{named.lower()}; "
+                f"trusting the bytes",
+                BeebToolsWarning,
+                stacklevel=3,
+            )
+        return sniffed
+
+    # Bytes were inconclusive (size unrecognised, or 204800 with no
+    # readable catalogue). Fall back to the extension hint when we
+    # have one, otherwise default to SSD.
+    if ext_hint is not None:
+        return ext_hint
+
+    _warnings.warn(
+        f"Image size {size} bytes is not a standard DFS capacity and "
+        f"the filename gives no .ssd/.dsd hint; defaulting to SSD",
+        BeebToolsWarning,
+        stacklevel=3,
+    )
+    return False
 
 
 def createDiscImage(
@@ -1567,4 +1826,158 @@ def validateDfsName(directory: str, name: str) -> None:
 # The old API used standalone functions and dict-based entries. These
 # aliases ease the transition in callers that have not been updated yet.
 
+
+# -----------------------------------------------------------------------
+# DSD <-> SSD file orchestration
+# -----------------------------------------------------------------------
+#
+# DFSImage.split / DFSImage.merge handle the in-memory byte layout.
+# The helpers below wrap those with file I/O, output-name derivation,
+# and overwrite policy so callers can convert between .dsd and pairs
+# of .ssd files directly. They live in dfs.py because DSD / SSD
+# layouts are entirely DFS-specific; ADFS has no analogous operation.
+
+
+def _deriveSplitNames(
+    source: str,
+    args: Sequence[str],
+) -> Tuple[str, str]:
+    """Work out the two output .ssd paths for splitDsd().
+
+    Three argument shapes are supported, matching the CLI:
+      0 args  -> derive both from the source stem (source-side0.ssd,
+                 source-side1.ssd)
+      1 arg   -> use the supplied stem (stem-side0.ssd,
+                 stem-side1.ssd)
+      2 args  -> use both names exactly as given
+    Anything else is a programming error and raises ValueError.
+    """
+
+    # Zero extra arguments: build the two names from the input filename
+    # by stripping its extension and appending the side suffixes.
+    if len(args) == 0:
+        stem, _ext = os.path.splitext(source)
+        return f"{stem}-side0.ssd", f"{stem}-side1.ssd"
+
+    # One extra argument: caller has supplied a shared stem for both
+    # output files. Append -side0.ssd and -side1.ssd unmodified.
+    if len(args) == 1:
+        stem = args[0]
+        return f"{stem}-side0.ssd", f"{stem}-side1.ssd"
+
+    # Two extra arguments: caller has named both outputs explicitly.
+    if len(args) == 2:
+        return args[0], args[1]
+
+    raise ValueError(
+        f"splitDsd accepts 0, 1, or 2 output names (got {len(args)})"
+    )
+
+
+def splitDsd(
+    source: str,
+    *output_names: str,
+    sequential: bool = False,
+    force: bool = False,
+) -> Tuple[str, str]:
+    """Split a DSD disc image file into its two SSD halves.
+
+    Args:
+        source:        Path to the DSD image to read.
+        output_names:  Zero, one, or two output paths. Zero derives
+                       both names from ``source``; one supplies a
+                       shared stem; two names both outputs
+                       explicitly. See :func:`_deriveSplitNames`.
+        sequential:    If True, treat ``source`` as a concatenated
+                       layout (entire side 0 followed by entire side
+                       1) rather than the standard track-interleaved
+                       layout. Matches MMB_Utils' ``-concat``.
+        force:         Overwrite existing output files when True.
+
+    Returns:
+        The tuple of output paths actually written.
+
+    Raises:
+        DFSError: If the source is not a DSD image, the size is not a
+                  valid capacity, or an output exists without ``force``.
+    """
+
+    # Compute the output paths up front so any naming error is
+    # reported before we touch the filesystem.
+    out0, out1 = _deriveSplitNames(source, output_names)
+
+    # Refuse to clobber existing files without explicit consent.
+    if not force:
+        for path in (out0, out1):
+            if os.path.exists(path):
+                raise DFSError(
+                    f"Output file already exists: {path} "
+                    f"(use force=True to overwrite)"
+                )
+
+    # openDiscImage sniffs by extension first and falls back to size
+    # and catalogue content, so a real DSD with an unconventional
+    # name (e.g. .img) still routes here as a double-sided image.
+    src = openDiscImage(source)
+
+    # DFSImage.split validates that the image is a DSD of legal size.
+    side0, side1 = src.split(sequential=sequential)
+
+    # Write the two halves out as raw .ssd files.
+    with open(out0, "wb") as fh:
+        fh.write(side0.serialize())
+    with open(out1, "wb") as fh:
+        fh.write(side1.serialize())
+
+    return out0, out1
+
+
+def mergeDsd(
+    side0_path: str,
+    side1_path: str,
+    output: str,
+    sequential: bool = False,
+    force: bool = False,
+) -> str:
+    """Combine two SSD image files into a single DSD image file.
+
+    Args:
+        side0_path:  SSD file that will become side 0 of the DSD.
+        side1_path:  SSD file that will become side 1 of the DSD.
+        output:      Path to write the combined DSD image.
+        sequential:  If True, concatenate side 0 then side 1 without
+                     track interleaving. Defaults to the standard
+                     track-by-track interleave.
+        force:       Overwrite an existing output when True.
+
+    Returns:
+        The output path written.
+
+    Raises:
+        DFSError: If either input is not an SSD, the sizes differ,
+                  the size is not a valid SSD capacity, or the output
+                  exists without ``force``.
+    """
+
+    # Reject overwrite of an existing file unless explicitly allowed.
+    if not force and os.path.exists(output):
+        raise DFSError(
+            f"Output file already exists: {output} "
+            f"(use force=True to overwrite)"
+        )
+
+    # openDiscImage sniffs by extension first and by size/catalogue
+    # content otherwise, so SSDs with non-standard names route here
+    # as single-sided images.
+    s0 = openDiscImage(side0_path)
+    s1 = openDiscImage(side1_path)
+
+    # DFSImage.merge validates SSD-ness and size compatibility.
+    merged = DFSImage.merge(s0, s1, sequential=sequential)
+
+    # Write the combined image.
+    with open(output, "wb") as fh:
+        fh.write(merged.serialize())
+
+    return output
 
