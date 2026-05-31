@@ -1048,8 +1048,8 @@ class TestFreeSpace:
         side = image.sides[0]
         side.addFile(DiscFile("$.TEST", b"\xAA" * 512))
 
-        # 512 bytes = 2 sectors. File at sectors 798-799.
-        # Free: sectors 2-797 = 796 sectors.
+        # 512 bytes = 2 sectors. File at sectors 2-3 (bottom-up).
+        # Free: sectors 4-799 = 796 sectors.
         assert side.freeSpace() == 796 * SECTOR_SIZE
 
     def testTwoFilesReduceFreeSpace(self):
@@ -1059,7 +1059,7 @@ class TestFreeSpace:
         side.addFile(DiscFile("$.FILE1", b"\xAA" * 256))
         side.addFile(DiscFile("$.FILE2", b"\xBB" * 256))
 
-        # Two 1-sector files: 798+799 occupied. Free: 2-797 = 796 sectors.
+        # Two 1-sector files: 2+3 occupied. Free: 4-799 = 796 sectors.
         assert side.freeSpace() == 796 * SECTOR_SIZE
 
     def testDeletedMiddleFileDoesNotFreespace(self):
@@ -1072,26 +1072,28 @@ class TestFreeSpace:
         side.addFile(DiscFile("$.BFILE", b"\xBB" * 256))
         side.addFile(DiscFile("$.CFILE", b"\xCC" * 256))
 
-        # Free space before delete: 800 - 2 - 3 = 795 sectors.
+        # Free space before delete: 800 - 5 = 795 sectors
+        # (files occupy sectors 2, 3, 4).
         assert side.freeSpace() == 795 * SECTOR_SIZE
 
         # Delete middle file (BFILE).
         side.deleteFile("$.BFILE")
 
-        # CFILE is still the lowest. Free space unchanged.
+        # CFILE is still the highest. Free space unchanged.
         assert side.freeSpace() == 795 * SECTOR_SIZE
 
-    def testDeleteLowestFileFreesSpace(self):
-        """Deleting the file with the lowest start sector (occupying the end of used space in DFS) should increase free space."""
+    def testDeleteHighestFileFreesSpace(self):
+        """Deleting the file with the highest start sector should increase free space."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
         side.addFile(DiscFile("$.AFILE", b"\xAA" * 256))
         side.addFile(DiscFile("$.BFILE", b"\xBB" * 256))
 
-        # Delete the lowest file (BFILE, added second).
+        # Delete the highest file (BFILE, added second, at sector 3).
         side.deleteFile("$.BFILE")
 
-        # Only AFILE remains (1 sector). Free: 800 - 2 - 1 = 797 sectors.
+        # Only AFILE remains (1 sector at sector 2).
+        # Free: 800 - 3 = 797 sectors.
         assert side.freeSpace() == 797 * SECTOR_SIZE
 
 
@@ -1347,16 +1349,16 @@ class TestAddFilePlaced:
         assert side.readFile(entry_large) == data_large
         assert side.readFile(entry_small) == data_small
 
-    def testUnplacedAllocatesFromTop(self):
-        """Without start_sector, allocation still happens top-down as before."""
+    def testUnplacedAllocatesFromBottom(self):
+        """Without start_sector, allocation packs from sector 2 upward."""
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
         entry = side.addFile(DiscFile("$.NORMAL", b"\xBB" * 256))
 
-        # Top-down allocation on an empty 80-track disc puts the
-        # first file at the highest sector that fits.
-        assert entry.start_sector > 2
+        # Bottom-up allocation on an empty disc puts the first file at
+        # sector 2, leaving free space contiguous at the top.
+        assert entry.start_sector == 2
         assert side.readFile(entry) == b"\xBB" * 256
 
 
@@ -1538,7 +1540,7 @@ class TestCompact:
         freed = side.compact()
         assert freed == 2 * SECTOR_SIZE
 
-        # After compact, 3 remaining files packed at top with no gaps.
+        # After compact, 3 remaining files packed at bottom with no gaps.
         cat = side.readCatalogue()
         assert len(cat.entries) == 3
         sectors = [e.start_sector for e in cat.entries]
@@ -1557,13 +1559,13 @@ class TestCompact:
         image = createDiscImage(tracks=80)
         side = image.sides[0]
 
-        # Add a big file at the top, a small one in the middle,
-        # then a medium one at the bottom. Delete the small one.
+        # Add a big file at the bottom, a small one above it, and a
+        # medium one above that. Delete the small one to leave a gap.
         side.addFile(DiscFile("$.BIG", b"\xAA" * (10 * SECTOR_SIZE)))
         side.addFile(DiscFile("$.SMALL", b"\xBB" * (2 * SECTOR_SIZE)))
         side.addFile(DiscFile("$.MEDIUM", b"\xCC" * (5 * SECTOR_SIZE)))
 
-        data_big = side.readFile(side.readCatalogue().entries[0])
+        data_big = b"\xAA" * (10 * SECTOR_SIZE)
         data_med = b"\xCC" * (5 * SECTOR_SIZE)
 
         side.deleteFile("$.SMALL")
