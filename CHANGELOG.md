@@ -5,6 +5,16 @@ All notable changes to this project will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `-v`/`--version` flag on the top-level CLI; the version string also appears in the `--help` banner.
+
+### Changed
+
+- CLI subcommands moved from the monolithic `cli.py` into a `commands/` package, one module per command, registered via decorators. `beebtools.cli` remains a back-compatibility shim re-exporting the historical symbols.
+
 ## [0.12.0] - 2026-05-31
 
 ### Added

@@ -177,7 +177,7 @@ from .disc import (
     deleteFile, renameFile, compactDisc, makeDirectory,
     splitImage, mergeImages,
 )
-from .cli import main
+from .commands import main
 
 __all__ = [
     # -------------------------------------------------------------------
